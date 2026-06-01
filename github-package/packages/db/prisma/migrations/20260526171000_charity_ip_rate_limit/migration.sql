@@ -1,3 +1,0 @@
-ALTER TABLE "User"
-ADD COLUMN "charityIpRateLimitEnabled" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN "charityIpRateLimitPerMinute" INTEGER NOT NULL DEFAULT 0;

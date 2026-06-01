@@ -1,1 +1,0 @@
-ALTER TABLE "ApiKey" ADD COLUMN "forceFastMode" BOOLEAN NOT NULL DEFAULT false;

@@ -1,1 +1,0 @@
-ALTER TABLE "ApiKey" ADD COLUMN "concurrencyLimit" INTEGER NOT NULL DEFAULT 0;
