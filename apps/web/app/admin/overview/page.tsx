@@ -38,7 +38,7 @@ export default function AdminOverviewPage() {
   const serverQuery = useQuery({
     queryKey: ["admin", "server-status"],
     queryFn: getServerStatus,
-    refetchInterval: 5_000,
+    refetchInterval: 15_000,
   });
 
   const wizardQuery = useQuery({

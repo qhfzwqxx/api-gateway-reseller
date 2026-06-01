@@ -11,6 +11,8 @@ import {
   Server,
   SlidersHorizontal,
   Trash2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../../lib/api";
@@ -173,6 +175,24 @@ function normalizeOptionalNumberText(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
+function parseBatchProviderKeys(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line, index) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return null;
+      }
+
+      const [name, key] = trimmed.split(/\s+/, 2);
+      if (!name || !key) {
+        throw new Error(`第 ${index + 1} 行格式不正确，请使用：名称 空格 key`);
+      }
+
+      return { name, key };
+    })
+    .filter((item): item is { name: string; key: string } => Boolean(item));
+}
 function MobileEmpty({ children }: { children: React.ReactNode }) {
   return <div className="mobile-empty">{children}</div>;
 }
@@ -247,6 +267,8 @@ export function UpstreamProviders({
     "overview" | "keys" | "prices" | "tools"
   >("overview");
   const [providerSearch, setProviderSearch] = useState("");
+  const [hiddenProviderIds, setHiddenProviderIds] = useState<string[]>([]);
+  const [hiddenProvidersOpen, setHiddenProvidersOpen] = useState(false);
   const [priceSearch, setPriceSearch] = useState("");
   const [keyModalProvider, setKeyModalProvider] =
     useState<UpstreamProvider | null>(null);
@@ -256,6 +278,11 @@ export function UpstreamProviders({
   const [keyDailyLimitUsd, setKeyDailyLimitUsd] = useState("");
   const [keyMonthlyLimitUsd, setKeyMonthlyLimitUsd] = useState("");
   const [keyProviderRateLimit, setKeyProviderRateLimit] = useState("");
+  const [batchKeyModalProvider, setBatchKeyModalProvider] =
+    useState<UpstreamProvider | null>(null);
+  const [batchKeyContent, setBatchKeyContent] = useState("");
+  const [batchKeyPriority, setBatchKeyPriority] = useState(100);
+  const [batchKeyBusy, setBatchKeyBusy] = useState(false);
   const [busyKeyId, setBusyKeyId] = useState<string | null>(null);
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
   const [priceProvider, setPriceProvider] = useState("");
@@ -295,9 +322,18 @@ export function UpstreamProviders({
     providers,
     unifiedPriceSettings,
   );
+  const visibleProviders = useMemo(
+    () =>
+      providers.filter((provider) => !hiddenProviderIds.includes(provider.id)),
+    [hiddenProviderIds, providers],
+  );
+  const hiddenProviders = useMemo(
+    () => providers.filter((provider) => hiddenProviderIds.includes(provider.id)),
+    [hiddenProviderIds, providers],
+  );
   const selectedProvider =
-    providers.find((provider) => provider.id === selectedProviderId) ??
-    providers[0] ??
+    visibleProviders.find((provider) => provider.id === selectedProviderId) ??
+    visibleProviders[0] ??
     null;
   const selectedUnifiedPriceCount = unifiedPriceGroups.filter(
     (group) => unifiedPriceSelections[group.model],
@@ -314,18 +350,46 @@ export function UpstreamProviders({
   };
 
   useEffect(() => {
-    if (providers.length === 0) {
+    if (visibleProviders.length === 0) {
       setSelectedProviderId(null);
       return;
     }
 
     if (
       !selectedProviderId ||
-      !providers.some((item) => item.id === selectedProviderId)
+      !visibleProviders.some((item) => item.id === selectedProviderId)
     ) {
-      setSelectedProviderId(providers[0]?.id ?? null);
+      setSelectedProviderId(visibleProviders[0]?.id ?? null);
     }
-  }, [providers, selectedProviderId]);
+  }, [selectedProviderId, visibleProviders]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("admin:hidden-upstream-providers");
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setHiddenProviderIds(
+          parsed.filter((item): item is string => typeof item === "string"),
+        );
+      }
+    } catch {
+      // Local view preference only.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "admin:hidden-upstream-providers",
+        JSON.stringify(hiddenProviderIds),
+      );
+    } catch {
+      // Local view preference only.
+    }
+  }, [hiddenProviderIds]);
 
   async function saveModelPrice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -734,6 +798,12 @@ export function UpstreamProviders({
     setKeyProviderRateLimit("");
   }
 
+  function openBatchCreateProviderKeys(provider: UpstreamProvider) {
+    setBatchKeyModalProvider(provider);
+    setBatchKeyContent("");
+    setBatchKeyPriority(100);
+  }
+
   async function createProviderKey(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!keyModalProvider) {
@@ -760,6 +830,45 @@ export function UpstreamProviders({
       onChanged();
     } catch (createError) {
       onError(errorToText(createError));
+    }
+  }
+
+  async function createProviderKeysBatch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!batchKeyModalProvider || batchKeyBusy) {
+      return;
+    }
+
+    onError(null);
+    setBatchKeyBusy(true);
+    try {
+      const rows = parseBatchProviderKeys(batchKeyContent);
+      if (rows.length === 0) {
+        throw new Error("请至少输入一行 Key。");
+      }
+
+      for (const row of rows) {
+        await apiFetch(`/admin/upstream-providers/${batchKeyModalProvider.id}/keys`, {
+          method: "POST",
+          body: JSON.stringify({
+            name: row.name,
+            key: row.key,
+            priority: Number(batchKeyPriority),
+            status: "ACTIVE",
+            dailyLimitUsd: null,
+            monthlyLimitUsd: null,
+            providerRateLimit: null,
+          }),
+        });
+      }
+
+      setBatchKeyModalProvider(null);
+      setBatchKeyContent("");
+      onChanged();
+    } catch (createError) {
+      onError(errorToText(createError));
+    } finally {
+      setBatchKeyBusy(false);
     }
   }
 
@@ -895,10 +1004,34 @@ export function UpstreamProviders({
     );
   }
 
+  function hideProvider(provider: UpstreamProvider) {
+    setHiddenProviderIds((current) =>
+      current.includes(provider.id) ? current : [...current, provider.id],
+    );
+  }
+
+  function showProvider(provider: UpstreamProvider) {
+    setHiddenProviderIds((current) =>
+      current.filter((providerId) => providerId !== provider.id),
+    );
+    setSelectedProviderId(provider.id);
+  }
+
   const selectedProviderPrices = selectedProvider
     ? pricesForProvider(selectedProvider.name)
     : [];
-  const filteredProviders = providers.filter((provider) => {
+  const filteredProviders = visibleProviders.filter((provider) => {
+    const keyword = providerSearch.trim().toLowerCase();
+    if (!keyword) {
+      return true;
+    }
+    return (
+      provider.name.toLowerCase().includes(keyword) ||
+      provider.baseUrl.toLowerCase().includes(keyword) ||
+      provider.status.toLowerCase().includes(keyword)
+    );
+  });
+  const filteredHiddenProviders = hiddenProviders.filter((provider) => {
     const keyword = providerSearch.trim().toLowerCase();
     if (!keyword) {
       return true;
@@ -1109,9 +1242,23 @@ export function UpstreamProviders({
             <>
               <div>
                 <h2 className="section-title">上游渠道工作台</h2>
-                <p className="section-subtitle">选中渠道后，在右侧处理概览、Key、模型价格和导入导出。</p>
+                <p className="section-subtitle">
+                  选中渠道后，在右侧处理概览、Key、模型价格和导入导出。
+                  {hiddenProviders.length > 0
+                    ? ` 已隐藏 ${hiddenProviders.length} 个上游。`
+                    : ""}
+                </p>
               </div>
               <div className="button-row admin-toolbar-actions">
+            <button
+              className="button secondary"
+              onClick={() => setHiddenProvidersOpen(true)}
+              type="button"
+            >
+              <Eye size={17} />
+              隐藏区
+              {hiddenProviders.length > 0 ? ` (${hiddenProviders.length})` : ""}
+            </button>
             <button
               className="button"
               onClick={openCreateProvider}
@@ -1171,10 +1318,26 @@ export function UpstreamProviders({
                       <div className="button-row">
                         <button
                           className="button secondary"
+                          onClick={() => hideProvider(provider)}
+                          type="button"
+                        >
+                          <EyeOff size={15} />
+                          隐藏
+                        </button>
+                        <button
+                          className="button secondary"
                           onClick={() => editProvider(provider)}
                           type="button"
                         >
                           编辑渠道
+                        </button>
+                        <button
+                          className="button secondary"
+                          onClick={() => openBatchCreateProviderKeys(provider)}
+                          type="button"
+                        >
+                          <Plus size={15} />
+                          批量添加
                         </button>
                         <button
                           className="button secondary"
@@ -1502,6 +1665,48 @@ export function UpstreamProviders({
         </WorkbenchLayout>
       </div>
 
+      {hiddenProvidersOpen ? (
+        <ModalShell
+          title="隐藏区"
+          description="这里只影响当前浏览器里的上游管理视图，不会修改上游状态、Key、价格或路由。"
+          onClose={() => setHiddenProvidersOpen(false)}
+          wide
+        >
+          <div className="hidden-provider-list">
+            {filteredHiddenProviders.map((provider) => {
+              const activeKeys =
+                provider.keys?.filter((key) => key.status === "ACTIVE")
+                  .length ?? 0;
+              const providerPrices = pricesForProvider(provider.name);
+              return (
+                <div className="hidden-provider-item" key={provider.id}>
+                  <ConsoleNavButton
+                    active={false}
+                    title={provider.name}
+                    description={`${provider.baseUrl} · Key ${activeKeys}/${provider.keys?.length ?? 0} · 价格 ${providerPrices.filter((price) => price.enabled).length}/${providerPrices.length}`}
+                    meta={<StatusPill status={provider.status} />}
+                    onClick={() => showProvider(provider)}
+                  />
+                  <div className="button-row">
+                    <button
+                      className="button secondary"
+                      onClick={() => showProvider(provider)}
+                      type="button"
+                    >
+                      <Eye size={15} />
+                      取消隐藏
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {filteredHiddenProviders.length === 0 ? (
+              <div className="empty-state compact">隐藏区暂无上游</div>
+            ) : null}
+          </div>
+        </ModalShell>
+      ) : null}
+
       {providerModalOpen ? (
         <ModalShell
           title={editingId ? "编辑上游" : "添加上游"}
@@ -1583,6 +1788,13 @@ export function UpstreamProviders({
                   <option value="compaction">compaction</option>
                   <option value="compaction_summary">compaction_summary</option>
                 </select>
+                <span className="field-hint">
+                  用于二次 compact 替换时写回请求的 item 类型。New API
+                  中转站一般选 compaction；subAPI 类中转站一般选
+                  compaction_summary。
+                  这个选项不会让上游自动支持 compact，真正可用必须看
+                  /v1/responses/compact 是否返回 encrypted_content。
+                </span>
               </label>
             </div>
             <div className="modal-footer">
@@ -1699,6 +1911,64 @@ export function UpstreamProviders({
               <button className="button" type="submit">
                 <KeyRound size={17} />
                 添加 Key
+              </button>
+            </div>
+          </form>
+        </ModalShell>
+      ) : null}
+
+      {batchKeyModalProvider ? (
+        <ModalShell
+          title="批量添加上游 Key"
+          description={batchKeyModalProvider.name}
+          onClose={() => {
+            if (!batchKeyBusy) {
+              setBatchKeyModalProvider(null);
+            }
+          }}
+          wide
+        >
+          <form className="form" onSubmit={createProviderKeysBatch}>
+            <div className="modal-body">
+              <label className="field">
+                <span>批量 Key</span>
+                <textarea
+                  className="input textarea"
+                  value={batchKeyContent}
+                  onChange={(event) => setBatchKeyContent(event.target.value)}
+                  placeholder={"apishare11-gwhUAx    sk-A0utvWeIKVXV1TRvzTiA63ml9m7OOrvCUJMy2tu2rmaksIU0\napishare11    sk-kbttGI7dS7VpHe4jWcUdrGozegYrMY3IbYzqVpyE9qFUGXDk"}
+                  rows={8}
+                />
+                <span className="field-hint">
+                  每行一个 Key，格式为：名称 空格 上游 API Key。
+                </span>
+              </label>
+              <label className="field">
+                <span>优先级</span>
+                <input
+                  className="input"
+                  min={1}
+                  max={10000}
+                  value={batchKeyPriority}
+                  onChange={(event) =>
+                    setBatchKeyPriority(Number(event.target.value))
+                  }
+                  type="number"
+                />
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="button secondary"
+                disabled={batchKeyBusy}
+                onClick={() => setBatchKeyModalProvider(null)}
+                type="button"
+              >
+                取消
+              </button>
+              <button className="button" disabled={batchKeyBusy} type="submit">
+                <KeyRound size={17} />
+                {batchKeyBusy ? "添加中..." : "批量添加"}
               </button>
             </div>
           </form>

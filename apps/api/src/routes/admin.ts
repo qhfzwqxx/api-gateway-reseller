@@ -94,6 +94,10 @@ import {
   saveGatewayNoticeSettings,
 } from "../services/gateway-notice-settings.js";
 import {
+  readUpstreamOutputFilterSettings,
+  saveUpstreamOutputFilterSettings,
+} from "../services/upstream-output-filter-settings.js";
+import {
   defaultRedisFailurePolicySettings,
   readRedisFailurePolicySettings,
   redisFailurePolicyValues,
@@ -127,6 +131,16 @@ import {
   readDispatchSettings,
   writeDispatchSettings,
 } from "../services/dispatch-settings.js";
+import {
+  activateUserSubscription,
+  grantSubscription,
+  subscriptionPlanInclude,
+  subscriptionSeconds,
+  summarizeSubscriptionQuota,
+  syncSubscriptionsForPlanUpdate,
+  syncUserSubscriptionState,
+  userSubscriptionInclude,
+} from "../services/subscriptions.js";
 
 const callableChannelStatuses = new Set(["ACTIVE", "FORCED_ACTIVE"]);
 const channelStatusSchema = z.enum([
@@ -236,6 +250,21 @@ const accessTierCodeSchema = z
   .min(1)
   .max(60)
   .regex(/^[a-z0-9][a-z0-9_-]*$/i, "Use letters, numbers, underscore or dash");
+const accessTierBillingMultiplierSchema = z
+  .string()
+  .or(z.number())
+  .transform((value, context) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Billing multiplier must be a non-negative number",
+      });
+      return z.NEVER;
+    }
+
+    return numeric.toFixed(8);
+  });
 const nonNegativeMoneySchema = z
   .string()
   .or(z.number())
@@ -414,6 +443,10 @@ const gatewayNoticeSettingsSchema = z
     ) as Record<keyof typeof defaultGatewayNoticeSettings, z.ZodString>,
   )
   .partial();
+const upstreamOutputFilterSettingsSchema = z.object({
+  enabled: z.boolean(),
+  phrases: z.array(z.string().trim().min(1).max(2000)).max(50),
+});
 const redisFailurePolicySettingsSchema = z
   .object({
     policy: z.enum(redisFailurePolicyValues),
@@ -920,7 +953,7 @@ async function buildAdminRequestsWhere(query: AdminRequestsQuery) {
 
   if (firstTokenLatencyRange) {
     andFilters.push({
-      firstTokenLatencyMs: intRangeFilter(firstTokenLatencyRange),
+      upstreamFirstChunkLatencyMs: intRangeFilter(firstTokenLatencyRange),
     });
   }
 
@@ -949,11 +982,14 @@ async function getAdminRequestsSummary(
         outputTokens: true,
         totalTokens: true,
         chargedAmountUsd: true,
+        subscriptionChargedAmountUsd: true,
+        walletChargedAmountUsd: true,
         upstreamCostUsd: true,
       },
       _avg: {
         latencyMs: true,
         firstTokenLatencyMs: true,
+        upstreamFirstChunkLatencyMs: true,
       },
     }),
     prisma.apiRequest.groupBy({
@@ -990,7 +1026,7 @@ async function getAdminRequestsSummary(
     upstreamCostUsd: upstreamCostUsd.toFixed(8),
     grossProfitUsd: chargedAmountUsd.minus(upstreamCostUsd).toFixed(8),
     avgLatencyMs: aggregate._avg.latencyMs,
-    avgFirstTokenLatencyMs: aggregate._avg.firstTokenLatencyMs,
+    avgFirstTokenLatencyMs: aggregate._avg.upstreamFirstChunkLatencyMs,
   };
 }
 
@@ -1064,14 +1100,13 @@ async function buildAdminReportSummary() {
   const where = {
     createdAt: { gte: dateFrom },
   } satisfies Prisma.ApiRequestWhereInput;
-  const [summary, byUser, byModel, byUpstream, byTier] =
-    await Promise.all([
-      getAdminRequestsSummary(where),
-      aggregateReportDimension("userId", where),
-      aggregateReportDimension("model", where),
-      aggregateReportDimension("upstreamProvider", where),
-      aggregateReportDimension("accessTierId", where),
-    ]);
+  const [summary, byUser, byModel, byUpstream, byTier] = await Promise.all([
+    getAdminRequestsSummary(where),
+    aggregateReportDimension("userId", where),
+    aggregateReportDimension("model", where),
+    aggregateReportDimension("upstreamProvider", where),
+    aggregateReportDimension("accessTierId", where),
+  ]);
   const userIds = byUser
     .map((row) => row.id)
     .filter((id): id is string => Boolean(id));
@@ -1114,7 +1149,16 @@ async function buildAdminReportSummary() {
 
 function buildAdminReportSummaryCsv(report: AdminReportSummaryPayload) {
   const rows = [
-    ["section", "id", "label", "requestCount", "totalTokens", "chargedAmountUsd", "upstreamCostUsd", "grossProfitUsd"],
+    [
+      "section",
+      "id",
+      "label",
+      "requestCount",
+      "totalTokens",
+      "chargedAmountUsd",
+      "upstreamCostUsd",
+      "grossProfitUsd",
+    ],
     [
       "summary",
       "",
@@ -1159,8 +1203,9 @@ export async function adminRoutes(app: FastifyInstance) {
       request.url.startsWith("/admin/") &&
       !request.url.startsWith("/admin/audit-logs")
     ) {
-      (request as FastifyRequest & { auditReplyPayload?: unknown }).auditReplyPayload =
-        parseAuditReplyPayload(payload);
+      (
+        request as FastifyRequest & { auditReplyPayload?: unknown }
+      ).auditReplyPayload = parseAuditReplyPayload(payload);
     }
     return payload;
   });
@@ -1196,6 +1241,7 @@ export async function adminRoutes(app: FastifyInstance) {
             httpStatus: true,
             latencyMs: true,
             firstTokenLatencyMs: true,
+            upstreamFirstChunkLatencyMs: true,
             upstreamProvider: true,
             updatedAt: true,
             createdAt: true,
@@ -1208,6 +1254,7 @@ export async function adminRoutes(app: FastifyInstance) {
             httpStatus: row.httpStatus,
             latencyMs: row.latencyMs,
             firstTokenLatencyMs: row.firstTokenLatencyMs,
+            upstreamFirstChunkLatencyMs: row.upstreamFirstChunkLatencyMs,
             upstreamProvider: row.upstreamProvider,
             updatedAt: row.updatedAt.toISOString(),
             createdAt: row.createdAt.toISOString(),
@@ -1222,9 +1269,7 @@ export async function adminRoutes(app: FastifyInstance) {
         reply.raw.write(
           `event: error\ndata: ${JSON.stringify({
             message:
-              error instanceof Error
-                ? error.message
-                : "request events failed",
+              error instanceof Error ? error.message : "request events failed",
           })}\n\n`,
         );
       }
@@ -1346,6 +1391,8 @@ export async function adminRoutes(app: FastifyInstance) {
         name: z.string().trim().min(1).max(80),
         status: z.enum(["ACTIVE", "DISABLED"]).default("ACTIVE"),
         sortOrder: z.number().int().min(1).max(10000).default(100),
+        billingMultiplier: accessTierBillingMultiplierSchema.default("1"),
+        walletRequired: z.boolean().default(true),
         description: z.string().trim().max(500).nullable().optional(),
       })
       .parse(request.body);
@@ -1379,6 +1426,8 @@ export async function adminRoutes(app: FastifyInstance) {
         name: z.string().trim().min(1).max(80).optional(),
         status: z.enum(["ACTIVE", "DISABLED"]).optional(),
         sortOrder: z.number().int().min(1).max(10000).optional(),
+        billingMultiplier: accessTierBillingMultiplierSchema.optional(),
+        walletRequired: z.boolean().optional(),
         description: z.string().trim().max(500).nullable().optional(),
       })
       .parse(request.body);
@@ -1401,10 +1450,13 @@ export async function adminRoutes(app: FastifyInstance) {
         .send({ message: "Standard tier code cannot be changed" });
     }
 
-    if (existing.code === standardAccessTierCode && body.status === "DISABLED") {
-      return reply
-        .status(400)
-        .send({ message: "Standard tier is the default tier and cannot be disabled" });
+    if (
+      existing.code === standardAccessTierCode &&
+      body.status === "DISABLED"
+    ) {
+      return reply.status(400).send({
+        message: "Standard tier is the default tier and cannot be disabled",
+      });
     }
 
     try {
@@ -1416,6 +1468,12 @@ export async function adminRoutes(app: FastifyInstance) {
           ...(body.status !== undefined ? { status: body.status } : {}),
           ...(body.sortOrder !== undefined
             ? { sortOrder: body.sortOrder }
+            : {}),
+          ...(body.billingMultiplier !== undefined
+            ? { billingMultiplier: body.billingMultiplier }
+            : {}),
+          ...(body.walletRequired !== undefined
+            ? { walletRequired: body.walletRequired }
             : {}),
           ...(body.description !== undefined
             ? { description: normalizeNullableText(body.description) }
@@ -1446,12 +1504,178 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     if (tier.code === standardAccessTierCode) {
-      return reply.status(400).send({ message: "Standard tier cannot be deleted" });
+      return reply
+        .status(400)
+        .send({ message: "Standard tier cannot be deleted" });
     }
 
     await prisma.accessTier.delete({ where: { id: params.id } });
     clearStandardAccessTierCache();
     return { ok: true };
+  });
+
+  app.get("/admin/subscription-plans", async () => {
+    const plans = await prisma.subscriptionPlan.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "desc" }],
+      include: {
+        ...subscriptionPlanInclude,
+        _count: {
+          select: {
+            userSubscriptions: true,
+            redeemCodes: true,
+          },
+        },
+      },
+    });
+
+    return { plans };
+  });
+
+  app.post("/admin/subscription-plans", async (request, reply) => {
+    const body = z
+      .object({
+        code: accessTierCodeSchema.transform((value) => value.toLowerCase()),
+        name: z.string().trim().min(1).max(80),
+        status: z.enum(["ACTIVE", "DISABLED"]).default("ACTIVE"),
+        tierId: z.string().trim().min(1),
+        durationDays: z.number().int().min(1).max(3650),
+        quotaMode: z.enum(["DAILY", "TOTAL", "UNLIMITED"]).default("DAILY"),
+        quotaAmountUsd: z
+          .string()
+          .or(z.number())
+          .transform(String)
+          .refine((value) => Number(value) >= 0, "Quota must be non-negative"),
+        sortOrder: z.number().int().min(1).max(10000).default(100),
+        remark: z.string().trim().max(500).nullable().optional(),
+      })
+      .parse(request.body);
+
+    const tier = await prisma.accessTier.findUnique({
+      where: { id: body.tierId },
+      select: { id: true },
+    });
+    if (!tier) {
+      return reply.status(404).send({ message: "Access tier not found" });
+    }
+
+    try {
+      const plan = await prisma.subscriptionPlan.create({
+        data: {
+          code: body.code,
+          name: body.name,
+          status: body.status,
+          tierId: body.tierId,
+          durationDays: body.durationDays,
+          quotaMode: body.quotaMode,
+          quotaAmountUsd: body.quotaAmountUsd,
+          sortOrder: body.sortOrder,
+          remark: normalizeNullableText(body.remark),
+        },
+        include: subscriptionPlanInclude,
+      });
+      return { plan };
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return reply
+          .status(409)
+          .send({ message: "Subscription plan code already exists" });
+      }
+      throw error;
+    }
+  });
+
+  app.patch("/admin/subscription-plans/:id", async (request, reply) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const body = z
+      .object({
+        code: accessTierCodeSchema
+          .transform((value) => value.toLowerCase())
+          .optional(),
+        name: z.string().trim().min(1).max(80).optional(),
+        status: z.enum(["ACTIVE", "DISABLED"]).optional(),
+        tierId: z.string().trim().min(1).optional(),
+        durationDays: z.number().int().min(1).max(3650).optional(),
+        quotaMode: z.enum(["DAILY", "TOTAL", "UNLIMITED"]).optional(),
+        quotaAmountUsd: z
+          .string()
+          .or(z.number())
+          .transform(String)
+          .refine((value) => Number(value) >= 0, "Quota must be non-negative")
+          .optional(),
+        sortOrder: z.number().int().min(1).max(10000).optional(),
+        remark: z.string().trim().max(500).nullable().optional(),
+      })
+      .parse(request.body);
+
+    const existing = await prisma.subscriptionPlan.findUnique({
+      where: { id: params.id },
+      select: { id: true, durationDays: true, tierId: true },
+    });
+    if (!existing) {
+      return reply.status(404).send({ message: "Subscription plan not found" });
+    }
+
+    if (body.tierId) {
+      const tier = await prisma.accessTier.findUnique({
+        where: { id: body.tierId },
+        select: { id: true },
+      });
+      if (!tier) {
+        return reply.status(404).send({ message: "Access tier not found" });
+      }
+    }
+
+    try {
+      const plan = await prisma.$transaction(async (tx) => {
+        const updated = await tx.subscriptionPlan.update({
+          where: { id: params.id },
+          data: {
+            ...(body.code !== undefined ? { code: body.code } : {}),
+            ...(body.name !== undefined ? { name: body.name } : {}),
+            ...(body.status !== undefined ? { status: body.status } : {}),
+            ...(body.tierId !== undefined ? { tierId: body.tierId } : {}),
+            ...(body.durationDays !== undefined
+              ? { durationDays: body.durationDays }
+              : {}),
+            ...(body.quotaMode !== undefined
+              ? { quotaMode: body.quotaMode }
+              : {}),
+            ...(body.quotaAmountUsd !== undefined
+              ? { quotaAmountUsd: body.quotaAmountUsd }
+              : {}),
+            ...(body.sortOrder !== undefined
+              ? { sortOrder: body.sortOrder }
+              : {}),
+            ...(body.remark !== undefined
+              ? { remark: normalizeNullableText(body.remark) }
+              : {}),
+          },
+          include: subscriptionPlanInclude,
+        });
+
+        if (
+          body.durationDays !== undefined ||
+          body.tierId !== undefined
+        ) {
+          await syncSubscriptionsForPlanUpdate(tx, {
+            planId: updated.id,
+            previousDurationDays: existing.durationDays,
+            nextDurationDays: updated.durationDays,
+            nextTierId: updated.tierId,
+          });
+        }
+
+        return updated;
+      });
+      return { plan };
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return reply
+          .status(409)
+          .send({ message: "Subscription plan code already exists" });
+      }
+      throw error;
+    }
   });
 
   app.get("/admin/dispatch-settings", async () => {
@@ -1493,7 +1717,9 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(404).send({ message: "Access tier not found" });
     }
     if (!isValidIpAccessPattern(body.cidrOrIp)) {
-      return reply.status(400).send({ message: "IP rule must be IPv4 or IPv4 CIDR" });
+      return reply
+        .status(400)
+        .send({ message: "IP rule must be IPv4 or IPv4 CIDR" });
     }
 
     try {
@@ -1510,7 +1736,9 @@ export async function adminRoutes(app: FastifyInstance) {
       return { rule };
     } catch (error) {
       if (isUniqueConstraintError(error)) {
-        return reply.status(409).send({ message: "IP access tier rule already exists" });
+        return reply
+          .status(409)
+          .send({ message: "IP access tier rule already exists" });
       }
       throw error;
     }
@@ -1528,7 +1756,9 @@ export async function adminRoutes(app: FastifyInstance) {
       })
       .parse(request.body);
     if (body.cidrOrIp !== undefined && !isValidIpAccessPattern(body.cidrOrIp)) {
-      return reply.status(400).send({ message: "IP rule must be IPv4 or IPv4 CIDR" });
+      return reply
+        .status(400)
+        .send({ message: "IP rule must be IPv4 or IPv4 CIDR" });
     }
     if (body.tierId) {
       const tier = await prisma.accessTier.findUnique({
@@ -1544,11 +1774,15 @@ export async function adminRoutes(app: FastifyInstance) {
       const rule = await prisma.ipAccessTierRule.update({
         where: { id: params.id },
         data: {
-          ...(body.cidrOrIp !== undefined ? { cidrOrIp: body.cidrOrIp.trim() } : {}),
+          ...(body.cidrOrIp !== undefined
+            ? { cidrOrIp: body.cidrOrIp.trim() }
+            : {}),
           ...(body.tierId !== undefined ? { tierId: body.tierId } : {}),
           ...(body.status !== undefined ? { status: body.status } : {}),
           ...(body.priority !== undefined ? { priority: body.priority } : {}),
-          ...(body.remark !== undefined ? { remark: normalizeNullableText(body.remark) } : {}),
+          ...(body.remark !== undefined
+            ? { remark: normalizeNullableText(body.remark) }
+            : {}),
         },
         include: {
           tier: { select: { id: true, code: true, name: true, status: true } },
@@ -1557,7 +1791,9 @@ export async function adminRoutes(app: FastifyInstance) {
       return { rule };
     } catch (error) {
       if (isUniqueConstraintError(error)) {
-        return reply.status(409).send({ message: "IP access tier rule already exists" });
+        return reply
+          .status(409)
+          .send({ message: "IP access tier rule already exists" });
       }
       throw error;
     }
@@ -1649,6 +1885,7 @@ export async function adminRoutes(app: FastifyInstance) {
       temporaryIpNoticeBanSettings,
       pendingAutoTerminateSettings,
       gatewayNoticeSettings,
+      upstreamOutputFilterSettings,
       redisFailurePolicySettings,
       globalCircuitBreakerSettings,
       externalAlertSettings,
@@ -1664,6 +1901,7 @@ export async function adminRoutes(app: FastifyInstance) {
       readTemporaryIpNoticeBanSettings(),
       readPendingAutoTerminateSettings(),
       readGatewayNoticeSettings(),
+      readUpstreamOutputFilterSettings(),
       readRedisFailurePolicySettings(),
       readGlobalCircuitBreakerSettings(),
       readExternalAlertSettings(),
@@ -1711,6 +1949,7 @@ export async function adminRoutes(app: FastifyInstance) {
         maxTimeoutSeconds: maxPendingAutoTerminateSeconds,
       },
       gatewayNoticeSettings,
+      upstreamOutputFilterSettings,
       redisFailurePolicySettings,
       globalCircuitBreakerSettings,
       externalAlertSettings,
@@ -1848,6 +2087,19 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get("/admin/upstream-output-filter-settings", async () => {
+    return {
+      settings: await readUpstreamOutputFilterSettings(),
+    };
+  });
+
+  app.put("/admin/upstream-output-filter-settings", async (request) => {
+    const body = upstreamOutputFilterSettingsSchema.parse(request.body);
+    return {
+      settings: await saveUpstreamOutputFilterSettings(body),
+    };
+  });
+
   app.get("/admin/redis-failure-policy-settings", async () => {
     const settings = await readRedisFailurePolicySettings();
     return {
@@ -1961,7 +2213,9 @@ export async function adminRoutes(app: FastifyInstance) {
         ? {
             OR: [
               { charityEnabled: true },
-              { email: { equals: "free@qq.com", mode: "insensitive" as const } },
+              {
+                email: { equals: "free@qq.com", mode: "insensitive" as const },
+              },
             ],
           }
         : undefined;
@@ -2038,6 +2292,125 @@ export async function adminRoutes(app: FastifyInstance) {
         })),
       ),
     };
+  });
+
+  app.get("/admin/users/:id/subscriptions", async (request) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    await prisma.$transaction((tx) => syncUserSubscriptionState(tx, params.id));
+    const subscriptions = await prisma.userSubscription.findMany({
+      where: { userId: params.id },
+      orderBy: [{ active: "desc" }, { status: "asc" }, { updatedAt: "desc" }],
+      include: userSubscriptionInclude,
+    });
+    return {
+      subscriptions: subscriptions.map((subscription) =>
+        summarizeSubscriptionQuota(subscription),
+      ),
+    };
+  });
+
+  app.post("/admin/users/:id/subscriptions", async (request) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const body = z
+      .object({
+        planId: z.string().trim().min(1),
+        remark: z.string().trim().max(500).nullable().optional(),
+        activate: z.boolean().default(false),
+      })
+      .parse(request.body);
+
+    const subscription = await prisma.$transaction(async (tx) => {
+      const granted = await grantSubscription(tx, {
+        userId: params.id,
+        planId: body.planId,
+        source: "ADMIN",
+        remark: normalizeNullableText(body.remark),
+      });
+      if (body.activate && !granted.active) {
+        return activateUserSubscription(tx, {
+          userId: params.id,
+          subscriptionId: granted.id,
+        });
+      }
+      return granted;
+    });
+
+    return { subscription: summarizeSubscriptionQuota(subscription) };
+  });
+
+  app.patch("/admin/user-subscriptions/:id", async (request) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const body = z
+      .object({
+        status: z.enum(["ACTIVE", "QUEUED", "EXPIRED", "DISABLED"]).optional(),
+        remainingSeconds: z.number().int().min(0).optional(),
+        remark: z.string().trim().max(500).nullable().optional(),
+      })
+      .parse(request.body);
+
+    const subscription = await prisma.$transaction(async (tx) => {
+      const existing = await tx.userSubscription.findUnique({
+        where: { id: params.id },
+      });
+      if (!existing) {
+        throw Object.assign(new Error("Subscription not found"), {
+          statusCode: 404,
+        });
+      }
+      await syncUserSubscriptionState(tx, existing.userId);
+
+      if (
+        body.status &&
+        ["DISABLED", "EXPIRED"].includes(body.status) &&
+        existing.active
+      ) {
+        await tx.user.update({
+          where: { id: existing.userId },
+          data: { tierId: existing.baseTierId },
+        });
+      }
+
+      return tx.userSubscription.update({
+        where: { id: params.id },
+        data: {
+          ...(body.status !== undefined
+            ? {
+                status: body.status,
+                active: body.status === "ACTIVE" ? existing.active : false,
+              }
+            : {}),
+          ...(body.remainingSeconds !== undefined
+            ? { remainingSeconds: body.remainingSeconds }
+            : {}),
+          ...(body.remark !== undefined
+            ? { remark: normalizeNullableText(body.remark) }
+            : {}),
+        },
+        include: userSubscriptionInclude,
+      });
+    });
+
+    return { subscription: summarizeSubscriptionQuota(subscription) };
+  });
+
+  app.post("/admin/user-subscriptions/:id/activate", async (request) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const existing = await prisma.userSubscription.findUnique({
+      where: { id: params.id },
+      select: { userId: true },
+    });
+    if (!existing) {
+      throw Object.assign(new Error("Subscription not found"), {
+        statusCode: 404,
+      });
+    }
+    const subscription = await prisma.$transaction((tx) =>
+      activateUserSubscription(tx, {
+        userId: existing.userId,
+        subscriptionId: params.id,
+      }),
+    );
+    return { subscription: summarizeSubscriptionQuota(subscription) };
   });
 
   app.patch("/admin/users/:id", async (request) => {
@@ -2829,9 +3202,12 @@ export async function adminRoutes(app: FastifyInstance) {
           outputTokens: true,
           totalTokens: true,
           chargedAmountUsd: true,
+          subscriptionChargedAmountUsd: true,
+          walletChargedAmountUsd: true,
           upstreamCostUsd: true,
           latencyMs: true,
           firstTokenLatencyMs: true,
+          upstreamFirstChunkLatencyMs: true,
           errorMessage: true,
           responseUsage: true,
           createdAt: true,
@@ -2910,6 +3286,7 @@ export async function adminRoutes(app: FastifyInstance) {
         upstreamCostUsd: true,
         latencyMs: true,
         firstTokenLatencyMs: true,
+        upstreamFirstChunkLatencyMs: true,
         errorMessage: true,
         requestBody: true,
         responseUsage: true,
@@ -3123,6 +3500,7 @@ export async function adminRoutes(app: FastifyInstance) {
         upstreamCostUsd: true,
         latencyMs: true,
         firstTokenLatencyMs: true,
+        upstreamFirstChunkLatencyMs: true,
         errorMessage: true,
         responseUsage: true,
         createdAt: true,
@@ -3152,6 +3530,9 @@ export async function adminRoutes(app: FastifyInstance) {
             name: true,
           },
         },
+        subscriptionPlan: {
+          include: subscriptionPlanInclude,
+        },
         redemptions: {
           orderBy: { createdAt: "desc" },
           take: 5,
@@ -3180,6 +3561,9 @@ export async function adminRoutes(app: FastifyInstance) {
             name: true,
           },
         },
+        subscriptionPlan: {
+          include: subscriptionPlanInclude,
+        },
         redemptions: {
           orderBy: { createdAt: "desc" },
           include: {
@@ -3207,20 +3591,35 @@ export async function adminRoutes(app: FastifyInstance) {
     const admin = request.user as { sub: string };
     const body = z
       .object({
-        amount: z.string().or(z.number()).transform(String),
+        rewardType: z.enum(["BALANCE", "SUBSCRIPTION"]).default("BALANCE"),
+        amount: z.string().or(z.number()).transform(String).optional(),
         count: z.number().int().min(1).max(100).default(1),
         maxRedemptions: z.number().int().min(1).max(1000).default(1),
         expiresAt: z.string().datetime().nullable().optional(),
         remark: z.string().max(500).optional(),
         campaignName: z.string().trim().max(120).nullable().optional(),
         validUserTierId: z.string().trim().min(1).nullable().optional(),
+        subscriptionPlanId: z.string().trim().min(1).nullable().optional(),
         perUserLimit: z.number().int().min(1).max(1000).default(1),
       })
       .parse(request.body);
-    const amount = new Decimal(body.amount);
+    const amount = new Decimal(body.amount ?? "0");
 
-    if (!amount.isFinite() || amount.lte(0)) {
+    if (
+      body.rewardType === "BALANCE" &&
+      (!amount.isFinite() || amount.lte(0))
+    ) {
       return reply.status(400).send({ message: "Amount must be positive" });
+    }
+    if (body.rewardType === "SUBSCRIPTION" && !body.subscriptionPlanId) {
+      return reply
+        .status(400)
+        .send({ message: "Subscription plan is required" });
+    }
+    if (body.rewardType === "BALANCE" && body.subscriptionPlanId) {
+      return reply.status(400).send({
+        message: "Balance redeem code cannot include subscription plan",
+      });
     }
 
     if (body.perUserLimit > body.maxRedemptions) {
@@ -3238,6 +3637,17 @@ export async function adminRoutes(app: FastifyInstance) {
         return reply.status(404).send({ message: "Access tier not found" });
       }
     }
+    if (body.subscriptionPlanId) {
+      const plan = await prisma.subscriptionPlan.findUnique({
+        where: { id: body.subscriptionPlanId },
+        select: { id: true },
+      });
+      if (!plan) {
+        return reply
+          .status(404)
+          .send({ message: "Subscription plan not found" });
+      }
+    }
 
     const generated = Array.from({ length: body.count }, () =>
       createRedeemCode(),
@@ -3248,6 +3658,7 @@ export async function adminRoutes(app: FastifyInstance) {
           data: {
             codeHash: item.hash,
             codePrefix: item.prefix,
+            rewardType: body.rewardType,
             amount: amount.toFixed(8),
             maxRedemptions: body.maxRedemptions,
             expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
@@ -3255,6 +3666,10 @@ export async function adminRoutes(app: FastifyInstance) {
             remark: body.remark,
             campaignName: normalizeNullableText(body.campaignName),
             validUserTierId: body.validUserTierId ?? null,
+            subscriptionPlanId:
+              body.rewardType === "SUBSCRIPTION"
+                ? body.subscriptionPlanId
+                : null,
             perUserLimit: body.perUserLimit,
           },
           include: {
@@ -3264,6 +3679,9 @@ export async function adminRoutes(app: FastifyInstance) {
                 code: true,
                 name: true,
               },
+            },
+            subscriptionPlan: {
+              include: subscriptionPlanInclude,
             },
           },
         }),
@@ -3287,6 +3705,7 @@ export async function adminRoutes(app: FastifyInstance) {
         remark: z.string().max(500).nullable().optional(),
         campaignName: z.string().trim().max(120).nullable().optional(),
         validUserTierId: z.string().trim().min(1).nullable().optional(),
+        subscriptionPlanId: z.string().trim().min(1).nullable().optional(),
         perUserLimit: z.number().int().min(1).max(1000).optional(),
       })
       .parse(request.body);
@@ -3296,7 +3715,9 @@ export async function adminRoutes(app: FastifyInstance) {
       select: { maxRedemptions: true },
     });
     if (!existing) {
-      throw Object.assign(new Error("Redeem code not found"), { statusCode: 404 });
+      throw Object.assign(new Error("Redeem code not found"), {
+        statusCode: 404,
+      });
     }
 
     if (body.perUserLimit && body.perUserLimit > existing.maxRedemptions) {
@@ -3312,7 +3733,20 @@ export async function adminRoutes(app: FastifyInstance) {
         select: { id: true },
       });
       if (!tier) {
-        throw Object.assign(new Error("Access tier not found"), { statusCode: 404 });
+        throw Object.assign(new Error("Access tier not found"), {
+          statusCode: 404,
+        });
+      }
+    }
+    if (body.subscriptionPlanId) {
+      const plan = await prisma.subscriptionPlan.findUnique({
+        where: { id: body.subscriptionPlanId },
+        select: { id: true },
+      });
+      if (!plan) {
+        throw Object.assign(new Error("Subscription plan not found"), {
+          statusCode: 404,
+        });
       }
     }
 
@@ -3326,6 +3760,9 @@ export async function adminRoutes(app: FastifyInstance) {
             name: true,
           },
         },
+        subscriptionPlan: {
+          include: subscriptionPlanInclude,
+        },
       },
       data: {
         ...(body.status ? { status: body.status } : {}),
@@ -3338,6 +3775,9 @@ export async function adminRoutes(app: FastifyInstance) {
           : {}),
         ...(body.validUserTierId !== undefined
           ? { validUserTierId: body.validUserTierId }
+          : {}),
+        ...(body.subscriptionPlanId !== undefined
+          ? { subscriptionPlanId: body.subscriptionPlanId }
           : {}),
         ...(body.perUserLimit !== undefined
           ? { perUserLimit: body.perUserLimit }
@@ -3413,8 +3853,10 @@ export async function adminRoutes(app: FastifyInstance) {
         dryRun: true,
         summary: {
           rows: normalized.rows.length,
-          creates: normalized.rows.filter((row) => row.action === "create").length,
-          updates: normalized.rows.filter((row) => row.action === "update").length,
+          creates: normalized.rows.filter((row) => row.action === "create")
+            .length,
+          updates: normalized.rows.filter((row) => row.action === "update")
+            .length,
         },
         rows: normalized.rows.slice(0, 100),
       };
@@ -3479,44 +3921,45 @@ export async function adminRoutes(app: FastifyInstance) {
         getModelPoolPenaltySeconds(),
         getModelPoolSuccessGraceSeconds(),
       ]);
-    const [pools, prices, providers, accessTiers, dispatchSettings] = await Promise.all([
-      prisma.modelPool.findMany({
-        orderBy: [{ model: "asc" }, { tier: { sortOrder: "asc" } }],
-        include: {
-          tier: {
-            select: {
-              id: true,
-              code: true,
-              name: true,
-              status: true,
+    const [pools, prices, providers, accessTiers, dispatchSettings] =
+      await Promise.all([
+        prisma.modelPool.findMany({
+          orderBy: [{ model: "asc" }, { tier: { sortOrder: "asc" } }],
+          include: {
+            tier: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                status: true,
+              },
+            },
+            channels: {
+              orderBy: [{ upstreamProvider: "asc" }],
             },
           },
-          channels: {
-            orderBy: [{ upstreamProvider: "asc" }],
+        }),
+        prisma.modelPrice.findMany({
+          orderBy: [{ model: "asc" }, { upstreamProvider: "asc" }],
+        }),
+        prisma.upstreamProvider.findMany({
+          orderBy: [{ priority: "asc" }, { name: "asc" }],
+          select: {
+            name: true,
+            status: true,
+            priority: true,
+            keys: {
+              where: { status: "ACTIVE" },
+              select: { id: true },
+            },
           },
-        },
-      }),
-      prisma.modelPrice.findMany({
-        orderBy: [{ model: "asc" }, { upstreamProvider: "asc" }],
-      }),
-      prisma.upstreamProvider.findMany({
-        orderBy: [{ priority: "asc" }, { name: "asc" }],
-        select: {
-          name: true,
-          status: true,
-          priority: true,
-          keys: {
-            where: { status: "ACTIVE" },
-            select: { id: true },
-          },
-        },
-      }),
-      prisma.accessTier.findMany({
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-        select: { id: true, code: true, name: true, status: true },
-      }),
-      readDispatchSettings(),
-    ]);
+        }),
+        prisma.accessTier.findMany({
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          select: { id: true, code: true, name: true, status: true },
+        }),
+        readDispatchSettings(),
+      ]);
     const priceMap = new Map(
       prices.map((price) => [
         `${price.upstreamProvider}:${price.model}`,
@@ -3824,51 +4267,56 @@ export async function adminRoutes(app: FastifyInstance) {
     return { result };
   });
 
-  app.patch("/admin/model-pool-channels/by-provider", async (request, reply) => {
-    const body = z
-      .object({
-        upstreamProvider: z.string().trim().min(1).max(80),
-        status: channelStatusSchema,
-      })
-      .parse(request.body);
-    const provider = await prisma.upstreamProvider.findUnique({
-      where: { name: body.upstreamProvider },
-      select: { name: true },
-    });
+  app.patch(
+    "/admin/model-pool-channels/by-provider",
+    async (request, reply) => {
+      const body = z
+        .object({
+          upstreamProvider: z.string().trim().min(1).max(80),
+          status: channelStatusSchema,
+        })
+        .parse(request.body);
+      const provider = await prisma.upstreamProvider.findUnique({
+        where: { name: body.upstreamProvider },
+        select: { name: true },
+      });
 
-    if (!provider) {
-      return reply.status(404).send({ message: "Upstream provider not found" });
-    }
+      if (!provider) {
+        return reply
+          .status(404)
+          .send({ message: "Upstream provider not found" });
+      }
 
-    const result = await prisma.modelPoolChannel.updateMany({
-      where: {
-        upstreamProvider: provider.name,
-        ...(body.status === "DISABLED"
-          ? { status: { not: "DISABLED" } }
-          : {}),
-      },
-      data: {
-        status: body.status,
-        ...(body.status === "ACTIVE" || body.status === "FORCED_ACTIVE"
-          ? {
-              consecutiveFailures: 0,
-              recoverySuccesses: 0,
-              penalizedUntil: null,
-              penaltyReason: null,
-            }
-          : {}),
-      },
-    });
+      const result = await prisma.modelPoolChannel.updateMany({
+        where: {
+          upstreamProvider: provider.name,
+          ...(body.status === "DISABLED"
+            ? { status: { not: "DISABLED" } }
+            : {}),
+        },
+        data: {
+          status: body.status,
+          ...(body.status === "ACTIVE" || body.status === "FORCED_ACTIVE"
+            ? {
+                consecutiveFailures: 0,
+                recoverySuccesses: 0,
+                penalizedUntil: null,
+                penaltyReason: null,
+              }
+            : {}),
+        },
+      });
 
-    emitPublicStatusChanged();
-    return {
-      result: {
-        upstreamProvider: provider.name,
-        status: body.status,
-        updatedChannels: result.count,
-      },
-    };
-  });
+      emitPublicStatusChanged();
+      return {
+        result: {
+          upstreamProvider: provider.name,
+          status: body.status,
+          updatedChannels: result.count,
+        },
+      };
+    },
+  );
 
   app.post("/admin/model-pools/add-provider", async (request, reply) => {
     const body = z
@@ -4278,7 +4726,9 @@ export async function adminRoutes(app: FastifyInstance) {
         ...(body.effectiveFrom !== undefined
           ? { effectiveFrom: body.effectiveFrom }
           : {}),
-        ...(body.effectiveTo !== undefined ? { effectiveTo: body.effectiveTo } : {}),
+        ...(body.effectiveTo !== undefined
+          ? { effectiveTo: body.effectiveTo }
+          : {}),
         createdByUserId: admin.sub,
       },
       create: {
@@ -4397,7 +4847,9 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const nextEffectiveFrom =
-      body.effectiveFrom !== undefined ? body.effectiveFrom : existing.effectiveFrom;
+      body.effectiveFrom !== undefined
+        ? body.effectiveFrom
+        : existing.effectiveFrom;
     const nextEffectiveTo =
       body.effectiveTo !== undefined ? body.effectiveTo : existing.effectiveTo;
     const validityError = validatePriceValidityWindow(
@@ -4448,6 +4900,48 @@ export async function adminRoutes(app: FastifyInstance) {
     });
 
     return { ok: true };
+  });
+
+  app.delete("/admin/model-prices/by-model/:model", async (request, reply) => {
+    const params = z.object({ model: z.string().min(1) }).parse(request.params);
+    const model = decodeURIComponent(params.model).trim();
+
+    if (!model) {
+      return reply.status(400).send({ message: "Model is required" });
+    }
+
+    const modelPrices = await prisma.modelPrice.findMany({
+      where: { model },
+      select: { id: true },
+    });
+
+    if (modelPrices.length === 0) {
+      return reply.status(404).send({ message: "Model prices not found" });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const pools = await tx.modelPool.findMany({
+        where: { model },
+        select: { id: true },
+      });
+
+      const deletedChannels = await tx.modelPoolChannel.deleteMany({
+        where: {
+          modelPoolId: { in: pools.map((pool) => pool.id) },
+        },
+      });
+
+      const deletedPrices = await tx.modelPrice.deleteMany({
+        where: { model },
+      });
+
+      return {
+        deletedPrices: deletedPrices.count,
+        deletedChannels: deletedChannels.count,
+      };
+    });
+
+    return { ok: true, model, ...result };
   });
 
   app.get("/admin/upstream-providers", async () => {
@@ -4577,7 +5071,13 @@ export async function adminRoutes(app: FastifyInstance) {
         priority: z.number().int().min(1).max(10000).default(100),
         dailyLimitUsd: moneyLimitSchema,
         monthlyLimitUsd: moneyLimitSchema,
-        providerRateLimit: z.number().int().min(0).max(1000000).nullable().optional(),
+        providerRateLimit: z
+          .number()
+          .int()
+          .min(0)
+          .max(1000000)
+          .nullable()
+          .optional(),
       })
       .parse(request.body);
     const provider = await prisma.upstreamProvider.findUnique({
@@ -4589,7 +5089,8 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(404).send({ message: "Upstream provider not found" });
     }
 
-    const name = body.name?.trim() || await nextUpstreamProviderKeyName(params.id);
+    const name =
+      body.name?.trim() || (await nextUpstreamProviderKeyName(params.id));
     let key;
     try {
       key = await prisma.upstreamProviderKey.create({
@@ -4628,7 +5129,13 @@ export async function adminRoutes(app: FastifyInstance) {
         priority: z.number().int().min(1).max(10000).optional(),
         dailyLimitUsd: moneyLimitSchema,
         monthlyLimitUsd: moneyLimitSchema,
-        providerRateLimit: z.number().int().min(0).max(1000000).nullable().optional(),
+        providerRateLimit: z
+          .number()
+          .int()
+          .min(0)
+          .max(1000000)
+          .nullable()
+          .optional(),
         disabledReason: z.string().trim().max(500).nullable().optional(),
         lastErrorCategory: z.string().trim().max(80).nullable().optional(),
       })
@@ -4670,7 +5177,11 @@ export async function adminRoutes(app: FastifyInstance) {
             ? { disabledReason: normalizeNullableText(body.disabledReason) }
             : {}),
           ...(body.lastErrorCategory !== undefined
-            ? { lastErrorCategory: normalizeNullableText(body.lastErrorCategory) }
+            ? {
+                lastErrorCategory: normalizeNullableText(
+                  body.lastErrorCategory,
+                ),
+              }
             : {}),
         },
       });
@@ -4957,9 +5468,10 @@ function isUniqueConstraintError(error: unknown) {
 
 function isValidIpAccessPattern(value: string) {
   const trimmed = value.trim();
-  return Boolean(trimmed) && (
-    ipMatchesPattern(trimmed, trimmed) ||
-    ipMatchesPattern("127.0.0.1", trimmed)
+  return (
+    Boolean(trimmed) &&
+    (ipMatchesPattern(trimmed, trimmed) ||
+      ipMatchesPattern("127.0.0.1", trimmed))
   );
 }
 
@@ -5009,7 +5521,10 @@ async function writeAdminAuditLog(
         outcome: responseStatus >= 400 ? "failure" : "success",
         errorMessage:
           responseStatus >= 400
-            ? getAuditErrorMessage(replyPayloadFromRequest(request), responseStatus)
+            ? getAuditErrorMessage(
+                replyPayloadFromRequest(request),
+                responseStatus,
+              )
             : null,
         ip: getRequestIp(request),
         userAgent: pickHeaderValue(request.headers["user-agent"]),
@@ -5255,7 +5770,9 @@ function explainAdminChannelUnavailable(params: {
   }
   if (params.providerStatus !== "ACTIVE") {
     reasons.push(
-      params.providerStatus ? `上游状态为 ${params.providerStatus}` : "上游不存在",
+      params.providerStatus
+        ? `上游状态为 ${params.providerStatus}`
+        : "上游不存在",
     );
   }
   if (params.activeKeyCount <= 0) {
@@ -5307,9 +5824,7 @@ function buildModelPriceUpdateData(body: ModelPriceBody) {
       : {}),
     ...(body.upstreamCachedInputPer1MTok !== undefined
       ? {
-          upstreamCachedInputPer1MTok: String(
-            body.upstreamCachedInputPer1MTok,
-          ),
+          upstreamCachedInputPer1MTok: String(body.upstreamCachedInputPer1MTok),
         }
       : {}),
     ...(body.upstreamPriceMultiplier !== undefined
@@ -5323,9 +5838,7 @@ function buildModelPriceUpdateData(body: ModelPriceBody) {
       : {}),
     ...(body.customerCachedInputPer1MTok !== undefined
       ? {
-          customerCachedInputPer1MTok: String(
-            body.customerCachedInputPer1MTok,
-          ),
+          customerCachedInputPer1MTok: String(body.customerCachedInputPer1MTok),
         }
       : {}),
     ...(body.customerPriceMultiplier !== undefined
@@ -5341,7 +5854,9 @@ function buildModelPriceUpdateData(body: ModelPriceBody) {
     ...(body.effectiveFrom !== undefined
       ? { effectiveFrom: body.effectiveFrom }
       : {}),
-    ...(body.effectiveTo !== undefined ? { effectiveTo: body.effectiveTo } : {}),
+    ...(body.effectiveTo !== undefined
+      ? { effectiveTo: body.effectiveTo }
+      : {}),
   };
 }
 
@@ -5355,9 +5870,9 @@ function validatePriceValidityWindow(
     effectiveFrom.getTime() >= effectiveTo.getTime()
   ) {
     return (reply: FastifyReply) =>
-      reply
-        .status(400)
-        .send({ message: "Price effectiveTo must be later than effectiveFrom" });
+      reply.status(400).send({
+        message: "Price effectiveTo must be later than effectiveFrom",
+      });
   }
 
   return null;
@@ -5521,9 +6036,7 @@ function parseModelPriceImportContent(content: string, format: "json" | "csv") {
 
   if (format === "json") {
     const parsed = JSON.parse(trimmed) as unknown;
-    const rows = Array.isArray(parsed)
-      ? parsed
-      : asRecord(parsed)?.modelPrices;
+    const rows = Array.isArray(parsed) ? parsed : asRecord(parsed)?.modelPrices;
     if (!Array.isArray(rows)) {
       throw Object.assign(
         new Error("JSON import must be an array or { modelPrices: [...] }"),
@@ -5706,7 +6219,7 @@ function normalizeImportedModelPriceRow(row: Record<string, unknown>) {
     priceVersion: readImportString(row, "priceVersion", false) || "v1",
     effectiveFrom,
     effectiveTo,
-} satisfies ImportedModelPriceData;
+  } satisfies ImportedModelPriceData;
 }
 
 function readImportUpstreamEndpoint(row: Record<string, unknown>) {
@@ -5715,9 +6228,7 @@ function readImportUpstreamEndpoint(row: Record<string, unknown>) {
     return value;
   }
 
-  throw new Error(
-    "upstreamEndpoint must be responses or chat_completions",
-  );
+  throw new Error("upstreamEndpoint must be responses or chat_completions");
 }
 
 function asStringRecord(value: unknown) {
@@ -5745,7 +6256,8 @@ function readImportString(
   required: boolean,
 ) {
   const value = row[key];
-  const text = value === null || value === undefined ? "" : String(value).trim();
+  const text =
+    value === null || value === undefined ? "" : String(value).trim();
   if (!text && required) {
     throw new Error(`${key} is required`);
   }
@@ -5832,12 +6344,7 @@ function parseIpv4Range(pattern: string) {
     : [normalized, "32"];
   const bytes = parseIpv4Bytes(ip ?? "");
   const prefix = Number(prefixText);
-  if (
-    !bytes ||
-    !Number.isInteger(prefix) ||
-    prefix < 0 ||
-    prefix > 32
-  ) {
+  if (!bytes || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
     return null;
   }
   const value = ipv4BytesToNumber(bytes);

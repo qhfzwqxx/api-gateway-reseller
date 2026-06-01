@@ -1,11 +1,12 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { apiBaseUrl, apiFetch } from "../../../lib/api";
 import { confirmAdminAction } from "../../admin/_components/admin-confirm";
 import { dateTime, money, splitList } from "../../admin/_components/admin-format";
 import { AdminDataTable, MobileEmpty, MobileField, MobileRecord, ModalShell, StatusPill } from "../../admin/_components/admin-ui";
+import { Pagination } from "./Pagination";
 
 export type ApiKey = {
   id: string;
@@ -69,6 +70,7 @@ export function Keys({
   onChanged: () => void;
   onError: (error: string | null) => void;
 }) {
+  const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("default");
   const [rateLimit, setRateLimit] = useState(60);
   const [totalLimitUsd, setTotalLimitUsd] = useState("");
@@ -87,6 +89,28 @@ export function Keys({
   const [editExpiresAt, setEditExpiresAt] = useState("");
   const [editTags, setEditTags] = useState("");
   const [editIpWhitelist, setEditIpWhitelist] = useState("");
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(apiKeys.length / pageSize));
+  const activePage = Math.min(currentPage, pageCount);
+  const visibleApiKeys = apiKeys.slice(
+    (activePage - 1) * pageSize,
+    activePage * pageSize,
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [apiKeys, pageSize]);
+
+  function resetCreateForm() {
+    setName("default");
+    setRateLimit(60);
+    setTotalLimitUsd("");
+    setConcurrencyLimit(0);
+    setExpiresAt("");
+    setTags("");
+    setIpWhitelist("");
+  }
 
   async function createKey(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -114,6 +138,8 @@ export function Keys({
       };
       setSecret(result.secret);
       setConfigKey(createdKey);
+      setCreateOpen(false);
+      resetCreateForm();
       onChanged();
     } catch (createError) {
       onError(errorToText(createError));
@@ -130,7 +156,7 @@ export function Keys({
     setEditTags((key.tags ?? []).join(", "));
     setEditIpWhitelist((key.ipWhitelist ?? []).join("\n"));
   }
-  const apiKeyRows = apiKeys.map((key) => ({
+  const apiKeyRows = visibleApiKeys.map((key) => ({
     id: key.id,
     name: key.name,
     secret: (
@@ -269,97 +295,25 @@ export function Keys({
 
   return (
     <>
-      <div className="grid cols-2">
-        <section className="card">
-          <h2 className="section-title">创建 API Key</h2>
-          <form className="form" onSubmit={createKey}>
-            <label className="field">
-              <span>名称</span>
-              <input
-                className="input"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>每分钟限流</span>
-              <input
-                className="input"
-                value={rateLimit}
-                min={1}
-                max={10000}
-                onChange={(event) => setRateLimit(Number(event.target.value))}
-                type="number"
-              />
-            </label>
-            <label className="field">
-              <span>总限额 USD</span>
-              <input
-                className="input"
-                value={totalLimitUsd}
-                min={0}
-                onChange={(event) => setTotalLimitUsd(event.target.value)}
-                placeholder="留空不限"
-                step="0.00000001"
-                type="number"
-              />
-            </label>
-            <label className="field">
-              <span>并发限制</span>
-              <input
-                className="input"
-                value={concurrencyLimit}
-                min={0}
-                max={10000}
-                onChange={(event) =>
-                  setConcurrencyLimit(Number(event.target.value))
-                }
-                type="number"
-              />
-            </label>
-            <label className="field">
-              <span>过期时间</span>
-              <input
-                className="input"
-                value={expiresAt}
-                onChange={(event) => setExpiresAt(event.target.value)}
-                type="datetime-local"
-              />
-            </label>
-            <label className="field">
-              <span>标签</span>
-              <input
-                className="input"
-                value={tags}
-                onChange={(event) => setTags(event.target.value)}
-                placeholder="个人, 测试"
-              />
-            </label>
-            <label className="field">
-              <span>IP 白名单</span>
-              <textarea
-                className="input textarea compact-textarea"
-                value={ipWhitelist}
-                onChange={(event) => setIpWhitelist(event.target.value)}
-                placeholder="每行一个 IP 或 IPv4 CIDR，留空不限制"
-              />
-            </label>
-            <button className="button" type="submit">
-              <Plus size={17} />
-              创建
-            </button>
-          </form>
-          {secret ? (
-            <div className="stack-top">
-              <div className="notice">
-                API Key 已创建，可在列表中一直查看和配置。
-              </div>
-              <div className="secret">{secret}</div>
+      <div className="user-key-workbench user-key-workbench-single">
+        <section className="card wide-card user-key-list-card user-key-list-card-paged">
+          <div className="section-head">
+            <div>
+              <h2 className="section-title">API Key 列表</h2>
+              <p className="section-subtitle">查看密钥状态、限额、过期时间和操作入口。</p>
             </div>
-          ) : null}
-        </section>
-        <section className="card wide-card">
-          <h2 className="section-title">API Key 列表</h2>
+            <div className="button-row compact">
+              <span className="pill strong">{apiKeys.length} keys</span>
+              <button
+                className="button"
+                onClick={() => setCreateOpen(true)}
+                type="button"
+              >
+                <Plus size={17} />
+                创建 API Key
+              </button>
+            </div>
+          </div>
           <AdminDataTable
             columns={[
               { accessorKey: "name", header: "名称" },
@@ -377,7 +331,7 @@ export function Keys({
             empty="暂无 API Key"
           />
           <div className="mobile-record-list">
-            {apiKeys.map((key) => (
+            {visibleApiKeys.map((key) => (
               <MobileRecord
                 key={key.id}
                 title={key.name}
@@ -460,10 +414,18 @@ export function Keys({
                 </MobileField>
               </MobileRecord>
             ))}
-            {apiKeys.length === 0 ? (
+            {visibleApiKeys.length === 0 ? (
               <MobileEmpty>暂无 API Key</MobileEmpty>
             ) : null}
           </div>
+          <Pagination
+            className="front-requests-pagination"
+            currentPage={activePage}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+            pageSize={pageSize}
+            totalPages={pageCount}
+          />
         </section>
       </div>
       {configKey?.keySecret ? (
@@ -471,6 +433,109 @@ export function Keys({
           apiKey={configKey.keySecret}
           onClose={() => setConfigKey(null)}
         />
+      ) : null}
+      {createOpen ? (
+        <ModalShell
+          title="创建 API Key"
+          description="创建新的调用密钥，可设置限流、限额、过期时间和 IP 白名单。"
+          onClose={() => {
+            setCreateOpen(false);
+            resetCreateForm();
+          }}
+          wide
+        >
+          <form className="form" onSubmit={createKey}>
+            <div className="modal-body">
+              <label className="field">
+                <span>名称</span>
+                <input
+                  className="input"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>每分钟限流</span>
+                <input
+                  className="input"
+                  value={rateLimit}
+                  min={1}
+                  max={10000}
+                  onChange={(event) => setRateLimit(Number(event.target.value))}
+                  type="number"
+                />
+              </label>
+              <label className="field">
+                <span>总限额 USD</span>
+                <input
+                  className="input"
+                  value={totalLimitUsd}
+                  min={0}
+                  onChange={(event) => setTotalLimitUsd(event.target.value)}
+                  placeholder="留空不限"
+                  step="0.00000001"
+                  type="number"
+                />
+              </label>
+              <label className="field">
+                <span>并发限制</span>
+                <input
+                  className="input"
+                  value={concurrencyLimit}
+                  min={0}
+                  max={10000}
+                  onChange={(event) =>
+                    setConcurrencyLimit(Number(event.target.value))
+                  }
+                  type="number"
+                />
+              </label>
+              <label className="field">
+                <span>过期时间</span>
+                <input
+                  className="input"
+                  value={expiresAt}
+                  onChange={(event) => setExpiresAt(event.target.value)}
+                  type="datetime-local"
+                />
+              </label>
+              <label className="field">
+                <span>标签</span>
+                <input
+                  className="input"
+                  value={tags}
+                  onChange={(event) => setTags(event.target.value)}
+                  placeholder="个人, 测试"
+                />
+              </label>
+              <label className="field">
+                <span>IP 白名单</span>
+                <textarea
+                  className="input textarea compact-textarea"
+                  value={ipWhitelist}
+                  onChange={(event) => setIpWhitelist(event.target.value)}
+                  placeholder="每行一个 IP 或 IPv4 CIDR，留空不限制"
+                />
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="button secondary"
+                onClick={() => {
+                  setCreateOpen(false);
+                  resetCreateForm();
+                }}
+                type="button"
+              >
+                取消
+              </button>
+              <button className="button" type="submit">
+                <Plus size={17} />
+                创建
+              </button>
+            </div>
+          </form>
+        </ModalShell>
       ) : null}
       {editingKey ? (
         <ModalShell

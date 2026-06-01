@@ -140,18 +140,30 @@ export function ModalShell({
   onClose,
   children,
   wide = false,
+  className,
 }: {
   title: string;
   description?: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  className?: string;
 }) {
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-backdrop" />
-        <Dialog.Content className={wide ? "form-modal modal-wide" : "form-modal"}>
+        <Dialog.Content
+          className={
+            className
+              ? wide
+                ? `form-modal modal-wide ${className}`
+                : `form-modal ${className}`
+              : wide
+                ? "form-modal modal-wide"
+                : "form-modal"
+          }
+        >
           <div className="modal-header">
             <div>
               <Dialog.Title asChild>

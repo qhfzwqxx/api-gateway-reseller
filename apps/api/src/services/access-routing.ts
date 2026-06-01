@@ -5,6 +5,7 @@ export const standardAccessTierCode = "standard";
 export type AccessRoutePolicy = {
   tierId: string | null;
   tierCode: string;
+  walletRequired: boolean;
 };
 
 type RoutePrincipal = {
@@ -19,6 +20,7 @@ let cachedStandardTier:
   | {
       id: string;
       code: string;
+      walletRequired: boolean;
     }
   | undefined;
 
@@ -40,6 +42,7 @@ export async function ensureStandardAccessTier() {
     select: {
       id: true,
       code: true,
+      walletRequired: true,
     },
   });
   cachedStandardTier = tier;
@@ -69,13 +72,14 @@ export async function resolveAccessRoutePolicy(
         id: selectedTierId,
         status: "ACTIVE",
       },
-      select: { id: true, code: true },
+      select: { id: true, code: true, walletRequired: true },
     })) ??
     standardTier;
 
   return {
     tierId: tier.id,
     tierCode: tier.code,
+    walletRequired: tier.walletRequired,
   };
 }
 
@@ -94,7 +98,7 @@ async function findMatchingIpAccessTier(clientIp?: string | null) {
       id: true,
       cidrOrIp: true,
       tierId: true,
-      tier: { select: { id: true, code: true } },
+      tier: { select: { id: true, code: true, walletRequired: true } },
     },
   });
 

@@ -64,6 +64,23 @@ export function isUpstreamQuotaExhaustedError(value: unknown) {
   );
 }
 
+export function isUpstreamBalanceInsufficientError(value: unknown) {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("insufficient_user_quota") ||
+    normalized.includes("insufficient balance") ||
+    normalized.includes("insufficient credits") ||
+    normalized.includes("credit balance") ||
+    normalized.includes("quota exceeded") ||
+    normalized.includes("billing hard limit") ||
+    normalized.includes("payment required") ||
+    normalized.includes("预扣费额度失败") ||
+    normalized.includes("余额不足") ||
+    normalized.includes("额度不足")
+  );
+}
+
 export function isRetryableProxyError(error: unknown, endpoint?: string) {
   if (endpoint === "/v1/responses/compact" && isMissingUsageError(error)) {
     return true;

@@ -80,7 +80,7 @@ export function ChannelManagerDrawer({
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
-      <aside className="flex h-full w-full max-w-3xl flex-col bg-white shadow-xl">
+      <aside className="flex h-full w-full max-w-[min(1120px,calc(100vw-24px))] flex-col bg-white shadow-xl">
         <div className="flex h-16 items-center justify-between border-b border-slate-200 px-6">
           <div>
             <h2 className="text-lg font-semibold text-slate-950">渠道管理</h2>
@@ -90,7 +90,7 @@ export function ChannelManagerDrawer({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="min-w-0 flex-1 overflow-y-auto p-6">
           {notice ? <div className="mb-4 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">{notice}</div> : null}
           <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
             <h3 className="text-sm font-semibold text-slate-950">新增渠道</h3>
@@ -164,56 +164,58 @@ function ChannelSection({
       <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
         <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
       </div>
-      <table className="min-w-[860px] w-full text-left">
-        <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
-          <tr><th className="px-4 py-3">上游</th><th className="px-4 py-3">Priority</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">健康</th><th className="px-4 py-3">下次检测</th><th className="px-4 py-3 text-right">操作</th></tr>
-        </thead>
-        <tbody className="divide-y divide-slate-200">
-          {channels.length === 0 ? (
-            <tr><td className="px-4 py-6 text-sm text-slate-500" colSpan={6}>暂无渠道</td></tr>
-          ) : channels.map((channel) => {
-            const checking = checkingChannelId === channel.id || Boolean(channel.isChecking);
-            return (
-              <tr key={channel.id}>
-                <td className="px-4 py-3"><div className="font-semibold text-slate-950">{channel.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{channel.effectiveStatusLabel ?? channelStatusLabel(channel.effectiveStatus ?? "-")}</div></td>
-                <td className="px-4 py-3 text-sm text-slate-600">{channel.priority}</td>
-                <td className="px-4 py-3">
-                  <div className="grid gap-2">
-                    <ChannelStatusBadge status={channel.status} checking={checking} />
-                    <select value={channel.status} onChange={(event) => updateStatus(channel.id, event.target.value as PoolChannelStatus)} className={inputClass}>
-                      {channelStatuses.map((item) => <option value={item} key={item}>{channelStatusLabel(item)}</option>)}
-                    </select>
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-sm text-slate-600">
-                  <div>{checking ? "检测中" : channel.lastCheckStatus ?? "未检测"}{channel.lastLatencyMs ? ` · ${channel.lastLatencyMs}ms` : ""}</div>
-                  <div className="mt-1 text-xs text-slate-400">上次：{channel.lastCheckedAt ? formatDateTime(channel.lastCheckedAt) : "尚未检测"}</div>
-                </td>
-                <td className="px-4 py-3 text-sm font-medium tabular-nums text-slate-700">
-                  <div>{checking ? "检测中" : nextCheckCountdown(channel, healthCheck, nowMs, autoHealthCheckEnabled)}</div>
-                  <div className="mt-1 text-xs text-slate-400">惩罚：{penaltyCountdown(channel, healthCheck, nowMs)}</div>
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <div className="flex flex-wrap justify-end gap-2">
-                    {canManualCheckChannel(channel) ? <button type="button" onClick={() => checkChannel(channel.id)} className={secondaryButton}><RefreshCw className="h-4 w-4" />检测</button> : null}
-                    {forceAvailableButtonEnabled && channel.status !== "FORCED_ACTIVE" ? (
-                      <button
-                        type="button"
-                        title="管理员手动强制可调用；仍参与健康检测和速度排名，检测失败不会进入惩罚或不可用。"
-                        onClick={() => updateStatus(channel.id, "FORCED_ACTIVE")}
-                        className={forceButton}
-                      >
-                        <ShieldCheck className="h-4 w-4" />强制可用
-                      </button>
-                    ) : null}
-                    <button type="button" onClick={() => deleteChannel(channel.id)} className={dangerButton}><Trash2 className="h-4 w-4" />删除</button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="min-w-[980px] w-full text-left">
+          <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+            <tr><th className="w-[270px] px-4 py-3">上游</th><th className="w-[90px] px-4 py-3">Priority</th><th className="w-[150px] px-4 py-3">Status</th><th className="w-[180px] px-4 py-3">健康</th><th className="w-[150px] px-4 py-3">下次检测</th><th className="w-[240px] px-4 py-3 text-right">操作</th></tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {channels.length === 0 ? (
+              <tr><td className="px-4 py-6 text-sm text-slate-500" colSpan={6}>暂无渠道</td></tr>
+            ) : channels.map((channel) => {
+              const checking = checkingChannelId === channel.id || Boolean(channel.isChecking);
+              return (
+                <tr key={channel.id}>
+                  <td className="px-4 py-3"><div className="break-words font-semibold text-slate-950">{channel.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{channel.effectiveStatusLabel ?? channelStatusLabel(channel.effectiveStatus ?? "-")}</div></td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{channel.priority}</td>
+                  <td className="px-4 py-3">
+                    <div className="grid gap-2">
+                      <ChannelStatusBadge status={channel.status} checking={checking} />
+                      <select value={channel.status} onChange={(event) => updateStatus(channel.id, event.target.value as PoolChannelStatus)} className={inputClass}>
+                        {channelStatuses.map((item) => <option value={item} key={item}>{channelStatusLabel(item)}</option>)}
+                      </select>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-sm text-slate-600">
+                    <div>{checking ? "检测中" : channel.lastCheckStatus ?? "未检测"}{channel.lastLatencyMs ? ` · ${channel.lastLatencyMs}ms` : ""}</div>
+                    <div className="mt-1 text-xs text-slate-400">上次：{channel.lastCheckedAt ? formatDateTime(channel.lastCheckedAt) : "尚未检测"}</div>
+                  </td>
+                  <td className="px-4 py-3 text-sm font-medium tabular-nums text-slate-700">
+                    <div>{checking ? "检测中" : nextCheckCountdown(channel, healthCheck, nowMs, autoHealthCheckEnabled)}</div>
+                    <div className="mt-1 text-xs text-slate-400">惩罚：{penaltyCountdown(channel, healthCheck, nowMs)}</div>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="flex flex-nowrap justify-end gap-2">
+                      {canManualCheckChannel(channel) ? <button type="button" onClick={() => checkChannel(channel.id)} className={secondaryButton}><RefreshCw className="h-4 w-4" />检测</button> : null}
+                      {forceAvailableButtonEnabled && channel.status !== "FORCED_ACTIVE" ? (
+                        <button
+                          type="button"
+                          title="管理员手动强制可调用；仍参与健康检测和速度排名，检测失败不会进入惩罚或不可用。"
+                          onClick={() => updateStatus(channel.id, "FORCED_ACTIVE")}
+                          className={forceButton}
+                        >
+                          <ShieldCheck className="h-4 w-4" />强制
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => deleteChannel(channel.id)} className={dangerButton}><Trash2 className="h-4 w-4" />删除</button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -291,6 +293,6 @@ function formatDateTime(value: string) {
 function errorToText(error: unknown) { return error instanceof Error ? error.message : "操作失败，请稍后重试。"; }
 const inputClass = "h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 const primaryButton = "inline-flex h-10 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60";
-const secondaryButton = "inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50";
-const forceButton = "inline-flex h-9 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100";
-const dangerButton = "inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 text-sm font-medium text-red-700 transition-colors hover:bg-red-100";
+const secondaryButton = "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50";
+const forceButton = "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100";
+const dangerButton = "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100";

@@ -7,6 +7,7 @@ import {
 import { readPendingAutoTerminateSettings } from "./pending-auto-terminate-settings.js";
 import { redis } from "../lib/redis.js";
 import { recordAutoTerminatedIp } from "./temporary-ip-notice-ban.js";
+import { markRequestFailed } from "./billing.js";
 
 type PendingRequestCleanupLogger = {
   error: (value: unknown, message?: string) => void;
@@ -56,22 +57,17 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
       2147483647,
       Math.max(0, Math.round(Date.now() - pendingRequest.createdAt.getTime())),
     );
-    const updateResult = await prisma.apiRequest.updateMany({
-      where: {
-        id: pendingRequest.id,
-        status: "PENDING",
-      },
-      data: {
-        status: "FAILED",
-        httpStatus: manualTerminateStatusCode,
-        errorMessage: settings.message,
-        latencyMs,
-        responseUsage: createManualTerminateUsage(abortResult.aborted),
-      },
-    });
+    const changed = await markRequestFailed(
+      { id: pendingRequest.id },
+      settings.message,
+      manualTerminateStatusCode,
+      latencyMs,
+      createManualTerminateUsage(abortResult.aborted),
+      "AUTO_TERMINATED",
+    );
 
-    if (updateResult.count > 0) {
-      count += updateResult.count;
+    if (changed) {
+      count += 1;
       if (abortResult.aborted) {
         abortedActiveCount += 1;
       }

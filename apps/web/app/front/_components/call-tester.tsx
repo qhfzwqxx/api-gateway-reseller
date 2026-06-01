@@ -170,9 +170,14 @@ export function CallTester({
   }
 
   return (
-    <div className="grid">
-      <section className="card">
-        <h2 className="section-title">调用测试</h2>
+    <div className="user-test-workbench">
+      <section className="card user-test-form-card">
+        <div className="section-head">
+          <div>
+            <h2 className="section-title">调用测试</h2>
+            <p className="section-subtitle">选择接口、模型和响应模式后发送一次真实请求。</p>
+          </div>
+        </div>
         <form className="form" onSubmit={runTest}>
           <div className="button-row">
             <button
@@ -265,7 +270,7 @@ export function CallTester({
       </section>
 
       {result ? (
-        <section className="card">
+        <section className="card user-test-result-card">
           <h2 className="section-title">测试结果</h2>
           <div className="grid cols-3">
             <Metric label="状态" value={result.ok ? "成功" : "失败"} />
@@ -291,7 +296,12 @@ export function CallTester({
             <pre className="code-block">{result.body}</pre>
           </div>
         </section>
-      ) : null}
+      ) : (
+        <section className="card user-test-result-card user-test-empty">
+          <h2 className="section-title">测试结果</h2>
+          <p className="section-subtitle">发送测试请求后，响应内容、Usage 和原始返回会显示在这里。</p>
+        </section>
+      )}
     </div>
   );
 }

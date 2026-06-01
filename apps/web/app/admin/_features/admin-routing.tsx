@@ -20,6 +20,8 @@ type AccessTierRef = { id: string; code: string; name: string };
 type AccessTier = AccessTierRef & {
   status: "ACTIVE" | "DISABLED" | string;
   sortOrder: number;
+  billingMultiplier?: string;
+  walletRequired?: boolean;
   description?: string | null;
   _count?: { users: number; apiKeys: number; modelPools: number };
 };
@@ -63,6 +65,12 @@ function errorToText(error: unknown) {
   return "操作失败，请稍后再试。";
 }
 
+function formatMultiplier(value: string | number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "1";
+  return numeric.toLocaleString("en-US", { maximumFractionDigits: 8 });
+}
+
 export function AdminRouting({
   users,
   onError,
@@ -79,6 +87,8 @@ export function AdminRouting({
     code: "",
     name: "",
     sortOrder: "100",
+    billingMultiplier: "1",
+    walletRequired: true,
     description: "",
   });
   const [simulationDraft, setSimulationDraft] = useState({
@@ -144,6 +154,8 @@ export function AdminRouting({
       </>
     ),
     status: <StatusPill status={tier.status} />,
+    billingMultiplier: `× ${formatMultiplier(tier.billingMultiplier ?? "1")}`,
+    walletRequired: tier.walletRequired === false ? "不要求余额" : "需要余额",
     references: (
       <span className="muted">
         用户 {tier._count?.users ?? 0} · Key {tier._count?.apiKeys ?? 0} · 池{" "}
@@ -208,11 +220,20 @@ export function AdminRouting({
           code: tierDraft.code,
           name: tierDraft.name,
           sortOrder: Number(tierDraft.sortOrder) || 100,
+          billingMultiplier: tierDraft.billingMultiplier || "1",
+          walletRequired: tierDraft.walletRequired,
           description: tierDraft.description || null,
           status: "ACTIVE",
         }),
       });
-      setTierDraft({ code: "", name: "", sortOrder: "100", description: "" });
+      setTierDraft({
+        code: "",
+        name: "",
+        sortOrder: "100",
+        billingMultiplier: "1",
+        walletRequired: true,
+        description: "",
+      });
       await tiersQuery.refetch();
     } catch (createError) {
       onError(errorToText(createError));
@@ -479,6 +500,37 @@ export function AdminRouting({
                   value={tierDraft.description}
                 />
               </label>
+              <label>
+                扣费倍率
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  onChange={(event) =>
+                    setTierDraft((current) => ({
+                      ...current,
+                      billingMultiplier: event.target.value,
+                    }))
+                  }
+                  placeholder="1"
+                  value={tierDraft.billingMultiplier}
+                />
+              </label>
+              <label>
+                钱包门槛
+                <span className="inline-field">
+                  <input
+                    checked={tierDraft.walletRequired}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setTierDraft((current) => ({
+                        ...current,
+                        walletRequired: event.target.checked,
+                      }))
+                    }
+                  />
+                  要求余额检查
+                </span>
+              </label>
               <div className="form-actions">
                 <button className="button" type="submit">
                   <Plus size={17} />
@@ -490,6 +542,8 @@ export function AdminRouting({
               columns={[
                 { accessorKey: "tier", header: "等级" },
                 { accessorKey: "status", header: "状态" },
+                { accessorKey: "billingMultiplier", header: "扣费倍率" },
+                { accessorKey: "walletRequired", header: "钱包门槛" },
                 { accessorKey: "references", header: "引用" },
                 { accessorKey: "actions", header: "操作" },
               ]}

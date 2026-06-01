@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Edit3, KeyRound, Plus, Trash2, X } from "lucide-react";
+import { Edit3, Eye, EyeOff, KeyRound, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -53,13 +53,20 @@ type KeyEditorState = {
   key: UpstreamProviderKey | null;
 } | null;
 
+type BatchKeyState = {
+  provider: UpstreamProvider;
+} | null;
+
 export default function AdminUpstreamsPage() {
   const queryClient = useQueryClient();
   const [editingProvider, setEditingProvider] = useState<UpstreamProvider | null | undefined>(undefined);
   const [keyManagerProviderId, setKeyManagerProviderId] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<KeyEditorState>(null);
+  const [batchKeyState, setBatchKeyState] = useState<BatchKeyState>(null);
   const [deletingProvider, setDeletingProvider] = useState<UpstreamProvider | null>(null);
   const [deletingKey, setDeletingKey] = useState<UpstreamProviderKey | null>(null);
+  const [hiddenProviderIds, setHiddenProviderIds] = useState<string[]>([]);
+  const [hiddenProvidersOpen, setHiddenProvidersOpen] = useState(false);
   const [notice, setNotice] = useState("");
 
   const providersQuery = useQuery({
@@ -148,8 +155,66 @@ export default function AdminUpstreamsPage() {
     onError: (error) => setNotice(errorToText(error)),
   });
 
+  const batchKeyMutation = useMutation({
+    mutationFn: async ({ keys, priority }: { keys: Array<{ name: string; key: string }>; priority: number }) => {
+      if (!batchKeyState) {
+        throw new Error("请选择上游 Provider");
+      }
+
+      for (const item of keys) {
+        await createUpstreamProviderKey(batchKeyState.provider.id, {
+          name: item.name,
+          key: item.key,
+          status: "ACTIVE",
+          priority,
+          dailyLimitUsd: null,
+          monthlyLimitUsd: null,
+          providerRateLimit: null,
+        });
+      }
+    },
+    onSuccess: (_data, variables) => {
+      setBatchKeyState(null);
+      setNotice(`已批量添加 ${variables.keys.length} 个上游 Key`);
+      refreshSupplyChain();
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+
   const providers = providersQuery.data ?? [];
+  const visibleProviders = providers.filter((provider) => !hiddenProviderIds.includes(provider.id));
+  const hiddenProviders = providers.filter((provider) => hiddenProviderIds.includes(provider.id));
   const keyManagerProvider = providers.find((provider) => provider.id === keyManagerProviderId) ?? null;
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("admin:hidden-upstream-providers");
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setHiddenProviderIds(parsed.filter((item): item is string => typeof item === "string"));
+      }
+    } catch {
+      // Local view preference only.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("admin:hidden-upstream-providers", JSON.stringify(hiddenProviderIds));
+    } catch {
+      // Local view preference only.
+    }
+  }, [hiddenProviderIds]);
+
+  const hideProvider = (provider: UpstreamProvider) => {
+    setHiddenProviderIds((current) => current.includes(provider.id) ? current : [...current, provider.id]);
+  };
+
+  const showProvider = (provider: UpstreamProvider) => {
+    setHiddenProviderIds((current) => current.filter((providerId) => providerId !== provider.id));
+    setHiddenProvidersOpen(false);
+  };
 
   return (
     <div className="space-y-5">
@@ -160,14 +225,24 @@ export default function AdminUpstreamsPage() {
             <h2 className="mt-1 text-2xl font-semibold text-slate-950">上游管理</h2>
             <p className="mt-2 text-sm text-slate-500">管理上游 Provider、密钥、优先级与请求超时策略。</p>
           </div>
-          <button
-            type="button"
-            onClick={() => setEditingProvider(null)}
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            新建 Provider
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setHiddenProvidersOpen(true)}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              <Eye className="h-4 w-4" aria-hidden="true" />
+              隐藏区{hiddenProviders.length > 0 ? ` (${hiddenProviders.length})` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditingProvider(null)}
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+            >
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              新建 Provider
+            </button>
+          </div>
         </div>
       </section>
 
@@ -193,7 +268,7 @@ export default function AdminUpstreamsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {providers.map((provider) => (
+                {visibleProviders.map((provider) => (
                   <tr key={provider.id} className="hover:bg-slate-50/70">
                     <td className="px-5 py-4">
                       <div className="font-semibold text-slate-950">{provider.name}</div>
@@ -209,6 +284,9 @@ export default function AdminUpstreamsPage() {
                     <td className="px-5 py-4"><Badge active={provider.status === "ACTIVE"}>{provider.status}</Badge></td>
                     <td className="px-5 py-4 text-right">
                       <div className="flex justify-end gap-2">
+                        <button type="button" onClick={() => hideProvider(provider)} className={secondaryButton}>
+                          <EyeOff className="h-4 w-4" /> 隐藏
+                        </button>
                         <button type="button" onClick={() => setKeyManagerProviderId(provider.id)} className={secondaryButton}>
                           <KeyRound className="h-4 w-4" /> Key 管理
                         </button>
@@ -222,11 +300,81 @@ export default function AdminUpstreamsPage() {
                     </td>
                   </tr>
                 ))}
+                {visibleProviders.length === 0 ? (
+                  <tr>
+                    <td className="px-5 py-8 text-center text-sm text-slate-500" colSpan={7}>
+                      暂无可见上游，已隐藏的上游可在隐藏区恢复。
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         )}
       </section>
+
+      {hiddenProvidersOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 p-4">
+          <section className="flex max-h-[85vh] w-full max-w-5xl flex-col rounded-lg bg-white shadow-xl">
+            <div className="flex shrink-0 items-start justify-between border-b border-slate-200 px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">隐藏区</h2>
+                <p className="mt-1 text-sm text-slate-500">只影响当前浏览器里的显示整理，不会修改上游状态、Key、价格或路由。</p>
+              </div>
+              <button type="button" onClick={() => setHiddenProvidersOpen(false)} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-[980px] w-full text-left">
+                  <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+                    <tr>
+                      <th className="px-5 py-3">名称 / Base URL</th>
+                      <th className="px-5 py-3">密钥</th>
+                      <th className="px-5 py-3">优先级</th>
+                      <th className="px-5 py-3">超时</th>
+                      <th className="px-5 py-3">Compact</th>
+                      <th className="px-5 py-3">状态</th>
+                      <th className="px-5 py-3 text-right">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {hiddenProviders.map((provider) => (
+                      <tr key={provider.id} className="hover:bg-slate-50/70">
+                        <td className="px-5 py-4">
+                          <div className="font-semibold text-slate-950">{provider.name}</div>
+                          <div className="mt-1 text-xs text-slate-500">{provider.baseUrl}</div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="font-mono text-xs text-slate-600">{provider.apiKey}</div>
+                          <div className="mt-1 text-xs text-slate-400">{provider.keys?.filter((key) => key.status === "ACTIVE").length ?? 0}/{provider.keys?.length ?? 0} 个 ACTIVE Key</div>
+                        </td>
+                        <td className="px-5 py-4 text-sm tabular-nums text-slate-700">{provider.priority}</td>
+                        <td className="px-5 py-4 text-sm tabular-nums text-slate-700">{provider.timeoutMs} ms</td>
+                        <td className="px-5 py-4 text-sm text-slate-700">{provider.compactItemType}</td>
+                        <td className="px-5 py-4"><Badge active={provider.status === "ACTIVE"}>{provider.status}</Badge></td>
+                        <td className="px-5 py-4 text-right">
+                          <button type="button" onClick={() => showProvider(provider)} className={secondaryButton}>
+                            <Eye className="h-4 w-4" /> 取消隐藏
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {hiddenProviders.length === 0 ? (
+                      <tr>
+                        <td className="px-5 py-8 text-center text-sm text-slate-500" colSpan={7}>
+                          隐藏区暂无上游
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <ProviderModal
         open={editingProvider !== undefined}
@@ -239,6 +387,9 @@ export default function AdminUpstreamsPage() {
       <ProviderKeysDrawer
         provider={keyManagerProvider}
         onClose={() => setKeyManagerProviderId(null)}
+        onBatchCreate={() => {
+          if (keyManagerProvider) setBatchKeyState({ provider: keyManagerProvider });
+        }}
         onCreate={() => {
           if (keyManagerProvider) setEditingKey({ provider: keyManagerProvider, key: null });
         }}
@@ -255,6 +406,16 @@ export default function AdminUpstreamsPage() {
         onSubmit={(values) => {
           if (!editingKey) return Promise.resolve();
           return saveKeyMutation.mutateAsync({ ...editingKey, values });
+        }}
+      />
+
+      <BatchProviderKeyModal
+        state={batchKeyState}
+        loading={batchKeyMutation.isPending}
+        onClose={() => setBatchKeyState(null)}
+        onSubmit={(values) => {
+          if (!batchKeyState) return Promise.resolve();
+          return batchKeyMutation.mutateAsync(values);
         }}
       />
 
@@ -289,12 +450,14 @@ export default function AdminUpstreamsPage() {
 function ProviderKeysDrawer({
   provider,
   onClose,
+  onBatchCreate,
   onCreate,
   onEdit,
   onDelete,
 }: {
   provider: UpstreamProvider | null;
   onClose: () => void;
+  onBatchCreate: () => void;
   onCreate: () => void;
   onEdit: (key: UpstreamProviderKey) => void;
   onDelete: (key: UpstreamProviderKey) => void;
@@ -314,7 +477,10 @@ function ProviderKeysDrawer({
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-6">
-          <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex justify-end gap-2">
+            <button type="button" onClick={onBatchCreate} className={secondaryButton}>
+              <Plus className="h-4 w-4" /> 批量添加
+            </button>
             <button type="button" onClick={onCreate} className={primaryButton}>
               <Plus className="h-4 w-4" /> 新增 Key
             </button>
@@ -432,6 +598,93 @@ function ProviderKeyModal({
   );
 }
 
+function BatchProviderKeyModal({
+  state,
+  loading,
+  onClose,
+  onSubmit,
+}: {
+  state: BatchKeyState;
+  loading: boolean;
+  onClose: () => void;
+  onSubmit: (values: { keys: Array<{ name: string; key: string }>; priority: number }) => Promise<unknown>;
+}) {
+  const [content, setContent] = useState("");
+  const [priority, setPriority] = useState(100);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (state) {
+      setContent("");
+      setPriority(100);
+      setError("");
+    }
+  }, [state]);
+
+  if (!state) return null;
+
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+
+    try {
+      const keys = uniquifyBatchProviderKeyNames(
+        parseBatchProviderKeys(content),
+        state.provider.keys?.map((key) => key.name) ?? [],
+      );
+      if (keys.length === 0) {
+        throw new Error("请至少输入一行 Key。");
+      }
+      await onSubmit({ keys, priority });
+    } catch (submitError) {
+      setError(errorToText(submitError));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
+      <aside className="flex h-full w-full max-w-2xl flex-col bg-white shadow-xl">
+        <div className="flex h-16 items-center justify-between border-b border-slate-200 px-6">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">批量添加上游 Key</h2>
+            <p className="text-sm text-slate-500">{state.provider.name} · 每行一个名称和密钥</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={loading} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <form className="flex-1 overflow-y-auto p-6" onSubmit={submit}>
+          <div className="grid gap-5">
+            <Field label="批量 Key" error={error}>
+              <textarea
+                className="min-h-56 w-full rounded-md border border-slate-200 bg-white px-3 py-3 font-mono text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+                placeholder={"名称一    sk-********************************\n名称二    sk-********************************\n名称可包含空格    sk-********************************"}
+              />
+              <p className="text-xs leading-5 text-slate-500">格式：名称 空格 上游 API Key。名称可以包含空格，系统会从 sk- 开始识别密钥，空行会自动忽略。</p>
+            </Field>
+            <Field label="优先级">
+              <input
+                type="number"
+                min={1}
+                max={10000}
+                className={inputClass}
+                value={priority}
+                onChange={(event) => setPriority(Number(event.target.value))}
+              />
+            </Field>
+          </div>
+          <div className="mt-8 flex justify-end gap-3 border-t border-slate-200 pt-5">
+            <button type="button" onClick={onClose} disabled={loading} className={secondaryButton}>取消</button>
+            <button type="submit" disabled={loading} className={primaryButton}>{loading ? "添加中" : "批量添加"}</button>
+          </div>
+        </form>
+      </aside>
+    </div>
+  );
+}
+
 function ProviderModal({ open, provider, loading, onClose, onSubmit }: { open: boolean; provider: UpstreamProvider | null; loading: boolean; onClose: () => void; onSubmit: (values: ProviderValues) => Promise<unknown> }) {
   const isEdit = Boolean(provider);
   const form = useForm<ProviderInput, unknown, ProviderValues>({
@@ -471,6 +724,9 @@ function ProviderModal({ open, provider, loading, onClose, onSubmit }: { open: b
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Compact 类型" error={form.formState.errors.compactItemType?.message}>
                 <select className={inputClass} {...form.register("compactItemType")}><option value="compaction_summary">compaction_summary</option><option value="compaction">compaction</option></select>
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  用于二次 compact 替换时写回请求的 item 类型。New API 中转站一般选 compaction；subAPI 类中转站一般选 compaction_summary。这个选项不会让上游自动支持 compact，真正可用必须看 /v1/responses/compact 是否返回 encrypted_content。
+                </p>
               </Field>
               <Field label="状态" error={form.formState.errors.status?.message}>
                 <select className={inputClass} {...form.register("status")}><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select>
@@ -525,6 +781,48 @@ function Badge({ active, children }: { active: boolean; children: React.ReactNod
 
 function errorToText(error: unknown) {
   return error instanceof Error ? error.message : "操作失败，请稍后重试。";
+}
+
+function parseBatchProviderKeys(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line, index) => {
+      const trimmed = line.trim();
+      if (!trimmed) return null;
+
+      const keyMatch = trimmed.match(/\bsk-\S+/);
+      const key = keyMatch?.[0];
+      const name = keyMatch ? trimmed.slice(0, keyMatch.index).trim() : "";
+      if (!name || !key) {
+        throw new Error(`第 ${index + 1} 行格式不正确，请使用：名称 空格 sk-...`);
+      }
+
+      return { name, key };
+    })
+    .filter((item): item is { name: string; key: string } => Boolean(item));
+}
+
+function uniquifyBatchProviderKeyNames(
+  items: Array<{ name: string; key: string }>,
+  existingNames: string[],
+) {
+  const used = new Set(existingNames);
+
+  return items.map((item) => {
+    if (!used.has(item.name)) {
+      used.add(item.name);
+      return item;
+    }
+
+    let index = 2;
+    let name = `${item.name}-${index}`;
+    while (used.has(name)) {
+      index += 1;
+      name = `${item.name}-${index}`;
+    }
+    used.add(name);
+    return { ...item, name };
+  });
 }
 
 function formatDateTime(value: string) {

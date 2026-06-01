@@ -336,6 +336,7 @@ const adminCreateApiKeySchema = z.object({
   allowedModels: z.array(z.string()).default([]),
   noticeEnabled: z.boolean().default(false),
   noticeText: noticeTextSchema,
+  forceFastMode: z.boolean().default(false),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   ipWhitelist: z.array(z.string().trim().min(1).max(128)).max(100).default([]),
 });
@@ -364,6 +365,7 @@ const adminPatchApiKeySchema = z.object({
   allowedModels: z.array(z.string()).optional(),
   noticeEnabled: z.boolean().optional(),
   noticeText: noticeTextSchema,
+  forceFastMode: z.boolean().optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   disabledReason: z.string().trim().max(500).nullable().optional(),
   ipWhitelist: z.array(z.string().trim().min(1).max(128)).max(100).optional(),
@@ -534,6 +536,7 @@ const adminApiKeySelect = {
   allowedModels: true,
   noticeEnabled: true,
   noticeText: true,
+  forceFastMode: true,
   tags: true,
   disabledReason: true,
   disabledAt: true,
@@ -920,7 +923,7 @@ async function buildAdminRequestsWhere(query: AdminRequestsQuery) {
 
   if (firstTokenLatencyRange) {
     andFilters.push({
-      firstTokenLatencyMs: intRangeFilter(firstTokenLatencyRange),
+      upstreamFirstChunkLatencyMs: intRangeFilter(firstTokenLatencyRange),
     });
   }
 
@@ -954,6 +957,7 @@ async function getAdminRequestsSummary(
       _avg: {
         latencyMs: true,
         firstTokenLatencyMs: true,
+        upstreamFirstChunkLatencyMs: true,
       },
     }),
     prisma.apiRequest.groupBy({
@@ -990,7 +994,7 @@ async function getAdminRequestsSummary(
     upstreamCostUsd: upstreamCostUsd.toFixed(8),
     grossProfitUsd: chargedAmountUsd.minus(upstreamCostUsd).toFixed(8),
     avgLatencyMs: aggregate._avg.latencyMs,
-    avgFirstTokenLatencyMs: aggregate._avg.firstTokenLatencyMs,
+    avgFirstTokenLatencyMs: aggregate._avg.upstreamFirstChunkLatencyMs,
   };
 }
 
@@ -1196,6 +1200,7 @@ export async function adminRoutes(app: FastifyInstance) {
             httpStatus: true,
             latencyMs: true,
             firstTokenLatencyMs: true,
+            upstreamFirstChunkLatencyMs: true,
             upstreamProvider: true,
             updatedAt: true,
             createdAt: true,
@@ -1208,6 +1213,7 @@ export async function adminRoutes(app: FastifyInstance) {
             httpStatus: row.httpStatus,
             latencyMs: row.latencyMs,
             firstTokenLatencyMs: row.firstTokenLatencyMs,
+            upstreamFirstChunkLatencyMs: row.upstreamFirstChunkLatencyMs,
             upstreamProvider: row.upstreamProvider,
             updatedAt: row.updatedAt.toISOString(),
             createdAt: row.createdAt.toISOString(),
@@ -2455,6 +2461,7 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedModels: body.allowedModels,
         noticeEnabled: body.noticeEnabled,
         noticeText: body.noticeText ?? null,
+        forceFastMode: body.forceFastMode,
         tags: normalizeTags(body.tags),
         ipWhitelist: normalizeIpPatterns(body.ipWhitelist),
       },
@@ -2660,6 +2667,9 @@ export async function adminRoutes(app: FastifyInstance) {
         ...(body.noticeText !== undefined
           ? { noticeText: body.noticeText }
           : {}),
+        ...(body.forceFastMode !== undefined
+          ? { forceFastMode: body.forceFastMode }
+          : {}),
         ...(body.tags !== undefined ? { tags: normalizeTags(body.tags) } : {}),
         ...(body.ipWhitelist !== undefined
           ? { ipWhitelist: normalizeIpPatterns(body.ipWhitelist) }
@@ -2832,6 +2842,7 @@ export async function adminRoutes(app: FastifyInstance) {
           upstreamCostUsd: true,
           latencyMs: true,
           firstTokenLatencyMs: true,
+          upstreamFirstChunkLatencyMs: true,
           errorMessage: true,
           responseUsage: true,
           createdAt: true,
@@ -2910,6 +2921,7 @@ export async function adminRoutes(app: FastifyInstance) {
         upstreamCostUsd: true,
         latencyMs: true,
         firstTokenLatencyMs: true,
+        upstreamFirstChunkLatencyMs: true,
         errorMessage: true,
         requestBody: true,
         responseUsage: true,
@@ -3123,6 +3135,7 @@ export async function adminRoutes(app: FastifyInstance) {
         upstreamCostUsd: true,
         latencyMs: true,
         firstTokenLatencyMs: true,
+        upstreamFirstChunkLatencyMs: true,
         errorMessage: true,
         responseUsage: true,
         createdAt: true,

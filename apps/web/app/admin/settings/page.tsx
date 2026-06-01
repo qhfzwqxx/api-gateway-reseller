@@ -65,6 +65,25 @@ export default function AdminSettingsPage() {
   const testMutation = useMutation({ mutationFn: testAuthEmail, onSuccess: () => setNotice("测试邮件已发送"), onError: (error) => setNotice(errorToText(error)) });
   const reasoningMutation = useMutation({ mutationFn: updateReasoningEffortTransformSettings, onSuccess: () => { setNotice("推理强度转换规则已保存"); void queryClient.invalidateQueries({ queryKey: ["admin", "reasoning-effort-transform-settings"] }); }, onError: (error) => setNotice(errorToText(error)) });
 
+  function applyTencentExmailPreset() {
+    const currentUser = authForm.getValues("smtpUser")?.trim() ?? "";
+    const currentFrom = authForm.getValues("smtpFrom")?.trim() ?? "";
+    authForm.setValue("smtpHost", "smtp.exmail.qq.com", { shouldDirty: true });
+    authForm.setValue("smtpPort", 465, { shouldDirty: true });
+    authForm.setValue("smtpSecure", true, { shouldDirty: true });
+    if (!currentFrom && currentUser) {
+      authForm.setValue("smtpFrom", currentUser, { shouldDirty: true });
+    }
+    if (!currentUser && currentFrom) {
+      authForm.setValue("smtpUser", currentFrom, { shouldDirty: true });
+    }
+    setNotice("已切换为腾讯企业邮箱 SMTP：smtp.exmail.qq.com / SSL 465");
+  }
+
+  function applyCustomSmtpPreset() {
+    setNotice("已切换为自定义 SMTP，可手动填写 Host、端口与 SSL。");
+  }
+
   return (
     <div className="space-y-5">
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -80,6 +99,20 @@ export default function AdminSettingsPage() {
           <TextInput label="新用户赠送余额" register={authForm.register("newUserBonusUsd")} />
           <NumberInput label="验证码 TTL 秒" register={authForm.register("emailCodeTtlSeconds")} />
           <NumberInput label="验证码冷却秒" register={authForm.register("emailCodeCooldownSeconds")} />
+          <div className="grid gap-2">
+            <span className={labelClass}>发信模式</span>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={applyTencentExmailPreset} className={secondaryButton}>
+                腾讯企业邮箱
+              </button>
+              <button type="button" onClick={applyCustomSmtpPreset} className={secondaryButton}>
+                自定义 SMTP
+              </button>
+            </div>
+            <p className="text-xs leading-5 text-slate-500">
+              腾讯企业邮箱使用 smtp.exmail.qq.com，SSL 端口 465。SMTP User 和 SMTP From 一般填写完整企业邮箱地址，Password 填邮箱客户端专用密码或授权码。
+            </p>
+          </div>
           <TextInput label="SMTP Host" register={authForm.register("smtpHost")} />
           <NumberInput label="SMTP Port" register={authForm.register("smtpPort")} />
           <Toggle label="SMTP SSL/TLS" register={authForm.register("smtpSecure")} />

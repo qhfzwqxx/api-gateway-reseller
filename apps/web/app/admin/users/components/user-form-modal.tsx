@@ -22,7 +22,7 @@ const userFormSchema = z.object({
   charityDisplayName: z.string().trim().optional(),
   charityKey: z.string().trim().optional(),
   charityIpRateLimitEnabled: z.boolean(),
-  charityIpRateLimitPerMinute: z.coerce.number().int("必须是整数").min(0, "不能小于 0"),
+  charityIpRateLimitPerMinute: z.coerce.number().int("必须是整数").min(0, "不能小于 0").max(10000, "不能超过 10000"),
 });
 
 type UserFormInput = z.input<typeof userFormSchema>;
@@ -185,8 +185,8 @@ export function UserFormModal({ open, user, loading = false, tiers = [], onClose
                     <input type="checkbox" className="h-4 w-4 rounded border-slate-300" {...register("charityIpRateLimitEnabled")} />
                     启用单 IP 限流
                   </label>
-                  <Field label="单 IP 每分钟限制" error={errors.charityIpRateLimitPerMinute?.message}>
-                    <input type="number" min={0} className={inputClass} {...register("charityIpRateLimitPerMinute")} />
+                  <Field label="单 IP 每分钟限制" error={errors.charityIpRateLimitPerMinute?.message} hint="0 表示不限制，最大 10000">
+                    <input type="number" min={0} max={10000} className={inputClass} {...register("charityIpRateLimitPerMinute")} />
                   </Field>
                 </div>
               </div>

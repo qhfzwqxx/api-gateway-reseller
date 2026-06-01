@@ -140,7 +140,9 @@ export default function AdminModelPricesPage() {
                         <Badge active={Boolean(group.setting?.enabled)}>{group.setting?.enabled ? "统一模式" : "普通模式"}</Badge>
                         {group.hasDifferentOriginalCustomerPricing ? <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">渠道原价有差异</span> : null}
                       </div>
-                      <p className="mt-1 text-xs text-slate-500">{group.prices.length} 条渠道价格 · {group.providerNames.join(" / ")}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {group.prices.length} 条渠道价格 · {group.prices.filter((price) => price.enabled).length} 条启用
+                      </p>
                     </div>
                     <button type="button" onClick={() => setUnifiedOpen(true)} className={secondaryButton}>管理统一模式</button>
                   </div>

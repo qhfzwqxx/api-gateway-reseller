@@ -190,6 +190,17 @@ export async function deleteModelPrice(id: string) {
   return response.data;
 }
 
+export async function deleteModelPriceGroup(model: string) {
+  const response = await http.delete<{
+    ok: true;
+    model: string;
+    deletedPrices: number;
+    deletedChannels: number;
+  }>(`/admin/model-prices/by-model/${encodeURIComponent(model)}`);
+
+  return response.data;
+}
+
 export async function updateUnifiedPrice(input: UnifiedPriceInput) {
   const response = await http.put<{
     updated: number;

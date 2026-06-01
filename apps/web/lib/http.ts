@@ -1,6 +1,12 @@
 import axios, { AxiosError } from "axios";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:4100";
+function resolveHttpBaseUrl() {
+  if (typeof window !== "undefined" && window.location.protocol.startsWith("http")) {
+    return "/api";
+  }
+
+  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:4100";
+}
 
 function getTokenKey() {
   if (typeof window !== "undefined" && window.location.pathname.startsWith("/admin")) {
@@ -27,7 +33,7 @@ function clearToken() {
 }
 
 export const http = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: resolveHttpBaseUrl(),
   timeout: 30_000,
 });
 

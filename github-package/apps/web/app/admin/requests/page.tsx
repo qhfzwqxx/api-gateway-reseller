@@ -204,7 +204,7 @@ export default function AdminRequestsPage() {
                       </td>
                       <td className="px-5 py-4 text-sm text-slate-600">
                         <div>总时间：{seconds(item.latencyMs)}</div>
-                        <div className="mt-1">首 token：{seconds(item.firstTokenLatencyMs)}</div>
+                        <div className="mt-1">首 token：{seconds(item.upstreamFirstChunkLatencyMs)}</div>
                         <div className="mt-1">思考强度：{formatReasoningEffortCell(item.reasoningEffort, item.reasoningEffortActual)}</div>
                       </td>
                       <td className="px-5 py-4">

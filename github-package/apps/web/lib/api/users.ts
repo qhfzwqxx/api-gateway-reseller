@@ -35,6 +35,7 @@ export interface AdminUserApiKey {
   allowedModels: string[];
   noticeEnabled: boolean;
   noticeText?: string | null;
+  forceFastMode?: boolean;
   tags: string[];
   disabledReason?: string | null;
   disabledAt?: string | null;
@@ -124,6 +125,7 @@ export interface UpsertAdminApiKeyInput {
   allowedModels?: string[];
   noticeEnabled?: boolean;
   noticeText?: string | null;
+  forceFastMode?: boolean;
   tags?: string[];
   ipWhitelist?: string[];
   disabledReason?: string | null;

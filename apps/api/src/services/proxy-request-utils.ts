@@ -175,7 +175,7 @@ export function redactBodyForLog(body: ProxyBody) {
 }
 
 const logSensitiveKeyPattern =
-  /(?:api[_-]?key|authorization|token|secret|password|credential|cookie|session|encrypted_content)$/i;
+  /(?:api[_-]?key|authorization|token|secret|password|credential|cookie|session)$/i;
 const maxLoggedStringLength = 1200;
 const maxLoggedArrayItems = 12;
 const maxLoggedObjectKeys = 80;

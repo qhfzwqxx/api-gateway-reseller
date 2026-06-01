@@ -10,6 +10,7 @@ import { z } from "zod";
 import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
 import {
   createModelPrice,
+  deleteModelPriceGroup,
   deleteModelPrice,
   getModelPrices,
   getUpstreamProviders,
@@ -48,6 +49,8 @@ export default function AdminModelPricesPage() {
   const [providerFilter, setProviderFilter] = useState("");
   const [editingPrice, setEditingPrice] = useState<ModelPrice | null | undefined>(undefined);
   const [deletingPrice, setDeletingPrice] = useState<ModelPrice | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<ModelPriceGroup | null>(null);
+  const [selectedGroupModel, setSelectedGroupModel] = useState<string | null>(null);
   const [unifiedOpen, setUnifiedOpen] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -65,6 +68,9 @@ export default function AdminModelPricesPage() {
     () => buildPriceGroups(visiblePrices, unifiedSettings),
     [visiblePrices, unifiedSettings],
   );
+  const selectedGroup = selectedGroupModel
+    ? groupedPrices.find((group) => group.model === selectedGroupModel) ?? null
+    : null;
 
   const refreshPrices = () => void queryClient.invalidateQueries({ queryKey: ["admin", "model-prices"] });
 
@@ -83,6 +89,17 @@ export default function AdminModelPricesPage() {
     onSuccess: () => {
       setDeletingPrice(null);
       setNotice("模型价格已删除");
+      refreshPrices();
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+
+  const deleteGroupMutation = useMutation({
+    mutationFn: deleteModelPriceGroup,
+    onSuccess: (result) => {
+      setDeletingGroup(null);
+      setSelectedGroupModel(null);
+      setNotice(`模型价格卡片已删除：${result.deletedPrices} 条价格，${result.deletedChannels} 条模型池渠道引用`);
       refreshPrices();
     },
     onError: (error) => setNotice(errorToText(error)),
@@ -123,60 +140,54 @@ export default function AdminModelPricesPage() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         {pricesQuery.isLoading ? (
-          <div className="space-y-3 p-5">{Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-16 animate-pulse rounded-md bg-slate-100" />)}</div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{Array.from({ length: 6 }).map((_, index) => <div key={index} className="h-40 animate-pulse rounded-lg bg-slate-100" />)}</div>
         ) : pricesQuery.isError ? (
           <div className="p-5 text-sm font-medium text-red-600">模型价格加载失败。</div>
         ) : (
-          <div className="overflow-x-auto">
-            <div className="min-w-[1180px] divide-y divide-slate-200">
-              {groupedPrices.map((group) => (
-                <section key={group.model}>
-                  <div className="flex items-center justify-between bg-slate-50 px-5 py-3">
-                    <div>
-                      <div className="flex items-center gap-3">
-                        <h3 className="font-semibold text-slate-950">{group.model}</h3>
-                        <Badge active={Boolean(group.setting?.enabled)}>{group.setting?.enabled ? "统一模式" : "普通模式"}</Badge>
-                        {group.hasDifferentOriginalCustomerPricing ? <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">渠道原价有差异</span> : null}
-                      </div>
-                      <p className="mt-1 text-xs text-slate-500">{group.prices.length} 条渠道价格 · {group.providerNames.join(" / ")}</p>
-                    </div>
-                    <button type="button" onClick={() => setUnifiedOpen(true)} className={secondaryButton}>管理统一模式</button>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {groupedPrices.map((group) => (
+              <article key={group.model} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="truncate text-base font-semibold text-slate-950">{group.model}</h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {group.prices.length} 条渠道价格 · {group.prices.filter((price) => price.enabled).length} 条启用
+                    </p>
                   </div>
-                  <table className="w-full text-left">
-                    <thead className="bg-white text-xs font-semibold uppercase text-slate-500">
-                      <tr>
-                        <th className="px-5 py-3">渠道</th>
-                        <th className="px-5 py-3">上游成本</th>
-                        <th className="px-5 py-3">客户售价</th>
-                        <th className="px-5 py-3">生效客户价</th>
-                        <th className="px-5 py-3">倍率 / 最低收费</th>
-                        <th className="px-5 py-3">状态</th>
-                        <th className="px-5 py-3 text-right">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {group.prices.map((price) => (
-                        <tr key={price.id} className="hover:bg-slate-50/70">
-                          <td className="px-5 py-4"><div className="font-semibold text-slate-950">{price.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{endpointLabel(price.upstreamEndpoint)} · {price.currency} · {price.priceVersion}</div></td>
-                          <td className="px-5 py-4 text-sm tabular-nums text-slate-700"><div>Input：{money(price.upstreamInputPer1MTok)}</div><div className="mt-1">Output：{money(price.upstreamOutputPer1MTok)}</div></td>
-                          <td className="px-5 py-4 text-sm tabular-nums text-slate-700"><div>Input：{money(price.customerInputPer1MTok)}</div><div className="mt-1">Output：{money(price.customerOutputPer1MTok)}</div></td>
-                          <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-950"><div>Input：{money(effectiveCustomerInput(price, group.setting))}</div><div className="mt-1">Output：{money(effectiveCustomerOutput(price, group.setting))}</div></td>
-                          <td className="px-5 py-4 text-sm text-slate-700"><div>上游：{price.upstreamPriceMultiplier}</div><div className="mt-1">客户：{group.setting?.enabled ? group.setting.customerPriceMultiplier : price.customerPriceMultiplier}</div><div className="mt-1">最低：{money(price.minimumChargeUsd)}</div></td>
-                          <td className="px-5 py-4"><Badge active={price.enabled}>{price.enabled ? "ENABLED" : "DISABLED"}</Badge></td>
-                          <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2"><button type="button" onClick={() => setEditingPrice(price)} className={secondaryButton}><Edit3 className="h-4 w-4" /> 编辑</button><button type="button" onClick={() => setDeletingPrice(price)} className={dangerButton}><Trash2 className="h-4 w-4" /> 删除</button></div></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </section>
-              ))}
-              {groupedPrices.length === 0 ? <div className="p-8 text-center text-sm text-slate-500">暂无模型价格</div> : null}
-            </div>
+                  <Badge active={Boolean(group.setting?.enabled)}>{group.setting?.enabled ? "统一模式" : "普通模式"}</Badge>
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-2 text-sm">
+                  <ModelPriceCardMetric label="渠道" value={`${group.prices.length}`} />
+                  <ModelPriceCardMetric label="启用" value={`${group.prices.filter((price) => price.enabled).length}`} />
+                  <ModelPriceCardMetric label="币种" value={group.prices[0]?.currency ?? "USD"} />
+                </div>
+                {group.hasDifferentOriginalCustomerPricing ? (
+                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">渠道原价有差异</div>
+                ) : null}
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={() => setSelectedGroupModel(group.model)} className={secondaryButton}>
+                    查看 / 编辑渠道价格
+                  </button>
+                  <button type="button" onClick={() => setDeletingGroup(group)} className={dangerButton}>
+                    <Trash2 className="h-4 w-4" /> 删除卡片
+                  </button>
+                </div>
+              </article>
+            ))}
+            {groupedPrices.length === 0 ? <div className="col-span-full p-8 text-center text-sm text-slate-500">暂无模型价格</div> : null}
           </div>
         )}
       </section>
+
+      <ModelPriceGroupModal
+        group={selectedGroup}
+        onClose={() => setSelectedGroupModel(null)}
+        onDelete={setDeletingPrice}
+        onEdit={setEditingPrice}
+        onUnifiedMode={() => setUnifiedOpen(true)}
+      />
 
       <PriceModal
         enabledUnifiedModels={unifiedSettings
@@ -191,6 +202,83 @@ export default function AdminModelPricesPage() {
       />
       <UnifiedPriceModal open={unifiedOpen} groups={buildPriceGroups(prices, unifiedSettings)} loading={unifiedBatchMutation.isPending} onClose={() => setUnifiedOpen(false)} onSubmit={(updates) => unifiedBatchMutation.mutateAsync({ updates })} />
       <ConfirmDialog open={Boolean(deletingPrice)} title="删除模型价格" description={`删除 ${deletingPrice?.upstreamProvider ?? ""} / ${deletingPrice?.model ?? ""} 的价格配置。`} confirmText="确认删除" requireInputText="确认删除" loading={deleteMutation.isPending} onOpenChange={(open) => !open && setDeletingPrice(null)} onConfirm={async () => { if (deletingPrice) await deleteMutation.mutateAsync(deletingPrice.id); }} />
+      <ConfirmDialog open={Boolean(deletingGroup)} title="删除模型价格卡片" description={`删除 ${deletingGroup?.model ?? ""} 会删除该模型下全部 ${deletingGroup?.prices.length ?? 0} 条渠道价格，并清理关联模型池渠道引用。此操作不可撤销。`} confirmText="确认删除" requireInputText="确认删除" loading={deleteGroupMutation.isPending} onOpenChange={(open) => !open && setDeletingGroup(null)} onConfirm={async () => { if (deletingGroup) await deleteGroupMutation.mutateAsync(deletingGroup.model); }} />
+    </div>
+  );
+}
+
+function ModelPriceCardMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-slate-50 px-3 py-2">
+      <div className="text-xs font-medium text-slate-500">{label}</div>
+      <div className="mt-1 truncate text-sm font-semibold text-slate-950">{value}</div>
+    </div>
+  );
+}
+
+function ModelPriceGroupModal({
+  group,
+  onClose,
+  onEdit,
+  onDelete,
+  onUnifiedMode,
+}: {
+  group: ModelPriceGroup | null;
+  onClose: () => void;
+  onEdit: (price: ModelPrice) => void;
+  onDelete: (price: ModelPrice) => void;
+  onUnifiedMode: () => void;
+}) {
+  if (!group) return null;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 p-5">
+      <section className="flex max-h-[86vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="truncate text-lg font-semibold text-slate-950">{group.model}</h2>
+              <Badge active={Boolean(group.setting?.enabled)}>{group.setting?.enabled ? "统一模式" : "普通模式"}</Badge>
+              {group.hasDifferentOriginalCustomerPricing ? <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">渠道原价有差异</span> : null}
+            </div>
+            <p className="mt-2 text-sm text-slate-500">
+              {group.prices.length} 条渠道价格 · {group.prices.filter((price) => price.enabled).length} 条启用
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={onUnifiedMode} className={secondaryButton}>管理统一模式</button>
+            <button type="button" onClick={onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+          </div>
+        </div>
+        <div className="overflow-auto">
+          <table className="w-full min-w-[1080px] text-left">
+            <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+              <tr>
+                <th className="px-5 py-3">渠道</th>
+                <th className="px-5 py-3">上游成本</th>
+                <th className="px-5 py-3">客户售价</th>
+                <th className="px-5 py-3">生效客户价</th>
+                <th className="px-5 py-3">倍率 / 最低收费</th>
+                <th className="px-5 py-3">状态</th>
+                <th className="px-5 py-3 text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {group.prices.map((price) => (
+                <tr key={price.id} className="hover:bg-slate-50/70">
+                  <td className="px-5 py-4"><div className="font-semibold text-slate-950">{price.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{endpointLabel(price.upstreamEndpoint)} · {price.currency} · {price.priceVersion}</div></td>
+                  <td className="px-5 py-4 text-sm tabular-nums text-slate-700"><div>Input：{money(price.upstreamInputPer1MTok)}</div><div className="mt-1">Output：{money(price.upstreamOutputPer1MTok)}</div></td>
+                  <td className="px-5 py-4 text-sm tabular-nums text-slate-700"><div>Input：{money(price.customerInputPer1MTok)}</div><div className="mt-1">Output：{money(price.customerOutputPer1MTok)}</div></td>
+                  <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-950"><div>Input：{money(effectiveCustomerInput(price, group.setting))}</div><div className="mt-1">Output：{money(effectiveCustomerOutput(price, group.setting))}</div></td>
+                  <td className="px-5 py-4 text-sm text-slate-700"><div>上游：{price.upstreamPriceMultiplier}</div><div className="mt-1">客户：{group.setting?.enabled ? group.setting.customerPriceMultiplier : price.customerPriceMultiplier}</div><div className="mt-1">最低：{money(price.minimumChargeUsd)}</div></td>
+                  <td className="px-5 py-4"><Badge active={price.enabled}>{price.enabled ? "ENABLED" : "DISABLED"}</Badge></td>
+                  <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2"><button type="button" onClick={() => onEdit(price)} className={secondaryButton}><Edit3 className="h-4 w-4" /> 编辑</button><button type="button" onClick={() => onDelete(price)} className={dangerButton}><Trash2 className="h-4 w-4" /> 删除</button></div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
@@ -221,20 +309,28 @@ function PriceModal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
-      <aside className="flex h-full w-full max-w-2xl flex-col bg-white shadow-xl">
-        <div className="flex h-16 items-center justify-between border-b border-slate-200 px-6"><div><h2 className="text-lg font-semibold text-slate-950">{price ? "编辑价格" : "新增价格配置"}</h2><p className="text-sm text-slate-500">唯一键：upstreamProvider + model</p></div><button type="button" onClick={onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"><X className="h-4 w-4" /></button></div>
-        <form className="flex-1 overflow-y-auto p-6" onSubmit={form.handleSubmit((values) => onSubmit(values))}>
+      <aside className="flex h-full w-full max-w-4xl flex-col bg-slate-50 shadow-xl">
+        <div className="flex min-h-20 items-center justify-between gap-4 border-b border-slate-200 bg-white px-7 py-5">
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-slate-950">{price ? "编辑价格" : "新增价格配置"}</h2>
+            <p className="mt-1 text-sm text-slate-500">唯一键：upstreamProvider + model</p>
+          </div>
+          <button type="button" onClick={onClose} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+        </div>
+        <form className="flex-1 overflow-y-auto px-7 py-6" onSubmit={form.handleSubmit((values) => onSubmit(values))}>
           <div className="grid gap-5">
-            <div className="grid gap-4 md:grid-cols-2">
+            {unifiedModelMatch ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+                <span className="font-semibold">提示：</span>
+                {unifiedModelMatch} 已启用统一价格模式；保存渠道价格后，客户生效价会按统一价格展示。
+              </div>
+            ) : null}
+
+            <PriceFormSection title="基础信息" description="定义模型、上游渠道和接口类型。">
+              <div className="grid gap-4 lg:grid-cols-2">
               <Field
                 label="模型"
                 error={form.formState.errors.model?.message}
-                hint={
-                  unifiedModelMatch
-                    ? `提示：${unifiedModelMatch} 已在统一名称价格里面启用；保存此渠道价格后，客户生效价会按统一价格模式展示。`
-                    : undefined
-                }
-                hintTone={unifiedModelMatch ? "warning" : "default"}
               >
                 <input className={inputClass} {...form.register("model")} />
               </Field>
@@ -245,30 +341,65 @@ function PriceModal({
                   <option value="chat_completions">Chat Completions API</option>
                 </select>
               </Field>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="价格版本"><input className={inputClass} {...form.register("priceVersion")} /></Field>
+              </div>
+            </PriceFormSection>
+
+            <div className="grid gap-5 xl:grid-cols-2">
+              <PriceFormSection title="上游成本" description="用于利润和成本报表，不影响客户扣费。">
+                <div className="grid gap-4 md:grid-cols-2">
               <Field label="上游 Input / 1M" error={form.formState.errors.upstreamInputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("upstreamInputPer1MTok")} /></Field>
               <Field label="上游 Output / 1M" error={form.formState.errors.upstreamOutputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("upstreamOutputPer1MTok")} /></Field>
+              <Field label="上游缓存 Input"><input className={inputClass} inputMode="decimal" {...form.register("upstreamCachedInputPer1MTok")} /></Field>
+              <Field label="上游倍率"><input className={inputClass} inputMode="decimal" {...form.register("upstreamPriceMultiplier")} /></Field>
+                </div>
+              </PriceFormSection>
+
+              <PriceFormSection title="客户售价" description="用于客户实际扣费；统一价格开启时会被统一配置覆盖展示。">
+                <div className="grid gap-4 md:grid-cols-2">
               <Field label="客户 Input / 1M" error={form.formState.errors.customerInputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("customerInputPer1MTok")} /></Field>
               <Field label="客户 Output / 1M" error={form.formState.errors.customerOutputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("customerOutputPer1MTok")} /></Field>
-            </div>
-            <div className="grid gap-4 md:grid-cols-3">
-              <Field label="币种"><input className={inputClass} {...form.register("currency")} /></Field>
-              <Field label="最低收费"><input className={inputClass} inputMode="decimal" {...form.register("minimumChargeUsd")} /></Field>
-              <Field label="价格版本"><input className={inputClass} {...form.register("priceVersion")} /></Field>
-            </div>
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="上游缓存 Input"><input className={inputClass} inputMode="decimal" {...form.register("upstreamCachedInputPer1MTok")} /></Field>
               <Field label="客户缓存 Input"><input className={inputClass} inputMode="decimal" {...form.register("customerCachedInputPer1MTok")} /></Field>
-              <Field label="上游倍率"><input className={inputClass} inputMode="decimal" {...form.register("upstreamPriceMultiplier")} /></Field>
               <Field label="客户倍率"><input className={inputClass} inputMode="decimal" {...form.register("customerPriceMultiplier")} /></Field>
+                </div>
+              </PriceFormSection>
             </div>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" {...form.register("enabled")} />启用价格</label>
+
+            <PriceFormSection title="计费控制" description="设置币种、最低收费和是否参与路由计费。">
+              <div className="grid gap-4 md:grid-cols-3">
+                <Field label="币种"><input className={inputClass} {...form.register("currency")} /></Field>
+                <Field label="最低收费"><input className={inputClass} inputMode="decimal" {...form.register("minimumChargeUsd")} /></Field>
+                <label className="flex min-h-10 items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700">
+                  <input type="checkbox" className="h-4 w-4 rounded border-slate-300" {...form.register("enabled")} />
+                  启用价格
+                </label>
+              </div>
+            </PriceFormSection>
           </div>
-          <div className="mt-8 flex justify-end gap-3 border-t border-slate-200 pt-5"><button type="button" onClick={onClose} disabled={loading} className={secondaryButton}>取消</button><button type="submit" disabled={loading} className={primaryButton}>{loading ? "保存中" : "保存"}</button></div>
+          <div className="sticky bottom-0 -mx-7 mt-6 flex justify-end gap-3 border-t border-slate-200 bg-white px-7 py-4"><button type="button" onClick={onClose} disabled={loading} className={secondaryButton}>取消</button><button type="submit" disabled={loading} className={primaryButton}>{loading ? "保存中" : "保存"}</button></div>
         </form>
       </aside>
     </div>
+  );
+}
+
+function PriceFormSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4">
+        <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
+        <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
+      </div>
+      {children}
+    </section>
   );
 }
 

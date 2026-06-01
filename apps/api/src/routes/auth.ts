@@ -11,15 +11,23 @@ import {
   toPublicAuthSettings,
 } from "../services/auth-settings.js";
 import { hashPassword, requireUser, verifyPassword } from "../services/auth.js";
+import { syncUserSubscriptionState } from "../services/subscriptions.js";
 import { sendEmailLoginCode } from "../services/mailer.js";
 import { getClientIp } from "../services/proxy-request-utils.js";
 
 const emailCodeSchema = z.object({
-  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .transform((value) => value.toLowerCase()),
 });
 
 const emailCodeLoginSchema = emailCodeSchema.extend({
-  code: z.string().trim().regex(/^\d{6}$/),
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/),
 });
 
 const adminLoginSchema = z.object({
@@ -38,7 +46,8 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post("/auth/register", async (request, reply) => {
     return reply.status(410).send({
-      message: "用户账号只支持邮箱验证码进入，请获取邮箱验证码完成登录或自动创建账号。",
+      message:
+        "用户账号只支持邮箱验证码进入，请获取邮箱验证码完成登录或自动创建账号。",
     });
   });
 
@@ -55,16 +64,29 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const cooldownKey = emailCodeCooldownKey(body.email);
-    const cooldownSet = await app.redis.set(cooldownKey, "1", "EX", settings.emailCodeCooldownSeconds, "NX");
+    const cooldownSet = await app.redis.set(
+      cooldownKey,
+      "1",
+      "EX",
+      settings.emailCodeCooldownSeconds,
+      "NX",
+    );
     if (!cooldownSet) {
-      return reply.status(429).send({ message: "验证码发送太频繁，请稍后再试。" });
+      return reply
+        .status(429)
+        .send({ message: "验证码发送太频繁，请稍后再试。" });
     }
 
     const code = String(randomInt(100000, 1000000));
     const ttlSeconds = settings.emailCodeTtlSeconds;
     const ttlMinutes = Math.max(1, Math.ceil(ttlSeconds / 60));
 
-    await app.redis.set(emailCodeKey(body.email), hashEmailCode(body.email, code), "EX", ttlSeconds);
+    await app.redis.set(
+      emailCodeKey(body.email),
+      hashEmailCode(body.email, code),
+      "EX",
+      ttlSeconds,
+    );
     await app.redis.del(emailCodeAttemptsKey(body.email));
 
     try {
@@ -75,8 +97,13 @@ export async function authRoutes(app: FastifyInstance) {
       });
     } catch (error) {
       await app.redis.del(emailCodeKey(body.email), cooldownKey);
-      app.log.error({ error, email: body.email }, "Failed to send email login code");
-      return reply.status(502).send({ message: "验证码邮件发送失败，请检查 SMTP 设置。" });
+      app.log.error(
+        { error, email: body.email },
+        "Failed to send email login code",
+      );
+      return reply
+        .status(502)
+        .send({ message: "验证码邮件发送失败，请检查 SMTP 设置。" });
     }
 
     return {
@@ -118,7 +145,9 @@ export async function authRoutes(app: FastifyInstance) {
         ip: clientIp,
         userAgent: request.headers["user-agent"],
       });
-      return reply.status(429).send({ message: "验证码尝试次数过多，请重新获取。" });
+      return reply
+        .status(429)
+        .send({ message: "验证码尝试次数过多，请重新获取。" });
     }
 
     const storedHash = await app.redis.get(emailCodeKey(body.email));
@@ -164,7 +193,9 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.status(403).send({ message: "邮箱验证码自动注册已关闭" });
       }
 
-      const passwordHash = await hashPassword(randomBytes(32).toString("base64url"));
+      const passwordHash = await hashPassword(
+        randomBytes(32).toString("base64url"),
+      );
       const newUserBonus = new Decimal(settings.newUserBonusUsd);
 
       try {
@@ -186,7 +217,11 @@ export async function authRoutes(app: FastifyInstance) {
       }
     }
 
-    await app.redis.del(emailCodeKey(body.email), attemptsKey, emailCodeCooldownKey(body.email));
+    await app.redis.del(
+      emailCodeKey(body.email),
+      attemptsKey,
+      emailCodeCooldownKey(body.email),
+    );
     await writeLoginLog({
       method: "email_code",
       userId: user.id,
@@ -244,7 +279,9 @@ export async function authRoutes(app: FastifyInstance) {
         ip: clientIp,
         userAgent: request.headers["user-agent"],
       });
-      return reply.status(401).send({ message: "Invalid username or password" });
+      return reply
+        .status(401)
+        .send({ message: "Invalid username or password" });
     }
 
     const valid = await verifyPassword(body.password, user.passwordHash);
@@ -258,7 +295,9 @@ export async function authRoutes(app: FastifyInstance) {
         ip: clientIp,
         userAgent: request.headers["user-agent"],
       });
-      return reply.status(401).send({ message: "Invalid username or password" });
+      return reply
+        .status(401)
+        .send({ message: "Invalid username or password" });
     }
 
     await Promise.all([
@@ -282,6 +321,9 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get("/auth/me", { preHandler: requireUser }, async (request) => {
     const jwtUser = request.user as { sub: string };
+    await prisma.$transaction((tx) =>
+      syncUserSubscriptionState(tx, jwtUser.sub),
+    );
     const user = await prisma.user.findUniqueOrThrow({
       where: { id: jwtUser.sub },
       select: {
@@ -409,9 +451,10 @@ async function createPublicUser(
     newUserBonus: Decimal;
   },
 ) {
-  const bonus = input.newUserBonus.isFinite() && input.newUserBonus.gt(0)
-    ? input.newUserBonus
-    : new Decimal(0);
+  const bonus =
+    input.newUserBonus.isFinite() && input.newUserBonus.gt(0)
+      ? input.newUserBonus
+      : new Decimal(0);
   const created = await tx.user.create({
     data: {
       email: input.email,

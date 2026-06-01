@@ -1,22 +1,32 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@gateway/db";
 import { requireUser } from "../services/auth.js";
+import { resolveAccessRoutePolicy } from "../services/access-routing.js";
+import { getClientIp } from "../services/proxy-request-utils.js";
 
 export async function usageRoutes(app: FastifyInstance) {
   app.get("/models", { preHandler: requireUser }, async (request, reply) => {
     const authUser = request.user as { sub: string };
     const user = await prisma.user.findUnique({
       where: { id: authUser.sub },
-      select: { status: true, allowedModels: true },
+      select: { id: true, status: true, allowedModels: true, tierId: true },
     });
 
     if (!user || user.status !== "ACTIVE") {
       return reply.status(401).send({ message: "Unauthorized" });
     }
 
+    const accessRoutePolicy = await resolveAccessRoutePolicy({
+      userId: user.id,
+      apiKeyId: "frontend",
+      userTierId: user.tierId,
+      clientIp: getClientIp(request),
+    });
+
     const pools = await prisma.modelPool.findMany({
       where: {
         status: "ACTIVE",
+        tierId: accessRoutePolicy.tierId,
         ...(user.allowedModels.length > 0
           ? { model: { in: user.allowedModels } }
           : {}),
@@ -63,59 +73,74 @@ export async function usageRoutes(app: FastifyInstance) {
         .filter((provider) => provider.keys.length > 0)
         .map((provider) => provider.name),
     );
-    const models = pools
-      .map((pool) => {
+    const modelsByName = new Map<
+      string,
+      { model: string; status: "READY"; readyChannelCount: number }
+    >();
+
+    for (const pool of pools) {
         const readyChannelCount = pool.channels.filter(
           (channel) =>
             providerSet.has(channel.upstreamProvider) &&
             priceSet.has(`${channel.upstreamProvider}:${pool.model}`),
         ).length;
 
-        return {
+        if (readyChannelCount <= 0) {
+          continue;
+        }
+
+        const existing = modelsByName.get(pool.model);
+        if (existing) {
+          existing.readyChannelCount += readyChannelCount;
+          continue;
+        }
+
+        modelsByName.set(pool.model, {
           model: pool.model,
-          status: readyChannelCount > 0 ? "READY" : "UNAVAILABLE",
+          status: "READY",
           readyChannelCount,
-        };
-      })
-      .filter((model) => model.readyChannelCount > 0);
+        });
+    }
+
+    const models = [...modelsByName.values()];
 
     return { models };
   });
 
   app.get("/usage/summary", { preHandler: requireUser }, async (request) => {
     const user = request.user as { sub: string };
-    const since = new Date();
-    since.setDate(since.getDate() - 30);
+    const summaryWhere = {
+      userId: user.sub,
+    };
 
-    const requests = await prisma.apiRequest.findMany({
-      where: {
-        userId: user.sub,
-        createdAt: { gte: since },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 500,
-      select: publicRequestSelect,
-    });
+    const [requests, totalsAggregate] = await Promise.all([
+      prisma.apiRequest.findMany({
+        where: summaryWhere,
+        orderBy: { createdAt: "desc" },
+        take: 500,
+        select: publicRequestSelect,
+      }),
+      prisma.apiRequest.aggregate({
+        where: summaryWhere,
+        _count: { _all: true },
+        _sum: {
+          inputTokens: true,
+          cachedInputTokens: true,
+          outputTokens: true,
+          totalTokens: true,
+          chargedAmountUsd: true,
+        },
+      }),
+    ]);
 
-    const totals = requests.reduce(
-      (acc, item) => {
-        acc.requests += 1;
-        acc.inputTokens += item.inputTokens;
-        acc.cachedInputTokens += item.cachedInputTokens;
-        acc.outputTokens += item.outputTokens;
-        acc.totalTokens += item.totalTokens;
-        acc.chargedAmountUsd += Number(item.chargedAmountUsd);
-        return acc;
-      },
-      {
-        requests: 0,
-        inputTokens: 0,
-        cachedInputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        chargedAmountUsd: 0,
-      },
-    );
+    const totals = {
+      requests: totalsAggregate._count._all,
+      inputTokens: totalsAggregate._sum.inputTokens ?? 0,
+      cachedInputTokens: totalsAggregate._sum.cachedInputTokens ?? 0,
+      outputTokens: totalsAggregate._sum.outputTokens ?? 0,
+      totalTokens: totalsAggregate._sum.totalTokens ?? 0,
+      chargedAmountUsd: Number(totalsAggregate._sum.chargedAmountUsd ?? 0),
+    };
 
     return { totals, requests };
   });
@@ -145,8 +170,6 @@ const publicRequestSelect = {
     },
   },
   model: true,
-  reasoningEffort: true,
-  reasoningEffortActual: true,
   endpoint: true,
   method: true,
   status: true,
@@ -158,6 +181,7 @@ const publicRequestSelect = {
   chargedAmountUsd: true,
   latencyMs: true,
   firstTokenLatencyMs: true,
+  upstreamFirstChunkLatencyMs: true,
   errorMessage: true,
   createdAt: true,
 } as const;

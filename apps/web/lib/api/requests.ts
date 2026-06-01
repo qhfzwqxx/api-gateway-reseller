@@ -53,9 +53,12 @@ export interface ApiRequestRecord {
   outputTokens: number | null;
   totalTokens: number | null;
   chargedAmountUsd: string | null;
+  subscriptionChargedAmountUsd?: string | null;
+  walletChargedAmountUsd?: string | null;
   upstreamCostUsd: string | null;
   latencyMs: number | null;
   firstTokenLatencyMs: number | null;
+  upstreamFirstChunkLatencyMs: number | null;
   errorMessage: string | null;
   responseUsage: unknown;
   requestBody?: unknown;

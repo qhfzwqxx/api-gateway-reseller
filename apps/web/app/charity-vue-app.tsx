@@ -124,12 +124,16 @@ export default function CharityVueApp({ data }: { data: CharityDashboard | null 
           const y = 100 - (value / Math.max(1, max)) * 100;
           return `${x},${y}`;
         };
-        let statusSource: EventSource | null = null;
-        let dashboardSource: EventSource | null = null;
+        let statusTimer: number | null = null;
+        let dashboardTimer: number | null = null;
+        let statusRefreshing = false;
+        let dashboardRefreshing = false;
 
-        onMounted(async () => {
-          showAnnouncement.value = shouldShowAnnouncement(announcement.value);
-
+        async function refreshStatus() {
+          if (statusRefreshing) {
+            return;
+          }
+          statusRefreshing = true;
           try {
             const response = await fetch("/public/charity-status", {
               cache: "no-store",
@@ -137,36 +141,54 @@ export default function CharityVueApp({ data }: { data: CharityDashboard | null 
             if (response.ok) {
               const status = (await response.json()) as { available?: boolean };
               serviceAvailable.value = Boolean(status.available);
-              statusLoaded.value = true;
+            } else {
+              serviceAvailable.value = false;
             }
           } catch {
-            statusLoaded.value = true;
             serviceAvailable.value = false;
+          } finally {
+            statusLoaded.value = true;
+            statusRefreshing = false;
           }
+        }
 
-          statusSource = new EventSource("/public/charity-status/events");
-          statusSource.addEventListener("status", (event) => {
-            const status = JSON.parse((event as MessageEvent).data) as {
-              available?: boolean;
-            };
-            serviceAvailable.value = Boolean(status.available);
-            statusLoaded.value = true;
-          });
-          statusSource.addEventListener("error", () => {
-            statusLoaded.value = true;
-          });
+        async function refreshDashboard() {
+          if (dashboardRefreshing) {
+            return;
+          }
+          dashboardRefreshing = true;
+          try {
+            const response = await fetch("/public/charity-dashboard", {
+              cache: "no-store",
+            });
+            if (response.ok) {
+              dashboard.value = (await response.json()) as CharityDashboard;
+            }
+          } catch {
+            // Keep the server-rendered snapshot when the live refresh misses.
+          } finally {
+            dashboardRefreshing = false;
+          }
+        }
 
-          dashboardSource = new EventSource("/public/charity-dashboard/events");
-          dashboardSource.addEventListener("dashboard", (event) => {
-            dashboard.value = JSON.parse((event as MessageEvent).data) as CharityDashboard;
-          });
+        onMounted(async () => {
+          showAnnouncement.value = shouldShowAnnouncement(announcement.value);
+
+          await refreshStatus();
+          void refreshDashboard();
+          statusTimer = window.setInterval(refreshStatus, 3_000);
+          dashboardTimer = window.setInterval(refreshDashboard, 3_000);
         });
 
         onBeforeUnmount(() => {
-          statusSource?.close();
-          statusSource = null;
-          dashboardSource?.close();
-          dashboardSource = null;
+          if (statusTimer) {
+            window.clearInterval(statusTimer);
+          }
+          if (dashboardTimer) {
+            window.clearInterval(dashboardTimer);
+          }
+          statusTimer = null;
+          dashboardTimer = null;
         });
 
         return () =>

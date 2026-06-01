@@ -54,6 +54,13 @@ type ModelRouteOptions = {
   dryRun?: boolean;
 };
 
+export function scopeModelPoolCallerIdentity(
+  callerIdentity: string,
+  tierId?: string | null,
+) {
+  return tierId ? `${callerIdentity}:tier:${tierId}` : callerIdentity;
+}
+
 export async function getDefaultProvider() {
   const provider = await prisma.upstreamProvider.findFirst({
     where: {
@@ -99,9 +106,10 @@ export async function getProviderForModel(
     return null;
   }
 
-  const scopedCallerIdentity = options.tierId
-    ? `${callerIdentity}:tier:${options.tierId}`
-    : callerIdentity;
+  const scopedCallerIdentity = scopeModelPoolCallerIdentity(
+    callerIdentity,
+    options.tierId,
+  );
   const excludedChannelIds = new Set(options.excludeChannelIds ?? []);
   const dispatchSettings = await readDispatchSettings();
   const stickyRouteState = options.bypassSticky || !dispatchSettings.stickyEnabled

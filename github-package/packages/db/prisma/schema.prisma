@@ -154,6 +154,7 @@ model ApiKey {
   concurrencyLimit   Int          @default(0)
   noticeEnabled      Boolean      @default(false)
   noticeText         String?
+  forceFastMode      Boolean      @default(false)
   tags               String[]     @default([])
   disabledReason     String?
   disabledAt         DateTime?
@@ -230,6 +231,7 @@ model ApiRequest {
   reservedAmountUsd Decimal          @default(0) @db.Decimal(18, 8)
   latencyMs         Int?
   firstTokenLatencyMs Int?
+  upstreamFirstChunkLatencyMs Int?
   errorMessage      String?
   upstreamRequestId String?
   clientIp          String?

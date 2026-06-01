@@ -4,6 +4,7 @@ import {
   Activity,
   Banknote,
   Coins,
+  Crown,
   FileClock,
   Gauge,
   Megaphone,
@@ -29,6 +30,7 @@ const navItems: NavItem[] = [
   { title: "运营总览", href: "/admin/overview", icon: Gauge },
   { title: "用户与钱包", href: "/admin/users", icon: Users },
   { title: "兑换码", href: "/admin/redeem-codes", icon: Coins },
+  { title: "订阅管理", href: "/admin/subscriptions", icon: Crown },
   { title: "上游管理", href: "/admin/upstreams", icon: Network },
   { title: "模型价格", href: "/admin/model-prices", icon: Banknote },
   { title: "模型池", href: "/admin/model-pools", icon: Layers3 },
@@ -50,17 +52,24 @@ export function Sidebar() {
           <KeyRound className="h-4 w-4" aria-hidden="true" />
         </div>
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-slate-950">APIshare Admin</div>
-          <div className="truncate text-xs font-medium text-slate-500">Gateway Console</div>
+          <div className="truncate text-sm font-semibold text-slate-950">
+            APIshare Admin
+          </div>
+          <div className="truncate text-xs font-medium text-slate-500">
+            Gateway Console
+          </div>
         </div>
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="后台主导航">
-        <div className="mb-2 px-3 text-xs font-semibold uppercase text-slate-400">Navigation</div>
+        <div className="mb-2 px-3 text-xs font-semibold uppercase text-slate-400">
+          Navigation
+        </div>
         <div className="space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const isActive =
+              pathname === item.href || pathname.startsWith(`${item.href}/`);
 
             return (
               <Link
@@ -78,7 +87,9 @@ export function Sidebar() {
                 <Icon
                   className={[
                     "h-4 w-4 shrink-0",
-                    isActive ? "text-blue-700" : "text-slate-400 group-hover:text-slate-700",
+                    isActive
+                      ? "text-blue-700"
+                      : "text-slate-400 group-hover:text-slate-700",
                   ].join(" ")}
                   aria-hidden="true"
                 />

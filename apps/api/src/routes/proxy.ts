@@ -25,10 +25,16 @@ import {
   unregisterActiveApiRequest,
 } from "../services/active-api-requests.js";
 import { disableApiKeyIfTotalLimitReached } from "../services/api-key-limits.js";
-import { buildUpstreamUrl } from "../services/upstream.js";
 import {
-  resolveAccessRoutePolicy,
-} from "../services/access-routing.js";
+  buildUpstreamUrl,
+  scopeModelPoolCallerIdentity,
+} from "../services/upstream.js";
+import { resolveAccessRoutePolicy } from "../services/access-routing.js";
+import {
+  getActiveSubscriptionWithPlan,
+  hasAvailableSubscriptionQuota,
+  syncUserSubscriptionState,
+} from "../services/subscriptions.js";
 import { recordRoutingFeedback } from "../services/routing/feedback.js";
 import {
   getLoggedUpstreamProviderKeyId,
@@ -48,10 +54,14 @@ import {
   applyReasoningEffortTransform,
   getReasoningEffortFromBody,
 } from "../services/reasoning-effort-transform-settings.js";
-import { readCharityAnnouncementSettings } from "../services/charity-announcement-settings.js";
 import {
-  readGatewayNoticeSettings,
-} from "../services/gateway-notice-settings.js";
+  createUpstreamOutputStreamFilter,
+  filterUpstreamOutputBody,
+  readUpstreamOutputFilterSettings,
+  type UpstreamOutputFilterSettings,
+} from "../services/upstream-output-filter-settings.js";
+import { readCharityAnnouncementSettings } from "../services/charity-announcement-settings.js";
+import { readGatewayNoticeSettings } from "../services/gateway-notice-settings.js";
 import {
   canBypassGlobalCircuitBreaker,
   readGlobalCircuitBreakerSettings,
@@ -115,6 +125,7 @@ import {
   isMissingUsageError,
   isRetryableProxyError,
   isRetryableUpstreamFailure,
+  isUpstreamBalanceInsufficientError,
   missingUsageMessage,
 } from "../services/proxy-errors.js";
 import {
@@ -202,12 +213,20 @@ export async function proxyRoutes(app: FastifyInstance) {
 
       let body = (request.body ?? {}) as ProxyBody;
       const { apiKey, user } = request.apiAuth;
+      await prisma.$transaction((tx) => syncUserSubscriptionState(tx, user.id));
+      const activeSubscription = await prisma.$transaction((tx) =>
+        getActiveSubscriptionWithPlan(tx, user.id),
+      );
+      const refreshedUser = await prisma.user.findUnique({
+        where: { id: user.id },
+        select: { tierId: true },
+      });
       let model = body.model;
       const clientIp = getClientIp(request);
       const accessRoutePolicy = await resolveAccessRoutePolicy({
         userId: user.id,
         apiKeyId: apiKey.id,
-        userTierId: user.tierId,
+        userTierId: refreshedUser?.tierId ?? user.tierId,
         apiKeyTierId: apiKey.tierId,
         clientIp,
       });
@@ -228,7 +247,9 @@ export async function proxyRoutes(app: FastifyInstance) {
           apiKeyId: apiKey.id,
           clientIp,
           userAgent: request.headers["user-agent"],
-          httpStatus: shouldReturnApiKeyNotice(endpoint, request.method) ? 200 : 503,
+          httpStatus: shouldReturnApiKeyNotice(endpoint, request.method)
+            ? 200
+            : 503,
           resultType: shouldReturnApiKeyNotice(endpoint, request.method)
             ? "GATEWAY_NOTICE"
             : "GATEWAY_ERROR",
@@ -397,8 +418,13 @@ export async function proxyRoutes(app: FastifyInstance) {
         }
       }
 
-      if (billable) {
-        const walletCheck = await ensureWalletCanStart(user.id);
+      if (billable && accessRoutePolicy.walletRequired) {
+        const subscriptionCanStart =
+          activeSubscription && hasAvailableSubscriptionQuota(activeSubscription);
+        const walletCheck =
+          subscriptionCanStart
+            ? { ok: true as const, balance: new Decimal(0) }
+            : await ensureWalletCanStart(user.id);
         if (!walletCheck.ok) {
           await createGatewayRejectedRequest({
             body,
@@ -455,7 +481,9 @@ export async function proxyRoutes(app: FastifyInstance) {
           apiKeyId: apiKey.id,
           clientIp,
           userAgent: request.headers["user-agent"],
-          httpStatus: shouldReturnApiKeyNotice(endpoint, request.method) ? 200 : 429,
+          httpStatus: shouldReturnApiKeyNotice(endpoint, request.method)
+            ? 200
+            : 429,
           resultType: shouldReturnApiKeyNotice(endpoint, request.method)
             ? "GATEWAY_NOTICE"
             : "RATE_LIMITED",
@@ -486,10 +514,11 @@ export async function proxyRoutes(app: FastifyInstance) {
         );
       }
 
-      const stickyIdentity = clientIp || getGatewaySessionIdentity(
-        request,
-        body,
-        apiKey.id,
+      const stickyIdentity =
+        clientIp || getGatewaySessionIdentity(request, body, apiKey.id);
+      const scopedStickyIdentity = scopeModelPoolCallerIdentity(
+        stickyIdentity,
+        accessRoutePolicy.tierId,
       );
       let initialRoute: UpstreamAttemptRoute;
       try {
@@ -525,7 +554,10 @@ export async function proxyRoutes(app: FastifyInstance) {
       }
 
       const walletReservation = billable
-        ? await reserveWalletBalance({ userId: user.id })
+        ? !accessRoutePolicy.walletRequired ||
+          (activeSubscription && hasAvailableSubscriptionQuota(activeSubscription))
+          ? { ok: true as const, amount: new Decimal(0) }
+          : await reserveWalletBalance({ userId: user.id })
         : { ok: true as const, amount: new Decimal(0) };
       if (!walletReservation.ok) {
         await runtimeLimitLock.release();
@@ -615,11 +647,12 @@ export async function proxyRoutes(app: FastifyInstance) {
           apiRequestId: apiRequest.id,
           userId: user.id,
           apiKeyId: apiKey.id,
-          callerIdentity: stickyIdentity,
+          callerIdentity: scopedStickyIdentity,
           route: activeRoute,
           billable,
           model,
           billableModel,
+          accessTierId: accessRoutePolicy.tierId,
           startedAt: start,
           attempt,
           compactFallbackContext,
@@ -647,7 +680,7 @@ export async function proxyRoutes(app: FastifyInstance) {
         }
 
         skippedChannelIds.add(activeRoute.channelId);
-          const nextRoute = await routeUpstreamRequest({
+        const nextRoute = await routeUpstreamRequest({
           billable,
           model,
           callerIdentity: stickyIdentity,
@@ -1082,7 +1115,9 @@ function buildCompactFallbackReplacements(
   return replacements;
 }
 
-function getTargetCompactItemType(route: UpstreamAttemptRoute): CompactItemType {
+function getTargetCompactItemType(
+  route: UpstreamAttemptRoute,
+): CompactItemType {
   const value =
     "compactItemType" in route.provider
       ? route.provider.compactItemType
@@ -1257,6 +1292,7 @@ async function runUpstreamAttempt(params: {
   billable: boolean;
   model?: string;
   billableModel?: string;
+  accessTierId?: string | null;
   startedAt: number;
   attempt: number;
   compactFallbackContext: CompactFallbackContext;
@@ -1277,6 +1313,7 @@ async function runUpstreamAttempt(params: {
     billable,
     model,
     billableModel,
+    accessTierId,
     startedAt,
     compactFallbackContext,
     invalidCompactRetryAttempted,
@@ -1327,6 +1364,7 @@ async function runUpstreamAttempt(params: {
     registerActiveApiRequest(apiRequestId, controller);
     const timeout = setTimeout(() => controller.abort(), provider.timeoutMs);
 
+    const upstreamRequestStartedAt = performance.now();
     const upstreamResponse = await fetch(
       buildUpstreamUrl(provider.baseUrl, resolvedUpstreamRequestUrl),
       {
@@ -1345,6 +1383,9 @@ async function runUpstreamAttempt(params: {
     ).finally(() => {
       clearTimeout(timeout);
     });
+    const upstreamFirstChunkLatencyMs = Math.round(
+      performance.now() - upstreamRequestStartedAt,
+    );
 
     await prisma.apiRequest.update({
       where: { id: apiRequestId },
@@ -1353,6 +1394,7 @@ async function runUpstreamAttempt(params: {
         upstreamProviderKeyId,
         httpStatus: upstreamResponse.status,
         upstreamRequestId: upstreamResponse.headers.get("x-request-id"),
+        upstreamFirstChunkLatencyMs,
       },
     });
 
@@ -1481,6 +1523,8 @@ async function runUpstreamAttempt(params: {
       upstreamRequestUrl,
       endpoint,
     );
+    const upstreamOutputFilterSettings =
+      await readUpstreamOutputFilterSettings();
 
     if (shouldStream && billable && price) {
       activeControllerHandedOff = true;
@@ -1495,10 +1539,12 @@ async function runUpstreamAttempt(params: {
         callerIdentity,
         apiKeyId,
         priceId: price.id,
+        accessTierId,
         model: billableModel ?? price.model,
         channelId,
         upstreamProviderKeyId,
         startedAt,
+        upstreamRequestStartedAt,
         logger: app.log,
         compactFallbackTrace: compactFallbackContext.trace,
         compactCacheRequestBody:
@@ -1507,6 +1553,7 @@ async function runUpstreamAttempt(params: {
           endpoint === "/v1/responses/compact"
             ? getCompactChannelFingerprint(route)
             : undefined,
+        upstreamOutputFilterSettings,
       });
       return { kind: "sent" };
     }
@@ -1519,6 +1566,8 @@ async function runUpstreamAttempt(params: {
         activeController: controller,
         apiRequestId,
         startedAt,
+        upstreamRequestStartedAt,
+        upstreamOutputFilterSettings,
       });
       return { kind: "sent" };
     }
@@ -1551,6 +1600,10 @@ async function runUpstreamAttempt(params: {
       endpoint,
       resolvedUpstreamEndpoint,
       upstreamResponseBody,
+    );
+    const filteredResponseBody = filterUpstreamOutputBody(
+      responseBody,
+      upstreamOutputFilterSettings,
     );
 
     let normalCompactUsageMetadata:
@@ -1590,7 +1643,7 @@ async function runUpstreamAttempt(params: {
 
       reply.status(upstreamResponse.status);
       reply.header("content-type", contentType || "application/json");
-      reply.send(responseBody);
+      reply.send(filteredResponseBody);
       return { kind: "sent" };
     }
 
@@ -1628,6 +1681,7 @@ async function runUpstreamAttempt(params: {
         userId,
         price,
         usage,
+        accessTierId,
         startedAt,
       });
     } catch (error) {
@@ -1661,7 +1715,7 @@ async function runUpstreamAttempt(params: {
 
     reply.status(upstreamResponse.status);
     reply.header("content-type", contentType || "application/json");
-    reply.send(responseBody);
+    reply.send(filteredResponseBody);
     return { kind: "sent" };
   } catch (error) {
     const manualTerminated = isManualTerminateError(error);
@@ -1716,10 +1770,7 @@ async function runUpstreamAttempt(params: {
       }),
       manualTerminated ? "MANUAL_TERMINATED" : "UPSTREAM_ERROR",
     );
-    if (
-      recoveryNotice &&
-      shouldReturnApiKeyNotice(endpoint, request.method)
-    ) {
+    if (recoveryNotice && shouldReturnApiKeyNotice(endpoint, request.method)) {
       await markRecoveryNoticeReturned(
         apiRequestId,
         recoveryNotice,
@@ -1810,6 +1861,10 @@ async function getGatewayRecoveryNotice(error: unknown) {
     return settings.missingUsageMessage;
   }
 
+  if (isUpstreamBalanceInsufficientError(error)) {
+    return settings.upstreamBalanceInsufficientMessage;
+  }
+
   const text =
     typeof error === "string"
       ? error
@@ -1822,6 +1877,10 @@ async function getGatewayRecoveryNotice(error: unknown) {
   }
 
   const normalized = text.toLowerCase();
+  if (isUpstreamBalanceInsufficientError(text)) {
+    return settings.upstreamBalanceInsufficientMessage;
+  }
+
   const isStoreFalseItemError =
     normalized.includes("items are not persisted when store is set to false") ||
     (normalized.includes("item with id") &&
@@ -2027,7 +2086,9 @@ async function proxyStream(params: {
   channelId?: string;
   upstreamProviderKeyId?: string | null;
   priceId: string;
+  accessTierId?: string | null;
   startedAt: number;
+  upstreamRequestStartedAt: number;
   logger?: {
     warn: (value: unknown, message?: string) => void;
     info?: (value: unknown, message?: string) => void;
@@ -2035,6 +2096,7 @@ async function proxyStream(params: {
   compactFallbackTrace?: CompactFallbackTrace;
   compactCacheRequestBody?: ProxyBody;
   compactCacheSourceFingerprint?: string;
+  upstreamOutputFilterSettings: UpstreamOutputFilterSettings;
 }) {
   const {
     reply,
@@ -2050,11 +2112,14 @@ async function proxyStream(params: {
     channelId,
     upstreamProviderKeyId,
     priceId,
+    accessTierId,
     startedAt,
+    upstreamRequestStartedAt,
     logger,
     compactFallbackTrace,
     compactCacheRequestBody,
     compactCacheSourceFingerprint,
+    upstreamOutputFilterSettings,
   } = params;
   const price = await prisma.modelPrice.findUniqueOrThrow({
     where: { id: priceId },
@@ -2065,8 +2130,12 @@ async function proxyStream(params: {
   let pending = "";
   let rawStreamText = "";
   let firstTokenLatencyMs: number | null = null;
+  let upstreamFirstChunkLatencyMs: number | null = null;
   const bufferedStreamChunks: string[] = [];
   let hasForwardedStream = false;
+  const upstreamOutputFilter = createUpstreamOutputStreamFilter(
+    upstreamOutputFilterSettings,
+  );
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -2119,15 +2188,19 @@ async function proxyStream(params: {
         bufferedStreamChunks.length = 0;
       };
       const forwardStreamText = (text: string) => {
+        const filteredText = upstreamOutputFilter.push(text);
+        if (!filteredText) {
+          return;
+        }
         if (hasForwardedStream || firstTokenLatencyMs !== null) {
           flushBufferedStreamChunks();
-          if (!safeController.enqueue(encoder.encode(text))) {
+          if (!safeController.enqueue(encoder.encode(filteredText))) {
             throw createClientStreamClosedError();
           }
           return;
         }
 
-        bufferedStreamChunks.push(text);
+        bufferedStreamChunks.push(filteredText);
       };
 
       try {
@@ -2138,6 +2211,11 @@ async function proxyStream(params: {
           }
 
           if (value) {
+            if (upstreamFirstChunkLatencyMs === null) {
+              upstreamFirstChunkLatencyMs = Math.round(
+                performance.now() - upstreamRequestStartedAt,
+              );
+            }
             const text = decoder.decode(value, { stream: true });
             rawStreamText += text;
             pending += text;
@@ -2195,6 +2273,17 @@ async function proxyStream(params: {
           streamUsage,
           compactFallbackTrace,
         );
+        const filteredTrailing = upstreamOutputFilter.flush();
+        if (filteredTrailing) {
+          if (hasForwardedStream || firstTokenLatencyMs !== null) {
+            flushBufferedStreamChunks();
+            if (!safeController.enqueue(encoder.encode(filteredTrailing))) {
+              throw createClientStreamClosedError();
+            }
+          } else {
+            bufferedStreamChunks.push(filteredTrailing);
+          }
+        }
         flushBufferedStreamChunks();
 
         if (
@@ -2233,6 +2322,7 @@ async function proxyStream(params: {
             userId,
             price,
             usage: streamUsage,
+            accessTierId,
             startedAt,
           });
         } catch (error) {
@@ -2249,7 +2339,7 @@ async function proxyStream(params: {
 
         await prisma.apiRequest.update({
           where: { id: apiRequestId },
-          data: { firstTokenLatencyMs },
+          data: { firstTokenLatencyMs, upstreamFirstChunkLatencyMs },
         });
         await recordRoutingFeedback({
           userId,
@@ -2371,10 +2461,25 @@ async function proxyPassthroughStream(params: {
   activeController?: AbortController;
   apiRequestId: string;
   startedAt: number;
+  upstreamRequestStartedAt: number;
+  upstreamOutputFilterSettings: UpstreamOutputFilterSettings;
 }) {
-  const { reply, upstreamResponse, activeController, apiRequestId, startedAt } =
-    params;
+  const {
+    reply,
+    upstreamResponse,
+    activeController,
+    apiRequestId,
+    startedAt,
+    upstreamRequestStartedAt,
+    upstreamOutputFilterSettings,
+  } = params;
   let firstTokenLatencyMs: number | null = null;
+  let upstreamFirstChunkLatencyMs: number | null = null;
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const upstreamOutputFilter = createUpstreamOutputStreamFilter(
+    upstreamOutputFilterSettings,
+  );
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const safeController = createSafeStreamController(controller, reply);
@@ -2402,22 +2507,43 @@ async function proxyPassthroughStream(params: {
             break;
           }
           if (value) {
+            if (upstreamFirstChunkLatencyMs === null) {
+              upstreamFirstChunkLatencyMs = Math.round(
+                performance.now() - upstreamRequestStartedAt,
+              );
+            }
             if (firstTokenLatencyMs === null) {
               firstTokenLatencyMs = Math.round(performance.now() - startedAt);
             }
-            if (!safeController.enqueue(value)) {
+            const filteredText = upstreamOutputFilter.push(
+              decoder.decode(value, { stream: true }),
+            );
+            if (
+              filteredText &&
+              !safeController.enqueue(encoder.encode(filteredText))
+            ) {
               throw createClientStreamClosedError();
             }
           }
         }
+        const filteredTrailing =
+          upstreamOutputFilter.push(decoder.decode()) +
+          upstreamOutputFilter.flush();
+        if (
+          filteredTrailing &&
+          !safeController.enqueue(encoder.encode(filteredTrailing))
+        ) {
+          throw createClientStreamClosedError();
+        }
 
         await prisma.apiRequest.update({
           where: { id: apiRequestId },
-        data: {
-          status: "SUCCESS",
-          resultType: "PROXIED_SUCCESS",
-          latencyMs: Math.round(performance.now() - startedAt),
+          data: {
+            status: "SUCCESS",
+            resultType: "PROXIED_SUCCESS",
+            latencyMs: Math.round(performance.now() - startedAt),
             firstTokenLatencyMs,
+            upstreamFirstChunkLatencyMs,
           },
         });
       } catch (error) {

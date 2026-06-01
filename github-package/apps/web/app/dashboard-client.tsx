@@ -5,6 +5,7 @@ import {
   BarChart3,
   Copy,
   CreditCard,
+  ExternalLink,
   FileSearch,
   GitBranch,
   HeartHandshake,
@@ -22,8 +23,10 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  ShoppingCart,
   SlidersHorizontal,
   CircleStop,
+  ReceiptText,
   Ticket,
   Trash2,
   Users,
@@ -90,7 +93,8 @@ import {
 } from "./front/_components/call-tester";
 import { Keys, type ApiKey } from "./front/_components/frontend-keys";
 import {
-  WalletView,
+  BillingDetails,
+  WalletManagement,
   type Transaction,
   type Wallet,
 } from "./front/_components/frontend-wallet";
@@ -248,6 +252,7 @@ type GatewayNoticeSettings = {
   missingUsageMessage: string;
   staleResponsesContextMessage: string;
   invalidEncryptedContentMessage: string;
+  upstreamBalanceInsufficientMessage: string;
 };
 
 type RedisFailurePolicySettings = {
@@ -311,10 +316,15 @@ const frontNav = [
   { id: "overview", label: "前台总览", icon: BarChart3 },
   { id: "keys", label: "API Key", icon: KeyRound },
   { id: "model-mappings", label: "模型映射", icon: GitBranch },
-  { id: "wallet", label: "余额兑换", icon: CreditCard },
+  { id: "wallet", label: "钱包管理", icon: CreditCard },
+  { id: "store", label: "购买充值", icon: ShoppingCart },
+  { id: "billing", label: "账单明细", icon: ReceiptText },
   { id: "requests", label: "我的调用", icon: Activity },
   { id: "test", label: "调用测试", icon: Send },
 ] as const;
+
+const cardStoreUrl =
+  process.env.NEXT_PUBLIC_CARD_STORE_URL?.trim() || "https://example.com";
 
 const adminNav = [
   {
@@ -564,8 +574,18 @@ const pageMeta: Record<
   },
   wallet: {
     eyebrow: "前台",
-    title: "余额兑换",
-    description: "兑换余额并查看钱包流水。",
+    title: "钱包管理",
+    description: "查看余额、订阅状态，并兑换余额或订阅。",
+  },
+  store: {
+    eyebrow: "前台",
+    title: "购买充值",
+    description: "在内嵌发卡网购买余额或订阅兑换码。",
+  },
+  billing: {
+    eyebrow: "前台",
+    title: "账单明细",
+    description: "查看钱包流水、余额变化和账单备注。",
   },
   requests: {
     eyebrow: "前台",
@@ -685,6 +705,7 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
   const [loading, setLoading] = useState(false);
   const [loadingAdminTab, setLoadingAdminTab] = useState<AdminTab | null>(null);
   const [refreshingActivePage, setRefreshingActivePage] = useState(false);
+  const [storeConfirmOpen, setStoreConfirmOpen] = useState(false);
   const loadedAdminTabsRef = useRef<Set<AdminTab>>(new Set());
 
   useEffect(() => {
@@ -761,9 +782,6 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
       });
       if (mode === "admin" && me.user.role !== "ADMIN") {
         throw new Error("请使用管理员账号登录后台。");
-      }
-      if (mode === "user" && me.user.role === "ADMIN") {
-        throw new Error("管理员请从 /admin 登录后台。");
       }
       setUser(me.user);
     } catch (refreshError) {
@@ -1071,7 +1089,9 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
   }
 
   const currentPage = pageMeta[activeTab];
-  const fixedWorkspace = mode === "admin" && activeTab === "admin-requests";
+  const fixedWorkspace =
+    (mode === "admin" && activeTab === "admin-requests") ||
+    (mode === "user" && (activeTab === "requests" || activeTab === "billing"));
   const activeAdminWorkspace =
     mode === "admin" && isAdminTab(activeTab)
       ? adminWorkspaceForTab(activeTab)
@@ -1079,19 +1099,45 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
 
   return (
     <main
-      className={mode === "admin" ? "shell shell-admin" : "shell"}
+      className={mode === "admin" ? "shell shell-admin" : "shell shell-user"}
     >
-      <aside className={mode === "admin" ? "sidebar admin-sidebar" : "sidebar"}>
+      <aside
+        className={mode === "admin" ? "sidebar admin-sidebar" : "sidebar user-sidebar"}
+      >
         <div className="brand">
-          <span className="brand-lockup">
-            <span className="brand-mark">AG</span>
-            <span className="brand-copy">
-              <span className="brand-name">API Gateway</span>
-              {mode === "admin" ? (
+          {mode === "user" ? (
+            <span className="user-brand-title">APIshare</span>
+          ) : (
+            <span className="brand-lockup">
+              <span className="brand-mark">AG</span>
+              <span className="brand-copy">
+                <span className="brand-name">API Gateway</span>
                 <span className="brand-subtitle">Management Console</span>
-              ) : null}
+              </span>
             </span>
-          </span>
+          )}
+          {mode === "user" ? (
+            <div className="mobile-user-nav-actions">
+              <span className="mobile-user-email">{user.email}</span>
+              <button
+                aria-label={refreshingActivePage ? "刷新中" : "刷新"}
+                className="mobile-user-icon-button"
+                disabled={refreshingActivePage}
+                onClick={() => void refreshActiveAdminPage()}
+                type="button"
+              >
+                <RefreshCw size={16} />
+              </button>
+              <button
+                aria-label="退出"
+                className="mobile-user-icon-button"
+                onClick={logout}
+                type="button"
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
+          ) : null}
         </div>
         <nav className="nav">
           {mode === "admin" ? (
@@ -1115,7 +1161,11 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
                   key={item.id}
                   item={item}
                   active={activeTab === item.id}
-                  onClick={() => switchTab(item.id)}
+                  onClick={() =>
+                    item.id === "store"
+                      ? setStoreConfirmOpen(true)
+                      : switchTab(item.id)
+                  }
                 />
               ))}
             </div>
@@ -1125,7 +1175,7 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
       <section className={fixedWorkspace ? "main main-fixed-page" : "main"}>
         <div
           className={
-            mode === "admin" ? "topbar admin-command-bar" : "topbar"
+            mode === "admin" ? "topbar admin-command-bar" : "topbar user-topbar"
           }
         >
           {mode === "admin" ? (
@@ -1230,15 +1280,18 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
             />
           ) : null}
           {mode === "user" && activeTab === "wallet" ? (
-            <WalletView
+            <WalletManagement
               wallet={wallet}
               transactions={transactions}
               onChanged={() => refreshAll()}
               onError={setError}
             />
           ) : null}
+          {mode === "user" && activeTab === "billing" ? (
+            <BillingDetails transactions={transactions} />
+          ) : null}
           {mode === "user" && activeTab === "requests" ? (
-            <Requests requests={summary?.requests ?? []} />
+            <Requests requests={summary?.requests ?? []} paginated />
           ) : null}
           {mode === "user" && activeTab === "test" ? (
             <CallTester
@@ -1273,6 +1326,60 @@ export default function DashboardClient({ mode }: { mode: DashboardMode }) {
           ) : null}
         </div>
       </section>
+      {storeConfirmOpen ? (
+        <div
+          className="store-confirm-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setStoreConfirmOpen(false);
+            }
+          }}
+        >
+          <section
+            aria-labelledby="store-confirm-title"
+            aria-modal="true"
+            className="store-confirm-dialog"
+            role="dialog"
+          >
+            <button
+              aria-label="关闭"
+              className="store-confirm-close"
+              type="button"
+              onClick={() => setStoreConfirmOpen(false)}
+            >
+              ×
+            </button>
+            <div className="store-confirm-orb">
+              <ShoppingCart size={24} />
+            </div>
+            <div className="store-confirm-copy">
+              <span>订阅购买</span>
+              <h2 id="store-confirm-title">前往发卡网购买套餐</h2>
+              <p>购买完成后，回到钱包管理粘贴兑换码即可到账。</p>
+            </div>
+            <div className="store-confirm-actions">
+              <button
+                className="button secondary store-confirm-button"
+                type="button"
+                onClick={() => setStoreConfirmOpen(false)}
+              >
+                先不去了
+              </button>
+              <a
+                className="button store-confirm-button"
+                href={cardStoreUrl}
+                rel="noreferrer"
+                target="_blank"
+                onClick={() => setStoreConfirmOpen(false)}
+              >
+                <ExternalLink size={16} />
+                前往购买
+              </a>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -1585,7 +1692,7 @@ function Login({
   }
 
   return (
-    <main className="login-page">
+    <main className={mode === "user" ? "login-page user-login-page" : "login-page"}>
       <section
         className="login-shell"
         aria-label={
@@ -1763,7 +1870,7 @@ function ModelMappingsPanel({
   }
 
   return (
-    <section className="card">
+    <section className="card user-mapping-panel">
       <div className="section-head">
         <div>
           <h2 className="section-title">模型映射</h2>
@@ -1850,8 +1957,8 @@ function Overview({
   availableModels: AvailableModel[];
 }) {
   return (
-    <div className="grid">
-      <div className="grid cols-3">
+    <div className="user-overview">
+      <div className="user-hero-metrics">
         <Metric
           label="当前余额"
           value={`$${money(wallet?.balance ?? "0")}`}
@@ -1865,7 +1972,7 @@ function Overview({
           }`}
         />
         <Metric
-          label="30 天请求数"
+          label="累计请求数"
           value={String(summary?.totals.requests ?? 0)}
         />
         <Metric
@@ -1875,24 +1982,30 @@ function Overview({
           )}
         />
       </div>
-      <div className="grid cols-3">
-        <Metric
-          label="总 token"
-          value={formatNumber(summary?.totals.totalTokens ?? 0)}
-        />
-        <Metric
-          label="我的扣费"
-          value={`$${money(summary?.totals.chargedAmountUsd ?? 0)}`}
-        />
-        <Metric
-          label="Base URL"
-          value={apiBaseUrl.replace(/^https?:\/\//, "")}
-          small
-        />
+      <div className="user-overview-grid">
+        <div className="user-overview-main">
+          <div className="grid cols-3 user-secondary-metrics">
+            <Metric
+              label="总 token"
+              value={formatNumber(summary?.totals.totalTokens ?? 0)}
+            />
+            <Metric
+              label="我的扣费"
+              value={`$${money(summary?.totals.chargedAmountUsd ?? 0)}`}
+            />
+            <Metric
+              label="Base URL"
+              value={apiBaseUrl.replace(/^https?:\/\//, "")}
+              small
+            />
+          </div>
+          <Requests requests={summary?.requests.slice(0, 8) ?? []} compact />
+        </div>
+        <aside className="user-overview-rail">
+          <BaseUrlPanel />
+          <AvailableModelsPanel models={availableModels} />
+        </aside>
       </div>
-      <BaseUrlPanel />
-      <AvailableModelsPanel models={availableModels} />
-      <Requests requests={summary?.requests.slice(0, 8) ?? []} compact />
     </div>
   );
 }

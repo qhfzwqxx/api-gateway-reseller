@@ -66,6 +66,7 @@ type ApiKey = {
   allowedModels: string[];
   noticeEnabled?: boolean;
   noticeText?: string | null;
+  forceFastMode?: boolean;
   tags?: string[];
   disabledReason?: string | null;
   disabledAt?: string | null;
@@ -1751,6 +1752,7 @@ function AdminUserKeysModal({
   const [allowedModelsText, setAllowedModelsText] = useState("");
   const [noticeEnabled, setNoticeEnabled] = useState(false);
   const [noticeText, setNoticeText] = useState("");
+  const [forceFastMode, setForceFastMode] = useState(false);
   const [tagsText, setTagsText] = useState("");
   const [ipWhitelistText, setIpWhitelistText] = useState("");
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
@@ -1773,6 +1775,7 @@ function AdminUserKeysModal({
   const [editAllowedModels, setEditAllowedModels] = useState("");
   const [editNoticeEnabled, setEditNoticeEnabled] = useState(false);
   const [editNoticeText, setEditNoticeText] = useState("");
+  const [editForceFastMode, setEditForceFastMode] = useState(false);
   const [editTagsText, setEditTagsText] = useState("");
   const [editIpWhitelistText, setEditIpWhitelistText] = useState("");
   const [editDisabledReason, setEditDisabledReason] = useState("");
@@ -1821,6 +1824,7 @@ function AdminUserKeysModal({
             allowedModels: parseModelList(allowedModelsText),
             noticeEnabled,
             noticeText: noticeText.trim() || null,
+            forceFastMode,
             tags: splitList(tagsText),
             ipWhitelist: splitList(ipWhitelistText),
           }),
@@ -1831,6 +1835,7 @@ function AdminUserKeysModal({
       setAllowedModelsText("");
       setNoticeEnabled(false);
       setNoticeText("");
+      setForceFastMode(false);
       setTagsText("");
       setIpWhitelistText("");
       onChanged();
@@ -1851,6 +1856,7 @@ function AdminUserKeysModal({
     setEditAllowedModels((key.allowedModels ?? []).join("\n"));
     setEditNoticeEnabled(Boolean(key.noticeEnabled));
     setEditNoticeText(key.noticeText ?? "");
+    setEditForceFastMode(Boolean(key.forceFastMode));
     setEditTagsText((key.tags ?? []).join(", "));
     setEditIpWhitelistText((key.ipWhitelist ?? []).join("\n"));
     setEditDisabledReason(key.disabledReason ?? "");
@@ -1883,6 +1889,7 @@ function AdminUserKeysModal({
           allowedModels: parseModelList(editAllowedModels),
           noticeEnabled: editNoticeEnabled,
           noticeText: editNoticeText.trim() || null,
+          forceFastMode: editForceFastMode,
           tags: splitList(editTagsText),
           ipWhitelist: splitList(editIpWhitelistText),
           disabledReason: editDisabledReason.trim() || null,
@@ -2175,6 +2182,14 @@ function AdminUserKeysModal({
                 />
                 开启公告
               </label>
+              <label className="inline-field">
+                <input
+                  checked={forceFastMode}
+                  onChange={(event) => setForceFastMode(event.target.checked)}
+                  type="checkbox"
+                />
+                强制 Fast 模式
+              </label>
             </div>
             <div className="grid cols-2">
               <label className="field">
@@ -2384,6 +2399,9 @@ function AdminUserKeysModal({
                     <span className={key.noticeEnabled ? "pill ok" : "pill"}>
                       {key.noticeEnabled ? "公告中" : "未开启"}
                     </span>
+                    <span className={key.forceFastMode ? "pill ok" : "pill"}>
+                      {key.forceFastMode ? "Fast" : "普通"}
+                    </span>
                   </>
                 }
                 actions={
@@ -2451,6 +2469,9 @@ function AdminUserKeysModal({
                 </MobileField>
                 <MobileField label="公告" wide>
                   {key.noticeText ?? "未开启"}
+                </MobileField>
+                <MobileField label="Fast 模式">
+                  {key.forceFastMode ? "强制开启" : "未开启"}
                 </MobileField>
                 <MobileField label="标签" wide>
                   {(key.tags ?? []).join(", ") || "-"}
@@ -2639,6 +2660,16 @@ function AdminUserKeysModal({
                     type="checkbox"
                   />
                   开启公告
+                </label>
+                <label className="inline-field">
+                  <input
+                    checked={editForceFastMode}
+                    onChange={(event) =>
+                      setEditForceFastMode(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  强制 Fast 模式
                 </label>
               </div>
               <div className="chip-row">

@@ -8,6 +8,7 @@ const pageTitles: Record<string, string> = {
   "/admin/overview": "运营总览",
   "/admin/users": "用户与钱包",
   "/admin/redeem-codes": "兑换码",
+  "/admin/subscriptions": "订阅管理",
   "/admin/upstreams": "上游管理",
   "/admin/model-prices": "模型价格",
   "/admin/model-pools": "模型池",
@@ -45,12 +46,17 @@ export function Header() {
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-white/80 lg:px-6">
       <div className="min-w-0">
         <div className="text-xs font-medium text-slate-500">管理后台</div>
-        <h1 className="truncate text-lg font-semibold text-slate-950">{title}</h1>
+        <h1 className="truncate text-lg font-semibold text-slate-950">
+          {title}
+        </h1>
       </div>
 
       <div className="flex items-center gap-3">
         <div className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 text-sm font-medium text-emerald-700">
-          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
+          <span
+            className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"
+            aria-hidden="true"
+          />
           API 正常
         </div>
 

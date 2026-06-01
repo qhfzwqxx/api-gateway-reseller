@@ -10,6 +10,12 @@ export interface GatewayNoticeSettings {
   missingUsageMessage: string;
   staleResponsesContextMessage: string;
   invalidEncryptedContentMessage: string;
+  upstreamBalanceInsufficientMessage: string;
+}
+
+export interface UpstreamOutputFilterSettings {
+  enabled: boolean;
+  phrases: string[];
 }
 
 export interface RedisFailurePolicySettings {
@@ -38,6 +44,14 @@ export interface TemporaryIpNoticeBanSettings {
   maxThreshold?: number;
   minWindowSeconds?: number;
   maxWindowSeconds?: number;
+}
+
+export interface PendingAutoTerminateSettings {
+  enabled: boolean;
+  timeoutSeconds: number;
+  message: string;
+  minTimeoutSeconds?: number;
+  maxTimeoutSeconds?: number;
 }
 
 export interface CharityAnnouncementSettings {
@@ -80,11 +94,31 @@ export interface AuthSettingsInput extends Omit<AuthSettings, "smtpConfigured"> 
   smtpPassword?: string;
 }
 
+export type IpBanMode = "error" | "notice";
+
+export interface IpBanRule {
+  ip: string;
+  mode: IpBanMode;
+  message: string;
+  reason?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IpBanRuleInput {
+  ip: string;
+  mode: IpBanMode;
+  message?: string | null;
+  reason?: string | null;
+}
+
 export interface RiskCenterData {
-  ipBanRules: Array<{ ip: string; mode: string; message: string; reason?: string | null; createdAt: string; updatedAt: string }>;
+  ipBanRules: IpBanRule[];
   temporaryIpNoticeBans: Array<{ ip: string; message: string; ttlSeconds: number }>;
   temporaryIpNoticeBanSettings: TemporaryIpNoticeBanSettings;
+  pendingAutoTerminateSettings: PendingAutoTerminateSettings;
   gatewayNoticeSettings: GatewayNoticeSettings;
+  upstreamOutputFilterSettings: UpstreamOutputFilterSettings;
   redisFailurePolicySettings: RedisFailurePolicySettings;
   globalCircuitBreakerSettings: GlobalCircuitBreakerSettings;
   charityAnnouncementSettings: CharityAnnouncementSettings;
@@ -144,6 +178,26 @@ export async function updateTemporaryIpNoticeBanSettings(input: Partial<Temporar
   return response.data.settings;
 }
 
+export async function saveIpBanRule(input: IpBanRuleInput) {
+  const response = await http.post<{ rule: IpBanRule; rules: IpBanRule[] }>("/admin/ip-ban-rules", input);
+  return response.data;
+}
+
+export async function updateIpBanRule(ip: string, input: Omit<IpBanRuleInput, "ip">) {
+  const response = await http.put<{ rule: IpBanRule; rules: IpBanRule[] }>(`/admin/ip-ban-rules/${encodeURIComponent(ip)}`, input);
+  return response.data;
+}
+
+export async function deleteIpBanRule(ip: string) {
+  const response = await http.delete<{ ip: string; deleted: boolean; rules: IpBanRule[] }>(`/admin/ip-ban-rules/${encodeURIComponent(ip)}`);
+  return response.data;
+}
+
+export async function updatePendingAutoTerminateSettings(input: Partial<PendingAutoTerminateSettings>) {
+  const response = await http.put<{ settings: PendingAutoTerminateSettings }>("/admin/pending-auto-terminate-settings", input);
+  return response.data.settings;
+}
+
 export async function getGatewayNoticeSettings() {
   const response = await http.get<{ settings: GatewayNoticeSettings; defaults: GatewayNoticeSettings }>("/admin/gateway-notice-settings");
   return response.data;
@@ -152,6 +206,11 @@ export async function getGatewayNoticeSettings() {
 export async function updateGatewayNoticeSettings(input: Partial<GatewayNoticeSettings>) {
   const response = await http.put<{ settings: GatewayNoticeSettings; defaults: GatewayNoticeSettings }>("/admin/gateway-notice-settings", input);
   return response.data;
+}
+
+export async function updateUpstreamOutputFilterSettings(input: UpstreamOutputFilterSettings) {
+  const response = await http.put<{ settings: UpstreamOutputFilterSettings }>("/admin/upstream-output-filter-settings", input);
+  return response.data.settings;
 }
 
 export async function getRedisFailurePolicySettings() {

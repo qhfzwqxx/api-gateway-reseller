@@ -1,8 +1,9 @@
 "use client";
 
 import { CircleStop, FileSearch } from "lucide-react";
-import { type ReactNode, type UIEvent, useState } from "react";
+import { type ReactNode, type UIEvent, useEffect, useState } from "react";
 import { apiFetch, getToken } from "../../../lib/api";
+import { Pagination } from "../../front/_components/Pagination";
 import { confirmAdminAction } from "./admin-confirm";
 import { dateTime, formatNumber, money, seconds } from "./admin-format";
 import { AdminDataTable, MobileEmpty, MobileField, MobileRecord, ModalShell, StatusPill } from "./admin-ui";
@@ -27,10 +28,13 @@ export type ApiRequest = {
   outputTokens: number;
   totalTokens: number;
   chargedAmountUsd: string;
+  subscriptionChargedAmountUsd?: string | null;
+  walletChargedAmountUsd?: string | null;
   upstreamCostUsd?: string | null;
   grossProfitUsd?: string | null;
   latencyMs?: number | null;
   firstTokenLatencyMs?: number | null;
+  upstreamFirstChunkLatencyMs?: number | null;
   errorMessage?: string | null;
   responseUsage?: unknown | null;
   createdAt: string;
@@ -113,6 +117,7 @@ function formatRequestUpstreamKey(
 export function Requests({
   requests,
   compact = false,
+  paginated = false,
   showCost = false,
   ipBanRules = [],
   hasMore = false,
@@ -122,6 +127,7 @@ export function Requests({
 }: {
   requests: ApiRequest[];
   compact?: boolean;
+  paginated?: boolean;
   showCost?: boolean;
   ipBanRules?: IpBanRule[];
   hasMore?: boolean;
@@ -129,6 +135,7 @@ export function Requests({
   onLoadMore?: () => void;
   onRequestTerminated?: (request: ApiRequest) => void;
 }) {
+  const showInternalFields = showCost;
   const [selectedRequest, setSelectedRequest] =
     useState<ApiRequestDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -137,6 +144,19 @@ export function Requests({
     string | null
   >(null);
   const bannedIpSet = new Set(ipBanRules.map((rule) => rule.ip));
+  const [pageSize, setPageSize] = useState(18);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageCount = paginated
+    ? Math.max(1, Math.ceil(requests.length / pageSize))
+    : 1;
+  const activePage = Math.min(currentPage, pageCount);
+  const visibleRequests = paginated
+    ? requests.slice((activePage - 1) * pageSize, activePage * pageSize)
+    : requests;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [requests, pageSize]);
 
   function handleScroll(event: UIEvent<HTMLDivElement>) {
     if (!onLoadMore || !hasMore || loadingMore) {
@@ -218,7 +238,7 @@ export function Requests({
       setTerminatingRequestId(null);
     }
   }
-  const auditRequestRows = requests.map((item) => ({
+  const auditRequestRows = visibleRequests.map((item) => ({
     id: item.id,
     trace: (
       <strong className="request-trace-code">
@@ -292,6 +312,14 @@ export function Requests({
           strong
         />
         <AuditMetric
+          label="订阅"
+          value={`$${money(item.subscriptionChargedAmountUsd ?? "0")}`}
+        />
+        <AuditMetric
+          label="钱包"
+          value={`$${money(item.walletChargedAmountUsd ?? item.chargedAmountUsd)}`}
+        />
+        <AuditMetric
           label="成本"
           value={`$${money(item.upstreamCostUsd ?? "0")}`}
         />
@@ -304,7 +332,7 @@ export function Requests({
     latency: (
       <div className="audit-stack">
         <span>总：{seconds(item.latencyMs)}</span>
-        <span>首 token：{seconds(item.firstTokenLatencyMs)}</span>
+        <span>首 token：{seconds(item.upstreamFirstChunkLatencyMs)}</span>
         <span>{dateTime(item.createdAt)}</span>
       </div>
     ),
@@ -330,53 +358,17 @@ export function Requests({
         "-"
       ),
   }));
-  const requestRows = requests.map((item) => ({
+  const requestRows = visibleRequests.map((item) => ({
     id: item.id,
-    trace: (
-      <strong className="request-trace-code">
-        {formatRequestTraceCode(item)}
-      </strong>
-    ),
     apiKey: formatRequestApiKey(item.apiKey),
-    ip: (
-      <IpCell
-        ip={item.clientIp}
-        banned={Boolean(
-          item.clientIp && bannedIpSet.has(normalizeIpForCompare(item.clientIp)),
-        )}
-      />
-    ),
     model: item.model,
-    status: (
-      <div className="request-status-cell">
-        <StatusPill status={getRequestStatusPillStatus(item)} />
-        {getReturnedNoticeText(item) ? (
-          <span className="request-notice-pill">已提示</span>
-        ) : null}
-        {hasRequestError(item) ? (
-          <button
-            className="request-detail-button"
-            onClick={() => void openRequestDetail(item)}
-            title="查看详细报错原因和过程"
-            type="button"
-          >
-            <FileSearch size={13} />
-            详情
-          </button>
-        ) : null}
-      </div>
-    ),
     inputTokens: formatNumber(item.inputTokens),
     cachedInputTokens: formatNumber(item.cachedInputTokens),
     outputTokens: formatNumber(item.outputTokens),
     totalTokens: formatNumber(item.totalTokens),
     chargedAmount: `$${money(item.chargedAmountUsd)}`,
-    reasoningEffort: formatReasoningEffortCell(
-      item.reasoningEffort,
-      item.reasoningEffortActual,
-    ),
+    firstTokenLatency: seconds(item.upstreamFirstChunkLatencyMs),
     latency: seconds(item.latencyMs),
-    firstTokenLatency: seconds(item.firstTokenLatencyMs),
     createdAt: dateTime(item.createdAt),
   }));
 
@@ -384,7 +376,13 @@ export function Requests({
     <>
       <section
         className={
-          showCost ? "card requests-card audit-card" : "card requests-card"
+          showCost
+            ? "card requests-card audit-card"
+            : compact
+              ? "card requests-card front-requests-card front-requests-card-compact"
+              : paginated
+                ? "card requests-card front-requests-card front-requests-card-paged front-records-card front-usage-requests-card"
+              : "card requests-card front-requests-card"
         }
       >
         <div className="requests-head">
@@ -419,20 +417,16 @@ export function Requests({
         ) : (
           <AdminDataTable
               columns={[
-                { accessorKey: "trace", header: "编码" },
-                { accessorKey: "apiKey", header: "API Key" },
-                { accessorKey: "ip", header: "IP" },
-                { accessorKey: "model", header: "模型" },
-                { accessorKey: "status", header: "状态" },
+                { accessorKey: "apiKey", header: "Key" },
+                { accessorKey: "model", header: "模型 ID" },
                 { accessorKey: "inputTokens", header: "输入" },
                 { accessorKey: "cachedInputTokens", header: "缓存" },
                 { accessorKey: "outputTokens", header: "输出" },
                 { accessorKey: "totalTokens", header: "总 token" },
-                { accessorKey: "chargedAmount", header: "扣费" },
-                { accessorKey: "reasoningEffort", header: "思考强度" },
-                { accessorKey: "latency", header: "总时间" },
-                { accessorKey: "firstTokenLatency", header: "首 token" },
-                { accessorKey: "createdAt", header: "时间" },
+                { accessorKey: "chargedAmount", header: "花费" },
+                { accessorKey: "firstTokenLatency", header: "首 token 时间" },
+                { accessorKey: "latency", header: "总耗时" },
+                { accessorKey: "createdAt", header: "请求时间" },
               ]}
               data={requestRows}
               empty="暂无调用记录"
@@ -447,29 +441,31 @@ export function Requests({
           }
           onScroll={handleScroll}
         >
-          {requests.map((item) => (
+          {visibleRequests.map((item) => (
             <MobileRecord
               key={item.id}
               title={item.model}
               meta={dateTime(item.createdAt)}
               badges={
-                <>
-                  <StatusPill status={getRequestStatusPillStatus(item)} />
-                  {getCompactRequestLabel(item) ? (
-                    <span className="request-compact-fallback-pill">
-                      {getCompactRequestLabel(item)}
-                    </span>
-                  ) : null}
-                </>
+                showCost ? (
+                  <>
+                    <StatusPill status={getRequestStatusPillStatus(item)} />
+                    {getCompactRequestLabel(item) ? (
+                      <span className="request-compact-fallback-pill">
+                        {getCompactRequestLabel(item)}
+                      </span>
+                    ) : null}
+                  </>
+                ) : undefined
               }
             >
-              <MobileField label="追踪编码" wide>
-                <strong className="request-trace-code">
-                  {formatRequestTraceCode(item)}
-                </strong>
-              </MobileField>
               {showCost ? (
                 <>
+                  <MobileField label="追踪编码" wide>
+                    <strong className="request-trace-code">
+                      {formatRequestTraceCode(item)}
+                    </strong>
+                  </MobileField>
                   <MobileField label="用户" wide>
                     {item.user?.email ?? "-"}
                   </MobileField>
@@ -481,24 +477,20 @@ export function Requests({
                   </MobileField>
                 </>
               ) : null}
-              <MobileField label="思考强度">
-                {formatReasoningEffortCell(
-                  item.reasoningEffort,
-                  item.reasoningEffortActual,
-                )}
-              </MobileField>
-              <MobileField label="API Key" wide>
+              <MobileField label="Key" wide>
                 {formatRequestApiKey(item.apiKey)}
               </MobileField>
-              <MobileField label="IP" wide>
-                <IpCell
-                  ip={item.clientIp}
-                  banned={Boolean(
-                    item.clientIp &&
-                    bannedIpSet.has(normalizeIpForCompare(item.clientIp)),
-                  )}
-                />
-              </MobileField>
+              {showCost ? (
+                <MobileField label="IP" wide>
+                  <IpCell
+                    ip={item.clientIp}
+                    banned={Boolean(
+                      item.clientIp &&
+                      bannedIpSet.has(normalizeIpForCompare(item.clientIp)),
+                    )}
+                  />
+                </MobileField>
+              ) : null}
               <MobileField label="输入">
                 {formatNumber(item.inputTokens)}
               </MobileField>
@@ -511,7 +503,7 @@ export function Requests({
               <MobileField label="总 token">
                 {formatNumber(item.totalTokens)}
               </MobileField>
-              <MobileField label="扣费">
+              <MobileField label="花费">
                 ${money(item.chargedAmountUsd)}
               </MobileField>
               {showCost ? (
@@ -528,68 +520,81 @@ export function Requests({
                   </MobileField>
                 </>
               ) : null}
-              <MobileField label="总时间">
-                {seconds(item.latencyMs)}
+              <MobileField label="首 token 时间">
+                {seconds(item.upstreamFirstChunkLatencyMs)}
               </MobileField>
-              <MobileField label="首 token">
-                {seconds(item.firstTokenLatencyMs)}
-              </MobileField>
-              {getReturnedNoticeText(item) ? (
-                <MobileField label="用户返回" wide>
-                  已返回公告式提示
-                </MobileField>
-              ) : null}
-              {getCompactRequestLabel(item) ? (
-                <MobileField label="网关处理" wide>
-                  {getCompactRequestLabel(item)}
-                </MobileField>
-              ) : null}
-              {isManualTerminatedRequest(item) ? (
-                <MobileField label="终止说明" wide>
-                  管理员手动终止
-                </MobileField>
-              ) : null}
-              {hasRequestError(item) ? (
-                <div className="mobile-actions">
-                  <button
-                    className="button secondary"
-                    onClick={() => void openRequestDetail(item)}
-                    type="button"
-                  >
-                    <FileSearch size={16} />
-                    查看报错详情
-                  </button>
-                </div>
-              ) : null}
-              {showCost && item.status === "PENDING" ? (
-                <div className="mobile-actions">
-                  <button
-                    className="button danger"
-                    disabled={
-                      terminatingRequestId === item.id ||
-                      isProtectedCompactRequest(item)
-                    }
-                    onClick={() => void terminateRequest(item)}
-                    title={
-                      isProtectedCompactRequest(item)
-                        ? "这条 compact 调用不受自动倒计时终止限制，也不允许手动终止"
-                        : "终止这条仍在处理中的调用"
-                    }
-                    type="button"
-                  >
-                    <CircleStop size={16} />
-                    {isProtectedCompactRequest(item)
-                      ? "compact 保护中"
-                      : "终止"}
-                  </button>
-                </div>
+              <MobileField label="总耗时">{seconds(item.latencyMs)}</MobileField>
+              {showCost ? (
+                <>
+                  {getReturnedNoticeText(item) ? (
+                    <MobileField label="用户返回" wide>
+                      已返回公告式提示
+                    </MobileField>
+                  ) : null}
+                  {getCompactRequestLabel(item) ? (
+                    <MobileField label="网关处理" wide>
+                      {getCompactRequestLabel(item)}
+                    </MobileField>
+                  ) : null}
+                  {isManualTerminatedRequest(item) ? (
+                    <MobileField label="终止说明" wide>
+                      管理员手动终止
+                    </MobileField>
+                  ) : null}
+                  {hasRequestError(item) ? (
+                    <div className="mobile-actions">
+                      <button
+                        className="button secondary"
+                        onClick={() => void openRequestDetail(item)}
+                        type="button"
+                      >
+                        <FileSearch size={16} />
+                        查看报错详情
+                      </button>
+                    </div>
+                  ) : null}
+                  {item.status === "PENDING" ? (
+                    <div className="mobile-actions">
+                      <button
+                        className="button danger"
+                        disabled={
+                          terminatingRequestId === item.id ||
+                          isProtectedCompactRequest(item)
+                        }
+                        onClick={() => void terminateRequest(item)}
+                        title={
+                          isProtectedCompactRequest(item)
+                            ? "这条 compact 调用不受自动倒计时终止限制，也不允许手动终止"
+                            : "终止这条仍在处理中的调用"
+                        }
+                        type="button"
+                      >
+                        <CircleStop size={16} />
+                        {isProtectedCompactRequest(item)
+                          ? "compact 保护中"
+                          : "终止"}
+                      </button>
+                    </div>
+                  ) : null}
+                </>
               ) : null}
             </MobileRecord>
           ))}
-          {requests.length === 0 ? (
+          {visibleRequests.length === 0 ? (
             <MobileEmpty>暂无调用记录</MobileEmpty>
           ) : null}
         </div>
+        {paginated && !showCost ? (
+          <Pagination
+            className="front-requests-pagination"
+            currentPage={activePage}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+            pageSize={pageSize}
+            pageSizeOptions={[12, 16, 18]}
+            totalPages={pageCount}
+          />
+        ) : null}
         {showCost ? (
           <div className="audit-load-state">
             {loadingMore
@@ -609,6 +614,7 @@ export function Requests({
             setDetailError(null);
           }}
           request={selectedRequest}
+          showInternalFields={showInternalFields}
         />
       ) : null}
     </>
@@ -649,11 +655,13 @@ function RequestDetailModal({
   request,
   loading,
   detailError,
+  showInternalFields,
   onClose,
 }: {
   request: ApiRequestDetail;
   loading: boolean;
   detailError: string | null;
+  showInternalFields: boolean;
   onClose: () => void;
 }) {
   const failureSummary = describeRequestFailure(request);
@@ -764,7 +772,7 @@ function RequestDetailModal({
             <RequestDetailField label="模型">
               {request.model}
             </RequestDetailField>
-            {reasoningEffort ? (
+            {showInternalFields && reasoningEffort ? (
               <RequestDetailField label="推理强度">
                 {formatReasoningEffortCell(
                   reasoningEffort,
@@ -772,23 +780,29 @@ function RequestDetailModal({
                 )}
               </RequestDetailField>
             ) : null}
-            <RequestDetailField label="上游">
-              {request.upstreamProvider ?? "-"}
-            </RequestDetailField>
-            <RequestDetailField label="上游 Key">
-              {formatRequestUpstreamKey(request.upstreamProviderKey)}
-            </RequestDetailField>
+            {showInternalFields ? (
+              <>
+                <RequestDetailField label="上游">
+                  {request.upstreamProvider ?? "-"}
+                </RequestDetailField>
+                <RequestDetailField label="上游 Key">
+                  {formatRequestUpstreamKey(request.upstreamProviderKey)}
+                </RequestDetailField>
+              </>
+            ) : null}
             <RequestDetailField label="HTTP 状态">
               {request.httpStatus ?? "-"}
             </RequestDetailField>
-            <RequestDetailField label="上游请求 ID">
-              {request.upstreamRequestId ?? "-"}
-            </RequestDetailField>
+            {showInternalFields ? (
+              <RequestDetailField label="上游请求 ID">
+                {request.upstreamRequestId ?? "-"}
+              </RequestDetailField>
+            ) : null}
             <RequestDetailField label="总时间">
               {seconds(request.latencyMs)}
             </RequestDetailField>
             <RequestDetailField label="首 token">
-              {seconds(request.firstTokenLatencyMs)}
+              {seconds(request.upstreamFirstChunkLatencyMs)}
             </RequestDetailField>
             <RequestDetailField label="创建时间">
               {dateTime(request.createdAt)}
@@ -803,11 +817,23 @@ function RequestDetailModal({
               {formatNumber(request.totalTokens)}
             </RequestDetailField>
             <RequestDetailField label="费用" wide>
-              用户扣费 ${money(request.chargedAmountUsd)} · 上游成本 $
-              {money(request.upstreamCostUsd ?? "0")} · 毛利 $
-              {money(
-                Number(request.chargedAmountUsd) -
-                  Number(request.upstreamCostUsd ?? 0),
+              {showInternalFields ? (
+                <>
+                  用户扣费 ${money(request.chargedAmountUsd)} · 上游成本 $
+                  {money(request.upstreamCostUsd ?? "0")} · 毛利 $
+                  {money(
+                    Number(request.chargedAmountUsd) -
+                      Number(request.upstreamCostUsd ?? 0),
+                  )}
+                  <br />
+                  订阅抵扣 ${money(request.subscriptionChargedAmountUsd ?? "0")} ·
+                  钱包扣费 $
+                  {money(
+                    request.walletChargedAmountUsd ?? request.chargedAmountUsd,
+                  )}
+                </>
+              ) : (
+                <>用户扣费 ${money(request.chargedAmountUsd)}</>
               )}
             </RequestDetailField>
           </div>
@@ -1154,7 +1180,7 @@ function buildRequestProcess(
             : "warn",
       detail: manualTerminated
         ? `HTTP ${request.httpStatus ?? "-"} · 上游请求 ID ${request.upstreamRequestId ?? "-"} · 已被管理员终止 · 总时间 ${seconds(request.latencyMs)}`
-        : `HTTP ${request.httpStatus ?? "-"} · 上游请求 ID ${request.upstreamRequestId ?? "-"} · 总时间 ${seconds(request.latencyMs)} · 首 token ${seconds(request.firstTokenLatencyMs)}`,
+        : `HTTP ${request.httpStatus ?? "-"} · 上游请求 ID ${request.upstreamRequestId ?? "-"} · 总时间 ${seconds(request.latencyMs)} · 首 token ${seconds(request.upstreamFirstChunkLatencyMs)}`,
     },
     {
       title: compactFallback ? "5. Usage 与扣费" : "4. Usage 与扣费",

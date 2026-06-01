@@ -1,7 +1,7 @@
 "use client";
 
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Eye, Search, ShieldAlert, Square } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Eye, Search, ShieldAlert, SlidersHorizontal, Square } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
@@ -14,36 +14,101 @@ import {
   type ApiRequestStatus,
   type GetRequestsParams,
 } from "../../../lib/api/requests";
+import { getAdminUsers } from "../../../lib/api/users";
 import { AdminScrollLock } from "../components/admin-scroll-lock";
 import { RequestDetailDrawer } from "./components/request-detail-drawer";
 
 const defaultFilters = {
   q: "",
+  userId: "",
   status: "",
   resultType: "",
   dateFrom: "",
   dateTo: "",
   model: "",
   clientIp: "",
+  apiKey: "",
+  upstreamProvider: "",
+  upstreamKey: "",
+  endpoint: "",
+  httpStatus: "",
+  minTokens: "",
+  maxTokens: "",
+  minChargedUsd: "",
+  maxChargedUsd: "",
+  minUpstreamCostUsd: "",
+  maxUpstreamCostUsd: "",
+  minGrossProfitUsd: "",
+  maxGrossProfitUsd: "",
+  minLatencyMs: "",
+  maxLatencyMs: "",
+  minFirstTokenLatencyMs: "",
+  maxFirstTokenLatencyMs: "",
   take: 120,
 };
+
+const advancedFilterKeys = [
+  "clientIp",
+  "apiKey",
+  "upstreamProvider",
+  "upstreamKey",
+  "endpoint",
+  "httpStatus",
+  "resultType",
+  "minTokens",
+  "maxTokens",
+  "minChargedUsd",
+  "maxChargedUsd",
+  "minUpstreamCostUsd",
+  "maxUpstreamCostUsd",
+  "minGrossProfitUsd",
+  "maxGrossProfitUsd",
+  "minLatencyMs",
+  "maxLatencyMs",
+  "minFirstTokenLatencyMs",
+  "maxFirstTokenLatencyMs",
+] as const;
 
 export default function AdminRequestsPage() {
   const queryClient = useQueryClient();
   const { filters, setFilters, resetFilters } = useUrlFilters(defaultFilters);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [terminatingRequest, setTerminatingRequest] = useState<ApiRequestRecord | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const usersQuery = useQuery({
+    queryKey: ["admin", "users", "request-filter"],
+    queryFn: getAdminUsers,
+    staleTime: 60_000,
+  });
 
   const requestParams = useMemo<GetRequestsParams>(
     () => ({
       q: filters.q,
+      userId: filters.userId,
       status: filters.status as ApiRequestStatus | undefined,
       resultType: filters.resultType as ApiRequestResultType | undefined,
       dateFrom: toIsoDateTime(filters.dateFrom, "start"),
       dateTo: toIsoDateTime(filters.dateTo, "end"),
       model: filters.model,
       clientIp: filters.clientIp,
+      apiKey: filters.apiKey,
+      upstreamProvider: filters.upstreamProvider,
+      upstreamKey: filters.upstreamKey,
+      endpoint: filters.endpoint,
+      httpStatus: filters.httpStatus,
+      minTokens: filters.minTokens,
+      maxTokens: filters.maxTokens,
+      minChargedUsd: filters.minChargedUsd,
+      maxChargedUsd: filters.maxChargedUsd,
+      minUpstreamCostUsd: filters.minUpstreamCostUsd,
+      maxUpstreamCostUsd: filters.maxUpstreamCostUsd,
+      minGrossProfitUsd: filters.minGrossProfitUsd,
+      maxGrossProfitUsd: filters.maxGrossProfitUsd,
+      minLatencyMs: filters.minLatencyMs,
+      maxLatencyMs: filters.maxLatencyMs,
+      minFirstTokenLatencyMs: filters.minFirstTokenLatencyMs,
+      maxFirstTokenLatencyMs: filters.maxFirstTokenLatencyMs,
       take: filters.take,
     }),
     [filters],
@@ -54,7 +119,7 @@ export default function AdminRequestsPage() {
     queryFn: ({ pageParam }) => getRequests({ ...requestParams, cursor: pageParam || undefined }),
     initialPageParam: "",
     getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextCursor : undefined),
-    refetchInterval: 2000,
+    refetchInterval: 15_000,
     refetchIntervalInBackground: false,
     staleTime: 0,
   });
@@ -71,6 +136,8 @@ export default function AdminRequestsPage() {
 
   const rows = requestsQuery.data?.pages.flatMap((page) => page.requests) ?? [];
   const firstPage = requestsQuery.data?.pages[0];
+  const activeAdvancedCount = countActiveAdvancedFilters(filters);
+  const users = usersQuery.data ?? [];
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -92,50 +159,103 @@ export default function AdminRequestsPage() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <label className="grid gap-2 xl:col-span-2">
-            <span className="text-sm font-medium text-slate-700">搜索</span>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={filters.q}
-                onChange={(event) => setFilters({ q: event.target.value })}
-                placeholder="Trace / 模型 / 端点 / IP / 邮箱"
-                className="h-10 w-full rounded-md border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              />
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(240px,1.5fr)_minmax(160px,1fr)_120px_minmax(130px,1fr)_145px_145px_auto] xl:items-end">
+            <label className="grid gap-1.5">
+              <span className="text-sm font-medium text-slate-700">搜索</span>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={filters.q}
+                  onChange={(event) => setFilters({ q: event.target.value })}
+                  placeholder="Trace / 模型 / 端点 / IP / 邮箱"
+                  className={inputClassName("pl-9")}
+                />
+              </div>
+            </label>
+
+            <Select label="用户" value={filters.userId} onChange={(userId) => setFilters({ userId })} compact>
+              <option value="">全部用户</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.email}
+                </option>
+              ))}
+            </Select>
+
+            <Select label="状态" value={filters.status} onChange={(status) => setFilters({ status })} compact>
+              <option value="">全部状态</option>
+              <option value="SUCCESS">SUCCESS</option>
+              <option value="FAILED">FAILED</option>
+              <option value="PENDING">PENDING</option>
+            </Select>
+
+            <TextInput label="模型" value={filters.model} onChange={(model) => setFilters({ model })} placeholder="gpt-5.5" compact />
+            <DateInput label="开始时间" value={filters.dateFrom} onChange={(dateFrom) => setFilters({ dateFrom })} compact />
+            <DateInput label="结束时间" value={filters.dateTo} onChange={(dateTo) => setFilters({ dateTo })} compact />
+
+            <div className="flex gap-2 xl:justify-end">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((open) => !open)}
+                aria-expanded={advancedOpen}
+                className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+                高级筛选
+                {activeAdvancedCount > 0 ? (
+                  <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                    {activeAdvancedCount}
+                  </span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="inline-flex h-10 items-center rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                重置筛选
+              </button>
             </div>
-          </label>
-
-          <Select label="状态" value={filters.status} onChange={(status) => setFilters({ status })}>
-            <option value="">全部</option>
-            <option value="PENDING">PENDING</option>
-            <option value="SUCCESS">SUCCESS</option>
-            <option value="FAILED">FAILED</option>
-          </Select>
-
-          <Select label="结果类型" value={filters.resultType} onChange={(resultType) => setFilters({ resultType })}>
-            <option value="">全部</option>
-            <option value="PROXIED_SUCCESS">PROXIED_SUCCESS</option>
-            <option value="UPSTREAM_ERROR">UPSTREAM_ERROR</option>
-            <option value="RATE_LIMITED">RATE_LIMITED</option>
-            <option value="MANUAL_TERMINATED">MANUAL_TERMINATED</option>
-            <option value="error">普通错误</option>
-          </Select>
-
-          <TextInput label="模型" value={filters.model} onChange={(model) => setFilters({ model })} />
-          <TextInput label="客户端 IP" value={filters.clientIp} onChange={(clientIp) => setFilters({ clientIp })} />
-          <DateInput label="开始日期" value={filters.dateFrom} onChange={(dateFrom) => setFilters({ dateFrom })} />
-          <DateInput label="结束日期" value={filters.dateTo} onChange={(dateTo) => setFilters({ dateTo })} />
-
-          <div className="flex items-end gap-3 xl:col-span-2">
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="inline-flex h-10 items-center rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-            >
-              重置筛选
-            </button>
           </div>
+
+          {advancedOpen ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <TextInput label="客户端 IP" value={filters.clientIp} onChange={(clientIp) => setFilters({ clientIp })} placeholder="203.0.113.10" />
+                <TextInput label="API Key" value={filters.apiKey} onChange={(apiKey) => setFilters({ apiKey })} placeholder="名称 / 前缀" />
+                <TextInput label="上游 Provider" value={filters.upstreamProvider} onChange={(upstreamProvider) => setFilters({ upstreamProvider })} placeholder="openai" />
+                <TextInput label="上游 Key" value={filters.upstreamKey} onChange={(upstreamKey) => setFilters({ upstreamKey })} placeholder="名称 / 前缀" />
+                <TextInput label="Endpoint" value={filters.endpoint} onChange={(endpoint) => setFilters({ endpoint })} placeholder="/v1/responses" />
+                <TextInput label="HTTP 状态" value={filters.httpStatus} onChange={(httpStatus) => setFilters({ httpStatus })} placeholder="429" type="number" />
+
+                <Select label="结果类型" value={filters.resultType} onChange={(resultType) => setFilters({ resultType })}>
+                  <option value="">全部</option>
+                  <option value="PROXIED_SUCCESS">转发成功</option>
+                  <option value="UPSTREAM_ERROR">上游失败</option>
+                  <option value="GATEWAY_NOTICE">网关公告</option>
+                  <option value="IP_BAN">IP 封禁</option>
+                  <option value="RATE_LIMITED">限流拒绝</option>
+                  <option value="INSUFFICIENT_BALANCE">余额不足</option>
+                  <option value="MANUAL_TERMINATED">手动终止</option>
+                  <option value="AUTO_TERMINATED">自动终止</option>
+                  <option value="BILLING_ERROR">计费异常</option>
+                  <option value="CLIENT_CLOSED">客户端断开</option>
+                  <option value="GATEWAY_ERROR">网关错误</option>
+                  <option value="notice">兼容：公告</option>
+                  <option value="ip_ban">兼容：IP 封禁</option>
+                  <option value="error">兼容：普通错误</option>
+                </Select>
+
+                <RangeInput label="Token" min={filters.minTokens} max={filters.maxTokens} onMinChange={(minTokens) => setFilters({ minTokens })} onMaxChange={(maxTokens) => setFilters({ maxTokens })} />
+                <RangeInput label="扣费 USD" min={filters.minChargedUsd} max={filters.maxChargedUsd} onMinChange={(minChargedUsd) => setFilters({ minChargedUsd })} onMaxChange={(maxChargedUsd) => setFilters({ maxChargedUsd })} />
+                <RangeInput label="上游成本 USD" min={filters.minUpstreamCostUsd} max={filters.maxUpstreamCostUsd} onMinChange={(minUpstreamCostUsd) => setFilters({ minUpstreamCostUsd })} onMaxChange={(maxUpstreamCostUsd) => setFilters({ maxUpstreamCostUsd })} />
+                <RangeInput label="毛利 USD" min={filters.minGrossProfitUsd} max={filters.maxGrossProfitUsd} onMinChange={(minGrossProfitUsd) => setFilters({ minGrossProfitUsd })} onMaxChange={(maxGrossProfitUsd) => setFilters({ maxGrossProfitUsd })} />
+                <RangeInput label="总耗时 ms" min={filters.minLatencyMs} max={filters.maxLatencyMs} onMinChange={(minLatencyMs) => setFilters({ minLatencyMs })} onMaxChange={(maxLatencyMs) => setFilters({ maxLatencyMs })} />
+                <RangeInput label="首 token ms" min={filters.minFirstTokenLatencyMs} max={filters.maxFirstTokenLatencyMs} onMinChange={(minFirstTokenLatencyMs) => setFilters({ minFirstTokenLatencyMs })} onMaxChange={(maxFirstTokenLatencyMs) => setFilters({ maxFirstTokenLatencyMs })} />
+              </div>
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -162,64 +282,70 @@ export default function AdminRequestsPage() {
           <div className="p-4 text-sm font-medium text-red-600">调用记录加载失败，请检查筛选条件后重试。</div>
         ) : (
           <>
-            <div className="min-h-0 flex-1 overflow-x-auto">
+            <div className="min-h-0 flex-1 overflow-hidden">
               <div className="h-full overflow-y-auto">
-                <table className="min-w-[1580px] w-full text-left">
+                <table className="w-full table-fixed text-left">
+                <colgroup>
+                  <col className="w-[16%]" />
+                  <col className="w-[19%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[17%]" />
+                </colgroup>
                 <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
                   <tr>
-                    <th className="px-5 py-3">ID / Trace</th>
-                    <th className="px-5 py-3">时间</th>
-                    <th className="px-5 py-3">模型</th>
-                    <th className="px-5 py-3">用户信息</th>
-                    <th className="px-5 py-3">耗时 / 思考</th>
-                    <th className="px-5 py-3">Token 明细</th>
-                    <th className="px-5 py-3">状态</th>
-                    <th className="px-5 py-3 text-right">操作</th>
+                    <th className="px-2 py-2.5">ID / Trace</th>
+                    <th className="px-2 py-2.5">调用信息</th>
+                    <th className="px-2 py-2.5">用户信息</th>
+                    <th className="px-2 py-2.5">用量 / 耗时</th>
+                    <th className="px-2 py-2.5">费用</th>
+                    <th className="px-2 py-2.5 text-right">状态 / 操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {rows.map((item) => (
                     <tr key={item.id} className="hover:bg-slate-50/70">
-                      <td className="px-5 py-4">
+                      <td className="px-2 py-2 align-top">
                         <button
                           type="button"
                           onClick={() => setSelectedRequestId(item.id)}
-                          className="font-mono text-xs font-semibold text-blue-700 hover:text-blue-800"
+                          className="block max-w-full truncate font-mono text-xs font-semibold text-blue-700 hover:text-blue-800"
                         >
                           {item.traceCode ?? item.id}
                         </button>
-                        <div className="mt-1 font-mono text-xs text-slate-400">{item.id}</div>
+                        <div className="mt-1 truncate font-mono text-[11px] text-slate-400">{item.id}</div>
+                        <div className="mt-1 text-xs text-slate-500">{formatDate(item.createdAt)}</div>
                       </td>
-                      <td className="px-5 py-4 text-sm text-slate-600">{formatDate(item.createdAt)}</td>
-                      <td className="px-5 py-4">
-                        <div className="font-medium text-slate-950">{item.model}</div>
-                        <div className="mt-1 text-xs text-slate-500">等级：{formatAccessTier(item.accessTier)}</div>
-                        <div className="mt-1 text-xs text-slate-500">上游渠道：{item.upstreamProvider ?? "-"}</div>
-                        <div className="mt-1 text-xs text-slate-500">{item.method} {item.endpoint}</div>
+                      <td className="px-2 py-2 align-top">
+                        <div className="truncate font-medium text-slate-950" title={item.model}>{item.model}</div>
+                        <div className="mt-0.5 truncate text-xs text-slate-500">等级：{formatAccessTier(item.accessTier)}</div>
+                        <div className="mt-0.5 truncate text-xs text-slate-500" title={`${item.method} ${item.endpoint}`}>{item.method} {item.endpoint}</div>
+                        <div className="mt-0.5 truncate text-xs text-slate-500">上游：{item.upstreamProvider ?? "-"}</div>
+                        <div className="mt-0.5 truncate text-xs text-slate-500" title={formatRef(item.upstreamProviderKey)}>上游 Key：{formatRef(item.upstreamProviderKey)}</div>
                       </td>
-                      <td className="px-5 py-4 text-sm text-slate-600">
-                        <div className="font-medium text-slate-900">{item.user?.email ?? "-"}</div>
-                        <div className="mt-1">Key：{formatRef(item.apiKey)}</div>
-                        <div className="mt-1">IP：{item.clientIp ?? "-"}</div>
+                      <td className="px-2 py-2 align-top text-sm text-slate-600">
+                        <div className="truncate font-medium text-slate-900" title={item.user?.email ?? "-"}>{item.user?.email ?? "-"}</div>
+                        <div className="mt-0.5 truncate text-xs">Key：{formatRef(item.apiKey)}</div>
+                        <div className="mt-0.5 truncate text-xs">IP：{item.clientIp ?? "-"}</div>
                       </td>
-                      <td className="px-5 py-4 text-sm text-slate-600">
-                        <div>总时间：{seconds(item.latencyMs)}</div>
-                        <div className="mt-1">首 token：{seconds(item.firstTokenLatencyMs)}</div>
-                        <div className="mt-1">思考强度：{formatReasoningEffortCell(item.reasoningEffort, item.reasoningEffortActual)}</div>
-                      </td>
-                      <td className="px-5 py-4">
+                      <td className="px-2 py-2 align-top">
                         <TokenBreakdown request={item} />
                       </td>
-                      <td className="px-5 py-4">
-                        <Badge tone={statusTone(item.status)}>{item.status}</Badge>
-                        {item.httpStatus ? <div className="mt-2 text-xs text-slate-500">HTTP {item.httpStatus}</div> : null}
+                      <td className="px-2 py-2 align-top">
+                        <CostBreakdown request={item} />
                       </td>
-                      <td className="px-5 py-4 text-right">
-                        <div className="flex justify-end gap-2">
+                      <td className="px-2 py-2 text-right align-middle">
+                        <div className="flex min-h-[96px] flex-col items-end justify-center gap-2">
+                        <div>
+                          <Badge tone={statusTone(item.status)}>{item.status}</Badge>
+                          {item.httpStatus ? <div className="mt-1 text-xs text-slate-500">HTTP {item.httpStatus}</div> : null}
+                        </div>
+                        <div className="flex flex-col items-end gap-1.5">
                           <button
                             type="button"
                             onClick={() => setSelectedRequestId(item.id)}
-                            className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                            className="inline-flex h-8 w-[86px] items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                           >
                             <Eye className="h-4 w-4" aria-hidden="true" />
                             详情
@@ -228,12 +354,15 @@ export default function AdminRequestsPage() {
                             <button
                               type="button"
                               onClick={() => setTerminatingRequest(item)}
-                              className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 text-sm font-medium text-red-700 transition-colors hover:bg-red-100"
+                              className="inline-flex h-8 w-[86px] items-center justify-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 text-xs font-medium text-red-700 transition-colors hover:bg-red-100"
                             >
                               <Square className="h-3 w-3" aria-hidden="true" />
-                              强制终止
+                              终止
                             </button>
-                          ) : null}
+                          ) : (
+                            <span aria-hidden="true" className="inline-flex h-8 w-[86px]" />
+                          )}
+                        </div>
                         </div>
                       </td>
                     </tr>
@@ -293,31 +422,85 @@ function TokenBreakdown({ request }: { request: ApiRequestRecord }) {
     { label: "输入", value: request.inputTokens ?? 0 },
     { label: "缓存", value: request.cachedInputTokens ?? 0 },
     { label: "输出", value: request.outputTokens ?? 0 },
+    { label: "总计", value: request.totalTokens ?? 0, strong: true },
+    { label: "总耗时", value: seconds(request.latencyMs), text: true },
+    { label: "首 token", value: seconds(request.upstreamFirstChunkLatencyMs), text: true },
   ];
 
   return (
-    <div className="w-64 rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="w-full rounded-md border border-slate-200 bg-slate-50 p-1.5">
       <div className="grid grid-cols-3 gap-2">
         {items.map((item) => (
-          <div key={item.label} className="rounded-md bg-white px-2 py-2 ring-1 ring-slate-200">
+          <div key={item.label} className="rounded-md bg-white px-1.5 py-1 ring-1 ring-slate-200">
             <div className="text-[11px] font-medium text-slate-500">{item.label}</div>
-            <div className="mt-1 font-mono text-sm font-semibold tabular-nums text-slate-950">
-              {formatInteger(item.value)}
+            <div
+              className={
+                item.strong
+                  ? "mt-1 font-mono text-sm font-bold tabular-nums text-slate-950"
+                  : "mt-1 font-mono text-sm font-semibold tabular-nums text-slate-950"
+              }
+            >
+              {item.text ? item.value : formatInteger(Number(item.value))}
             </div>
           </div>
         ))}
       </div>
-      <div className="mt-2 flex items-center justify-between rounded-md bg-slate-900 px-3 py-2 text-white">
-        <span className="text-xs font-medium text-slate-300">总计</span>
-        <strong className="font-mono text-sm tabular-nums">{formatInteger(request.totalTokens ?? 0)}</strong>
+      <div className="mt-1 truncate text-xs text-slate-500">
+        思考：{formatReasoningEffortCell(request.reasoningEffort, request.reasoningEffortActual)}
       </div>
     </div>
   );
 }
 
-function Select({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode }) {
+function CostBreakdown({ request }: { request: ApiRequestRecord }) {
+  const chargedAmount = Number(request.chargedAmountUsd ?? 0);
+  const upstreamCost = Number(request.upstreamCostUsd ?? 0);
+  const grossProfit = chargedAmount - upstreamCost;
+  const items = [
+    { label: "账单", value: request.chargedAmountUsd, strong: true },
+    { label: "订阅", value: request.subscriptionChargedAmountUsd ?? "0" },
+    { label: "钱包", value: request.walletChargedAmountUsd ?? request.chargedAmountUsd },
+    { label: "成本", value: request.upstreamCostUsd },
+    { label: "毛利", value: Number.isFinite(grossProfit) ? String(grossProfit) : "0" },
+  ];
+
   return (
-    <label className="grid gap-2">
+    <div className="w-full rounded-md border border-slate-200 bg-slate-50 p-1.5">
+      <div className="grid grid-cols-2 gap-1.5">
+        {items.map((item) => (
+          <div key={item.label} className="rounded-md bg-white px-1.5 py-1 ring-1 ring-slate-200">
+            <div className="text-[11px] font-medium text-slate-500">{item.label}</div>
+            <div
+              className={
+                item.strong
+                  ? "mt-1 font-mono text-sm font-bold tabular-nums text-slate-950"
+                  : "mt-1 font-mono text-xs font-semibold tabular-nums text-slate-700"
+              }
+            >
+              {formatMoney(item.value)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Select({
+  label,
+  value,
+  onChange,
+  children,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+  compact?: boolean;
+}) {
+  return (
+    <label className={compact ? "grid gap-1.5" : "grid gap-2"}>
       <span className="text-sm font-medium text-slate-700">{label}</span>
       <select value={value} onChange={(event) => onChange(event.target.value)} className={inputClass}>
         {children}
@@ -326,18 +509,85 @@ function Select({ label, value, onChange, children }: { label: string; value: st
   );
 }
 
-function TextInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function TextInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: "text" | "number";
+  compact?: boolean;
+}) {
   return (
-    <label className="grid gap-2">
+    <label className={compact ? "grid gap-1.5" : "grid gap-2"}>
       <span className="text-sm font-medium text-slate-700">{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} />
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={inputClass}
+        placeholder={placeholder}
+        type={type}
+      />
     </label>
   );
 }
 
-function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function RangeInput({
+  label,
+  min,
+  max,
+  onMinChange,
+  onMaxChange,
+}: {
+  label: string;
+  min: string;
+  max: string;
+  onMinChange: (value: string) => void;
+  onMaxChange: (value: string) => void;
+}) {
   return (
     <label className="grid gap-2">
+      <span className="text-sm font-medium text-slate-700">{label}</span>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+        <input
+          value={min}
+          onChange={(event) => onMinChange(event.target.value)}
+          className={inputClass}
+          inputMode="decimal"
+          placeholder="最小"
+        />
+        <span className="text-sm text-slate-400">-</span>
+        <input
+          value={max}
+          onChange={(event) => onMaxChange(event.target.value)}
+          className={inputClass}
+          inputMode="decimal"
+          placeholder="最大"
+        />
+      </div>
+    </label>
+  );
+}
+
+function DateInput({
+  label,
+  value,
+  onChange,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  compact?: boolean;
+}) {
+  return (
+    <label className={compact ? "grid gap-1.5" : "grid gap-2"}>
       <span className="text-sm font-medium text-slate-700">{label}</span>
       <input type="date" value={value} onChange={(event) => onChange(event.target.value)} className={inputClass} />
     </label>
@@ -380,6 +630,14 @@ function formatInteger(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+function formatMoney(value: string | number | null | undefined) {
+  const numeric = Number(value ?? 0);
+  return `$${new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 8,
+  }).format(Number.isFinite(numeric) ? numeric : 0)}`;
+}
+
 function seconds(value: number | null | undefined) {
   if (value === null || value === undefined) return "-";
   const numeric = Number(value);
@@ -418,6 +676,14 @@ function formatDate(value: string) {
     minute: "2-digit",
     second: "2-digit",
   }).format(new Date(value));
+}
+
+function countActiveAdvancedFilters(filters: typeof defaultFilters) {
+  return advancedFilterKeys.filter((key) => String(filters[key] ?? "").trim()).length;
+}
+
+function inputClassName(extraClassName = "") {
+  return `${inputClass} ${extraClassName}`.trim();
 }
 
 const inputClass =

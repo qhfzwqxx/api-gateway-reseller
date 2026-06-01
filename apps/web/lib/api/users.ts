@@ -24,6 +24,7 @@ export interface AdminUserApiKey {
   userId: string;
   name: string;
   keyPrefix: string;
+  keySecret?: string | null;
   status: string;
   rateLimitPerMinute: number;
   concurrencyLimit: number;
@@ -42,6 +43,8 @@ export interface AdminUserApiKey {
   createdAt: string;
   lastUsedAt?: string | null;
   usedUsd?: string;
+  totalUsedUsd?: string;
+  totalRemainingUsd?: string | null;
 }
 
 export interface AdminUserModelMapping {

@@ -63,6 +63,12 @@ type GatewayNoticeSettings = {
   missingUsageMessage: string;
   staleResponsesContextMessage: string;
   invalidEncryptedContentMessage: string;
+  upstreamBalanceInsufficientMessage: string;
+};
+
+type UpstreamOutputFilterSettings = {
+  enabled: boolean;
+  phrases: string[];
 };
 
 type RedisFailurePolicySettings = {
@@ -105,6 +111,7 @@ type RiskCenter = {
   temporaryIpNoticeBanSettings: TemporaryIpNoticeBanSettings;
   pendingAutoTerminateSettings: PendingAutoTerminateSettings;
   gatewayNoticeSettings: GatewayNoticeSettings;
+  upstreamOutputFilterSettings: UpstreamOutputFilterSettings;
   redisFailurePolicySettings: RedisFailurePolicySettings;
   globalCircuitBreakerSettings: GlobalCircuitBreakerSettings;
   externalAlertSettings: ExternalAlertSettings;
@@ -187,7 +194,7 @@ function AdminRiskCenterPanel({
     null,
   );
   const [riskModal, setRiskModal] = useState<
-    "circuit" | "redis" | "external-alert" | null
+    "circuit" | "redis" | "external-alert" | "ip-policy" | null
   >(null);
 
   useEffect(() => {
@@ -346,89 +353,90 @@ function AdminRiskCenterPanel({
         </div>
       </section>
 
-      <section className="card">
-        <div className="section-head">
-          <div>
-            <h2 className="section-title">策略状态</h2>
-            <p className="section-subtitle">
-              这里只做集中巡检；具体文案和规则仍在公告返回、全站调用等页面维护。
-            </p>
+      <div className="admin-risk-workbench">
+        <section className="card admin-risk-status-card">
+          <div className="section-head">
+            <div>
+              <h2 className="section-title">策略状态</h2>
+              <p className="section-subtitle">
+                集中巡检当前风险策略，具体文案和规则仍在公告返回、全站调用等页面维护。
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="status-grid">
-          <StatusTile
-            label="临时 IP Notice"
-            ok={ipNoticeSettings?.enabled}
-            value={
-              ipNoticeSettings
-                ? `${ipNoticeSettings.threshold} 次 / ${ipNoticeSettings.windowSeconds}s`
-                : "-"
-            }
-          />
-          <StatusTile
-            label="Pending 自动终止"
-            ok={autoTerminateSettings?.enabled}
-            value={
-              autoTerminateSettings
-                ? `${autoTerminateSettings.timeoutSeconds}s`
-                : "-"
-            }
-          />
-          <StatusTile
-            label="公益服务"
-            ok={charitySettings?.serviceEnabled}
-            value={charitySettings?.serviceEnabled ? "开放" : "暂停"}
-          />
-          <StatusTile
-            label="Redis 失败策略"
-            ok={
-              riskCenter?.redisFailurePolicySettings.policy === "fail-open"
-                ? undefined
-                : true
-            }
-            value={riskCenter?.redisFailurePolicySettings.policy ?? "-"}
-          />
-          <StatusTile
-            label="全局熔断"
-            ok={
-              riskCenter?.globalCircuitBreakerSettings.enabled
-                ? true
-                : undefined
-            }
-            value={
-              riskCenter?.globalCircuitBreakerSettings.enabled
-                ? "已开启"
-                : "未开启"
-            }
-          />
-          <StatusTile
-            label="外部告警"
-            ok={riskCenter?.externalAlertSettings.enabled ? true : undefined}
-            value={
-              riskCenter?.externalAlertSettings.enabled
-                ? `${riskCenter.externalAlertSettings.minSeverity}+ / ${riskCenter.externalAlertSettings.intervalSeconds}s`
-                : "未开启"
-            }
-          />
-          <StatusTile
-            label="永久 IP 规则"
-            ok={(riskCenter?.ipBanRules.length ?? 0) === 0 ? undefined : true}
-            value={`${riskCenter?.ipBanRules.length ?? 0} 条`}
-          />
-        </div>
-      </section>
+          <div className="status-grid">
+            <StatusTile
+              label="临时 IP Notice"
+              ok={ipNoticeSettings?.enabled}
+              value={
+                ipNoticeSettings
+                  ? `${ipNoticeSettings.threshold} 次 / ${ipNoticeSettings.windowSeconds}s`
+                  : "-"
+              }
+            />
+            <StatusTile
+              label="Pending 自动终止"
+              ok={autoTerminateSettings?.enabled}
+              value={
+                autoTerminateSettings
+                  ? `${autoTerminateSettings.timeoutSeconds}s`
+                  : "-"
+              }
+            />
+            <StatusTile
+              label="公益服务"
+              ok={charitySettings?.serviceEnabled}
+              value={charitySettings?.serviceEnabled ? "开放" : "暂停"}
+            />
+            <StatusTile
+              label="Redis 失败策略"
+              ok={
+                riskCenter?.redisFailurePolicySettings.policy === "fail-open"
+                  ? undefined
+                  : true
+              }
+              value={riskCenter?.redisFailurePolicySettings.policy ?? "-"}
+            />
+            <StatusTile
+              label="全局熔断"
+              ok={
+                riskCenter?.globalCircuitBreakerSettings.enabled
+                  ? true
+                  : undefined
+              }
+              value={
+                riskCenter?.globalCircuitBreakerSettings.enabled
+                  ? "已开启"
+                  : "未开启"
+              }
+            />
+            <StatusTile
+              label="外部告警"
+              ok={riskCenter?.externalAlertSettings.enabled ? true : undefined}
+              value={
+                riskCenter?.externalAlertSettings.enabled
+                  ? `${riskCenter.externalAlertSettings.minSeverity}+ / ${riskCenter.externalAlertSettings.intervalSeconds}s`
+                  : "未开启"
+              }
+            />
+            <StatusTile
+              label="永久 IP 规则"
+              ok={(riskCenter?.ipBanRules.length ?? 0) === 0 ? undefined : true}
+              value={`${riskCenter?.ipBanRules.length ?? 0} 条`}
+            />
+          </div>
+        </section>
 
-      <section className="card">
-        <div className="section-head">
-          <div>
-            <h2 className="section-title">运维策略</h2>
-            <p className="section-subtitle">
-              高风险配置统一收进弹窗，页面保留状态和入口。
-            </p>
+        <section className="card admin-risk-actions-card">
+          <div className="section-head">
+            <div>
+              <h2 className="section-title">运维策略</h2>
+              <p className="section-subtitle">
+                高风险配置统一收进弹窗，页面保留状态和入口。
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="admin-settings-stack">
-          <section className="admin-action-card">
+          <div className="admin-settings-stack">
+            <section className="admin-action-card">
             <div>
               <strong>全局熔断</strong>
               <small>
@@ -449,9 +457,9 @@ function AdminRiskCenterPanel({
                 配置
               </button>
             </div>
-          </section>
+            </section>
 
-          <section className="admin-action-card">
+            <section className="admin-action-card">
             <div>
               <strong>Redis 异常策略</strong>
               <small>控制限流和并发依赖 Redis 失败时的网关行为。</small>
@@ -474,9 +482,9 @@ function AdminRiskCenterPanel({
                 配置
               </button>
             </div>
-          </section>
+            </section>
 
-          <section className="admin-action-card">
+            <section className="admin-action-card">
             <div>
               <strong>外部告警推送</strong>
               <small>通过 webhook 推送到企业微信、飞书或自建通知服务。</small>
@@ -497,9 +505,64 @@ function AdminRiskCenterPanel({
                 配置
               </button>
             </div>
-          </section>
-        </div>
-      </section>
+            </section>
+          </div>
+        </section>
+
+        <AdminPanel
+          className="admin-risk-ip-card"
+          actions={
+            <button
+              className="button secondary compact"
+              onClick={() => setRiskModal("ip-policy")}
+              type="button"
+            >
+              查看明细
+            </button>
+          }
+          description="永久封禁与临时 notice 封禁集中预览。"
+          title="IP 策略"
+        >
+          <div className="admin-risk-ip-summary">
+            <StatusTile
+              label="永久规则"
+              ok={(riskCenter?.ipBanRules.length ?? 0) > 0 ? true : undefined}
+              value={`${riskCenter?.ipBanRules.length ?? 0} 条`}
+            />
+            <StatusTile
+              label="临时 Notice"
+              ok={
+                (riskCenter?.temporaryIpNoticeBans.length ?? 0) > 0
+                  ? true
+                  : undefined
+              }
+              value={`${riskCenter?.temporaryIpNoticeBans.length ?? 0} 条`}
+            />
+          </div>
+        </AdminPanel>
+      </div>
+
+      {riskModal === "ip-policy" ? (
+        <ModalShell
+          description="永久封禁与临时 notice 封禁集中预览。"
+          onClose={() => setRiskModal(null)}
+          title="IP 策略"
+          wide
+        >
+          <div className="modal-body">
+            <AdminDataTable
+              columns={[
+                { accessorKey: "type", header: "类型" },
+                { accessorKey: "ip", header: "IP" },
+                { accessorKey: "modeOrTtl", header: "模式 / TTL" },
+                { accessorKey: "note", header: "说明" },
+              ]}
+              data={ipPolicyRows}
+              empty="暂无 IP 策略"
+            />
+          </div>
+        </ModalShell>
+      ) : null}
 
       {riskModal === "circuit" ? (
         <ModalShell
@@ -842,21 +905,6 @@ function AdminRiskCenterPanel({
         </ModalShell>
       ) : null}
 
-      <AdminPanel
-        description="永久封禁与临时 notice 封禁集中预览。"
-        title="IP 策略"
-      >
-        <AdminDataTable
-          columns={[
-            { accessorKey: "type", header: "类型" },
-            { accessorKey: "ip", header: "IP" },
-            { accessorKey: "modeOrTtl", header: "模式 / TTL" },
-            { accessorKey: "note", header: "说明" },
-          ]}
-          data={ipPolicyRows}
-          empty="暂无 IP 策略"
-        />
-      </AdminPanel>
     </div>
   );
 }

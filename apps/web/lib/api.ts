@@ -17,7 +17,16 @@ function resolveApiBaseUrl() {
   return "http://127.0.0.1:4100";
 }
 
+function resolveApiRequestBaseUrl() {
+  if (typeof window !== "undefined" && window.location.protocol.startsWith("http")) {
+    return "/api";
+  }
+
+  return resolveApiBaseUrl();
+}
+
 export const apiBaseUrl = resolveApiBaseUrl();
+const apiRequestBaseUrl = resolveApiRequestBaseUrl();
 
 export function getToken() {
   if (typeof window === "undefined") {
@@ -47,7 +56,7 @@ export async function apiFetch<T>(
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${apiBaseUrl}${path}`, {
+  const response = await fetch(`${apiRequestBaseUrl}${path}`, {
     ...init,
     headers,
   });

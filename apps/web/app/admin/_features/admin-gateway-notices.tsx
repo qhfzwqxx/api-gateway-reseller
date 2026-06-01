@@ -59,6 +59,7 @@ type GatewayNoticeSettings = {
   missingUsageMessage: string;
   staleResponsesContextMessage: string;
   invalidEncryptedContentMessage: string;
+  upstreamBalanceInsufficientMessage: string;
 };
 
 type CharityAnnouncementSettings = {
@@ -160,6 +161,11 @@ const gatewayNoticeFields: Array<{
     key: "invalidEncryptedContentMessage",
     label: "加密上下文失效",
     hint: "encrypted content 不可用",
+  },
+  {
+    key: "upstreamBalanceInsufficientMessage",
+    label: "上游余额或额度不足",
+    hint: "余额、额度、欠费或 quota exhausted",
   },
 ];
 
@@ -613,120 +619,134 @@ function AdminGatewayNoticesPanel({
                 </span>
               </div>
               {charityDraft ? (
-                <form className="form" onSubmit={saveCharity}>
-                  <div className="grid cols-2">
-                    <label className="checkbox-row">
-                      <input
-                        checked={charityDraft.serviceEnabled}
-                        onChange={(event) =>
-                          setCharityDraft({
-                            ...charityDraft,
-                            serviceEnabled: event.target.checked,
-                          })
-                        }
-                        type="checkbox"
-                      />
-                      <span>启用公益服务</span>
-                    </label>
-                    <label className="checkbox-row">
-                      <input
-                        checked={charityDraft.enabled}
-                        onChange={(event) =>
-                          setCharityDraft({
-                            ...charityDraft,
-                            enabled: event.target.checked,
-                          })
-                        }
-                        type="checkbox"
-                      />
-                      <span>启用公益页弹窗</span>
-                    </label>
-                    <label className="field">
-                      <span>关闭时返回文案</span>
-                      <textarea
-                        className="input textarea compact-textarea"
-                        onChange={(event) =>
-                          setCharityDraft({
-                            ...charityDraft,
-                            serviceDisabledMessage: event.target.value,
-                          })
-                        }
-                        value={charityDraft.serviceDisabledMessage}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>弹窗标题</span>
-                      <input
-                        className="input"
-                        onChange={(event) =>
-                          setCharityDraft({
-                            ...charityDraft,
-                            title: event.target.value,
-                          })
-                        }
-                        value={charityDraft.title}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>弹窗频率</span>
-                      <select
-                        className="input"
-                        onChange={(event) =>
-                          setCharityDraft({
-                            ...charityDraft,
-                            frequency:
-                              event.target.value === "interval"
-                                ? "interval"
-                                : "every_visit",
-                          })
-                        }
-                        value={charityDraft.frequency}
+                <details className="admin-collapsible-panel">
+                  <summary>
+                    <span>
+                      <strong>编辑公益公告设置</strong>
+                      <small>
+                        {charityDraft.enabled ? "弹窗已开启" : "弹窗未开启"} ·{" "}
+                        {charityDraft.frequency === "interval"
+                          ? `${charityDraft.intervalHours} 小时`
+                          : "每次打开"}
+                      </small>
+                    </span>
+                    <em>展开</em>
+                  </summary>
+                  <form className="form" onSubmit={saveCharity}>
+                    <div className="grid cols-2">
+                      <label className="checkbox-row">
+                        <input
+                          checked={charityDraft.serviceEnabled}
+                          onChange={(event) =>
+                            setCharityDraft({
+                              ...charityDraft,
+                              serviceEnabled: event.target.checked,
+                            })
+                          }
+                          type="checkbox"
+                        />
+                        <span>启用公益服务</span>
+                      </label>
+                      <label className="checkbox-row">
+                        <input
+                          checked={charityDraft.enabled}
+                          onChange={(event) =>
+                            setCharityDraft({
+                              ...charityDraft,
+                              enabled: event.target.checked,
+                            })
+                          }
+                          type="checkbox"
+                        />
+                        <span>启用公益页弹窗</span>
+                      </label>
+                      <label className="field">
+                        <span>关闭时返回文案</span>
+                        <textarea
+                          className="input textarea compact-textarea"
+                          onChange={(event) =>
+                            setCharityDraft({
+                              ...charityDraft,
+                              serviceDisabledMessage: event.target.value,
+                            })
+                          }
+                          value={charityDraft.serviceDisabledMessage}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>弹窗标题</span>
+                        <input
+                          className="input"
+                          onChange={(event) =>
+                            setCharityDraft({
+                              ...charityDraft,
+                              title: event.target.value,
+                            })
+                          }
+                          value={charityDraft.title}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>弹窗频率</span>
+                        <select
+                          className="input"
+                          onChange={(event) =>
+                            setCharityDraft({
+                              ...charityDraft,
+                              frequency:
+                                event.target.value === "interval"
+                                  ? "interval"
+                                  : "every_visit",
+                            })
+                          }
+                          value={charityDraft.frequency}
+                        >
+                          <option value="every_visit">每次打开</option>
+                          <option value="interval">按间隔</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>间隔小时</span>
+                        <input
+                          className="input"
+                          max={charityDraft.maxIntervalHours ?? 720}
+                          min={charityDraft.minIntervalHours ?? 1}
+                          onChange={(event) =>
+                            setCharityDraft({
+                              ...charityDraft,
+                              intervalHours: Number(event.target.value),
+                            })
+                          }
+                          type="number"
+                          value={charityDraft.intervalHours}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>弹窗内容</span>
+                        <textarea
+                          className="input textarea compact-textarea"
+                          onChange={(event) =>
+                            setCharityDraft({
+                              ...charityDraft,
+                              content: event.target.value,
+                            })
+                          }
+                          value={charityDraft.content}
+                        />
+                      </label>
+                    </div>
+                    <div className="button-row">
+                      <button
+                        className="button"
+                        disabled={busy === "charity"}
+                        type="submit"
                       >
-                        <option value="every_visit">每次打开</option>
-                        <option value="interval">按间隔</option>
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>间隔小时</span>
-                      <input
-                        className="input"
-                        max={charityDraft.maxIntervalHours ?? 720}
-                        min={charityDraft.minIntervalHours ?? 1}
-                        onChange={(event) =>
-                          setCharityDraft({
-                            ...charityDraft,
-                            intervalHours: Number(event.target.value),
-                          })
-                        }
-                        type="number"
-                        value={charityDraft.intervalHours}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>弹窗内容</span>
-                      <textarea
-                        className="input textarea compact-textarea"
-                        onChange={(event) =>
-                          setCharityDraft({
-                            ...charityDraft,
-                            content: event.target.value,
-                          })
-                        }
-                        value={charityDraft.content}
-                      />
-                    </label>
-                  </div>
-                  <div className="button-row">
-                    <button
-                      className="button"
-                      disabled={busy === "charity"}
-                      type="submit"
-                    >
-                      <Save size={17} />
-                      保存公益设置
-                    </button>
-                  </div>
-                </form>
+                        <Save size={17} />
+                        保存公益设置
+                      </button>
+                    </div>
+                  </form>
+                </details>
               ) : (
                 <p className="muted">公益设置加载中...</p>
               )}
@@ -896,27 +916,36 @@ function AdminGatewayNoticesPanel({
                 ) : null}
               </div>
               <div className="ip-ban-rule-list">
-                {tempBans.map((ban) => (
-                  <div className="ip-ban-rule" key={ban.ip}>
-                    <div>
-                      <strong>{ban.ip}</strong>
-                      <p>
-                        剩余 {formatDuration(ban.ttlSeconds)} · {ban.message}
-                      </p>
+                <details className="admin-collapsible-panel">
+                  <summary>
+                    <span>
+                      <strong>临时封禁 IP</strong>
+                      <small>{tempBans.length} 条自动公告封禁记录</small>
+                    </span>
+                    <em>展开</em>
+                  </summary>
+                  {tempBans.map((ban) => (
+                    <div className="ip-ban-rule" key={ban.ip}>
+                      <div>
+                        <strong>{ban.ip}</strong>
+                        <p>
+                          剩余 {formatDuration(ban.ttlSeconds)} · {ban.message}
+                        </p>
+                      </div>
+                      <button
+                        className="button secondary"
+                        disabled={busy === `temp:${ban.ip}`}
+                        onClick={() => void deleteTemporaryBan(ban.ip)}
+                        type="button"
+                      >
+                        解封
+                      </button>
                     </div>
-                    <button
-                      className="button secondary"
-                      disabled={busy === `temp:${ban.ip}`}
-                      onClick={() => void deleteTemporaryBan(ban.ip)}
-                      type="button"
-                    >
-                      解封
-                    </button>
-                  </div>
-                ))}
-                {tempBans.length === 0 ? (
-                  <div className="empty-state compact">暂无自动封禁 IP</div>
-                ) : null}
+                  ))}
+                  {tempBans.length === 0 ? (
+                    <div className="empty-state compact">暂无自动封禁 IP</div>
+                  ) : null}
+                </details>
               </div>
             </section>
           ) : null}
@@ -932,85 +961,103 @@ function AdminGatewayNoticesPanel({
                 </div>
                 <span className="pill">{ipBanRules.length} 条</span>
               </div>
-              <form className="form" onSubmit={saveIpRule}>
-                <div className="grid cols-2">
-                  <label className="field">
-                    <span>IP</span>
-                    <input
-                      className="input"
-                      onChange={(event) => setIpInput(event.target.value)}
-                      placeholder="203.0.113.10"
-                      value={ipInput}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>返回方式</span>
-                    <select
-                      className="input"
-                      onChange={(event) =>
-                        setIpMode(event.target.value as IpBanMode)
-                      }
-                      value={ipMode}
-                    >
-                      <option value="notice">公告返回</option>
-                      <option value="error">错误返回</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>返回文案</span>
-                    <input
-                      className="input"
-                      onChange={(event) => setIpMessage(event.target.value)}
-                      placeholder={defaultIpBanMessage}
-                      value={ipMessage}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>备注</span>
-                    <input
-                      className="input"
-                      onChange={(event) => setIpReason(event.target.value)}
-                      placeholder="可选"
-                      value={ipReason}
-                    />
-                  </label>
-                </div>
-                <button
-                  className="button"
-                  disabled={busy === "ip"}
-                  type="submit"
-                >
-                  <Shield size={17} />
-                  保存 IP 规则
-                </button>
-              </form>
-              <div className="ip-ban-rule-list">
-                {ipBanRules.map((rule) => (
-                  <div className="ip-ban-rule" key={rule.ip}>
-                    <div>
-                      <strong>{rule.ip}</strong>
-                      <p>{rule.reason || rule.message}</p>
-                    </div>
-                    <span
-                      className={
-                        rule.mode === "notice" ? "pill ok" : "pill warn"
-                      }
-                    >
-                      {rule.mode === "notice" ? "公告返回" : "错误返回"}
-                    </span>
-                    <button
-                      className="button secondary"
-                      disabled={busy === `ip:${rule.ip}`}
-                      onClick={() => void deleteIpRule(rule.ip)}
-                      type="button"
-                    >
-                      解封
-                    </button>
+              <details className="admin-collapsible-panel">
+                <summary>
+                  <span>
+                    <strong>新增或更新 IP 规则</strong>
+                    <small>点击后填写 IP、返回方式和备注</small>
+                  </span>
+                  <em>展开</em>
+                </summary>
+                <form className="form" onSubmit={saveIpRule}>
+                  <div className="grid cols-2">
+                    <label className="field">
+                      <span>IP</span>
+                      <input
+                        className="input"
+                        onChange={(event) => setIpInput(event.target.value)}
+                        placeholder="203.0.113.10"
+                        value={ipInput}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>返回方式</span>
+                      <select
+                        className="input"
+                        onChange={(event) =>
+                          setIpMode(event.target.value as IpBanMode)
+                        }
+                        value={ipMode}
+                      >
+                        <option value="notice">公告返回</option>
+                        <option value="error">错误返回</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>返回文案</span>
+                      <input
+                        className="input"
+                        onChange={(event) => setIpMessage(event.target.value)}
+                        placeholder={defaultIpBanMessage}
+                        value={ipMessage}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>备注</span>
+                      <input
+                        className="input"
+                        onChange={(event) => setIpReason(event.target.value)}
+                        placeholder="可选"
+                        value={ipReason}
+                      />
+                    </label>
                   </div>
-                ))}
-                {ipBanRules.length === 0 ? (
-                  <div className="empty-state compact">暂无手动封禁 IP</div>
-                ) : null}
+                  <button
+                    className="button"
+                    disabled={busy === "ip"}
+                    type="submit"
+                  >
+                    <Shield size={17} />
+                    保存 IP 规则
+                  </button>
+                </form>
+              </details>
+              <div className="ip-ban-rule-list">
+                <details className="admin-collapsible-panel">
+                  <summary>
+                    <span>
+                      <strong>已封禁 IP 列表</strong>
+                      <small>{ipBanRules.length} 条手动规则</small>
+                    </span>
+                    <em>展开</em>
+                  </summary>
+                  {ipBanRules.map((rule) => (
+                    <div className="ip-ban-rule" key={rule.ip}>
+                      <div>
+                        <strong>{rule.ip}</strong>
+                        <p>{rule.reason || rule.message}</p>
+                      </div>
+                      <span
+                        className={
+                          rule.mode === "notice" ? "pill ok" : "pill warn"
+                        }
+                      >
+                        {rule.mode === "notice" ? "公告返回" : "错误返回"}
+                      </span>
+                      <button
+                        className="button secondary"
+                        disabled={busy === `ip:${rule.ip}`}
+                        onClick={() => void deleteIpRule(rule.ip)}
+                        type="button"
+                      >
+                        解封
+                      </button>
+                    </div>
+                  ))}
+                  {ipBanRules.length === 0 ? (
+                    <div className="empty-state compact">暂无手动封禁 IP</div>
+                  ) : null}
+                </details>
               </div>
             </section>
           ) : null}

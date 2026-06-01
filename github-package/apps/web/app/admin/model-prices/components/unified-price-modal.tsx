@@ -78,7 +78,9 @@ export function UnifiedPriceModal({
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div>
                         <h3 className="font-semibold text-slate-950">{group.model}</h3>
-                        <p className="mt-1 text-sm text-slate-500">{group.providerNames.length} 个渠道 · {group.providerNames.join(" / ")}</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {group.prices.length} 个渠道 · {group.prices.filter((price) => price.enabled).length} 个启用
+                        </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <label className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-medium text-slate-700">

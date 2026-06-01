@@ -43,6 +43,8 @@ type AccessTier = {
   name: string;
   status: string;
   sortOrder?: number;
+  billingMultiplier?: string;
+  walletRequired?: boolean;
   description?: string | null;
   _count?: {
     users?: number;
@@ -109,6 +111,8 @@ export function AdminDispatchPage({
     name: "",
     code: "",
     sortOrder: "100",
+    billingMultiplier: "1",
+    walletRequired: true,
     description: "",
   });
   const [editingTier, setEditingTier] = useState<AccessTier | null>(null);
@@ -116,6 +120,8 @@ export function AdminDispatchPage({
     name: "",
     code: "",
     sortOrder: "100",
+    billingMultiplier: "1",
+    walletRequired: true,
     description: "",
   });
   const [activePanel, setActivePanel] = useState<
@@ -265,6 +271,8 @@ export function AdminDispatchPage({
           name: tierDraft.name.trim(),
           code: tierDraft.code.trim(),
           sortOrder: Number(tierDraft.sortOrder),
+          billingMultiplier: tierDraft.billingMultiplier || "1",
+          walletRequired: tierDraft.walletRequired,
           description: tierDraft.description.trim() || null,
           status: "ACTIVE",
         }),
@@ -273,6 +281,8 @@ export function AdminDispatchPage({
         name: "",
         code: "",
         sortOrder: "100",
+        billingMultiplier: "1",
+        walletRequired: true,
         description: "",
       });
       void tiersQuery.refetch();
@@ -311,6 +321,8 @@ export function AdminDispatchPage({
       name: tier.name,
       code: tier.code,
       sortOrder: String(tier.sortOrder ?? 100),
+      billingMultiplier: tier.billingMultiplier ?? "1",
+      walletRequired: tier.walletRequired ?? true,
       description: tier.description ?? "",
     });
   }
@@ -335,6 +347,8 @@ export function AdminDispatchPage({
             ? {}
             : { code: tierEditDraft.code.trim() }),
           sortOrder: Number(tierEditDraft.sortOrder),
+          billingMultiplier: tierEditDraft.billingMultiplier || "1",
+          walletRequired: tierEditDraft.walletRequired,
           description: tierEditDraft.description.trim() || null,
         }),
       });
@@ -378,6 +392,8 @@ export function AdminDispatchPage({
     name: tier.name,
     code: tier.code,
     sortOrder: tier.sortOrder ?? 0,
+    billingMultiplier: `× ${formatMultiplier(tier.billingMultiplier ?? "1")}`,
+    walletRequired: tier.walletRequired === false ? "不要求余额" : "需要余额",
     status: <StatusPill status={tier.status} />,
     defaultFlag:
       tier.code === "standard" ? (
@@ -652,6 +668,20 @@ export function AdminDispatchPage({
             />
             <input
               className="input"
+              aria-label="扣费倍率"
+              title="扣费倍率：最终扣费会乘以此倍率"
+              placeholder="扣费倍率"
+              inputMode="decimal"
+              value={tierDraft.billingMultiplier}
+              onChange={(event) =>
+                setTierDraft((current) => ({
+                  ...current,
+                  billingMultiplier: event.target.value,
+                }))
+              }
+            />
+            <input
+              className="input"
               placeholder="说明"
               value={tierDraft.description}
               onChange={(event) =>
@@ -661,6 +691,19 @@ export function AdminDispatchPage({
                 }))
               }
             />
+            <label className="inline-field">
+              <span>钱包门槛</span>
+              <input
+                checked={tierDraft.walletRequired}
+                type="checkbox"
+                onChange={(event) =>
+                  setTierDraft((current) => ({
+                    ...current,
+                    walletRequired: event.target.checked,
+                  }))
+                }
+              />
+            </label>
             <button className="button" disabled={busy} type="submit">
               <Plus size={16} />
               添加
@@ -671,6 +714,8 @@ export function AdminDispatchPage({
               { accessorKey: "name", header: "名称" },
               { accessorKey: "code", header: "代码" },
               { accessorKey: "sortOrder", header: "显示位置" },
+              { accessorKey: "billingMultiplier", header: "扣费倍率" },
+              { accessorKey: "walletRequired", header: "钱包门槛" },
               { accessorKey: "defaultFlag", header: "默认" },
               { accessorKey: "status", header: "状态" },
               { accessorKey: "usage", header: "使用中" },
@@ -773,6 +818,38 @@ export function AdminDispatchPage({
                       }
                     />
                   </label>
+                  <label className="field">
+                    <span>扣费倍率</span>
+                    <input
+                      className="input"
+                      inputMode="decimal"
+                      value={tierEditDraft.billingMultiplier}
+                      onChange={(event) =>
+                        setTierEditDraft((current) => ({
+                          ...current,
+                          billingMultiplier: event.target.value,
+                        }))
+                      }
+                    />
+                    <small className="muted">最终扣费 = 现有计费结果 × 此倍率。1 为不调整。</small>
+                  </label>
+                  <label className="field">
+                    <span>钱包门槛</span>
+                    <span className="inline-field">
+                      <input
+                        checked={tierEditDraft.walletRequired}
+                        type="checkbox"
+                        onChange={(event) =>
+                          setTierEditDraft((current) => ({
+                            ...current,
+                            walletRequired: event.target.checked,
+                          }))
+                        }
+                      />
+                      要求余额检查和预留
+                    </span>
+                    <small className="muted">关闭后，该等级不会因余额为 0 或不足预留金额被拦截。</small>
+                  </label>
                 </div>
                 <label className="field">
                   <span>显示位置</span>
@@ -865,6 +942,14 @@ function InfoPair({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function formatMultiplier(value: string | number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return "1";
+  }
+  return numeric.toLocaleString("en-US", { maximumFractionDigits: 8 });
 }
 
 function Field({

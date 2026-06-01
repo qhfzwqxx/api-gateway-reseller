@@ -56,6 +56,7 @@ export interface ApiRequestRecord {
   upstreamCostUsd: string | null;
   latencyMs: number | null;
   firstTokenLatencyMs: number | null;
+  upstreamFirstChunkLatencyMs: number | null;
   errorMessage: string | null;
   responseUsage: unknown;
   requestBody?: unknown;

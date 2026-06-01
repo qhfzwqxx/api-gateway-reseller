@@ -58,6 +58,7 @@ type ApiRequest = {
   grossProfitUsd?: string | null;
   latencyMs?: number | null;
   firstTokenLatencyMs?: number | null;
+  upstreamFirstChunkLatencyMs?: number | null;
   errorMessage?: string | null;
   responseUsage?: unknown | null;
   createdAt: string;
@@ -390,7 +391,7 @@ function buildRequestProcess(
             : "warn",
       detail: manualTerminated
         ? `HTTP ${request.httpStatus ?? "-"} · 上游请求 ID ${request.upstreamRequestId ?? "-"} · 已被管理员终止 · 总时间 ${seconds(request.latencyMs)}`
-        : `HTTP ${request.httpStatus ?? "-"} · 上游请求 ID ${request.upstreamRequestId ?? "-"} · 总时间 ${seconds(request.latencyMs)} · 首 token ${seconds(request.firstTokenLatencyMs)}`,
+        : `HTTP ${request.httpStatus ?? "-"} · 上游请求 ID ${request.upstreamRequestId ?? "-"} · 总时间 ${seconds(request.latencyMs)} · 首 token ${seconds(request.upstreamFirstChunkLatencyMs)}`,
     },
     {
       title: compactFallback ? "5. Usage 与扣费" : "4. Usage 与扣费",
@@ -737,7 +738,7 @@ function Requests({
     latency: (
       <div className="audit-stack">
         <span>总：{seconds(item.latencyMs)}</span>
-        <span>首 token：{seconds(item.firstTokenLatencyMs)}</span>
+        <span>首 token：{seconds(item.upstreamFirstChunkLatencyMs)}</span>
         <span>{dateTime(item.createdAt)}</span>
       </div>
     ),
@@ -809,7 +810,7 @@ function Requests({
       item.reasoningEffortActual,
     ),
     latency: seconds(item.latencyMs),
-    firstTokenLatency: seconds(item.firstTokenLatencyMs),
+    firstTokenLatency: seconds(item.upstreamFirstChunkLatencyMs),
     createdAt: dateTime(item.createdAt),
   }));
 
@@ -965,7 +966,7 @@ function Requests({
                 {seconds(item.latencyMs)}
               </MobileField>
               <MobileField label="首 token">
-                {seconds(item.firstTokenLatencyMs)}
+                {seconds(item.upstreamFirstChunkLatencyMs)}
               </MobileField>
               {getReturnedNoticeText(item) ? (
                 <MobileField label="用户返回" wide>
@@ -1221,7 +1222,7 @@ function RequestDetailModal({
               {seconds(request.latencyMs)}
             </RequestDetailField>
             <RequestDetailField label="首 token">
-              {seconds(request.firstTokenLatencyMs)}
+              {seconds(request.upstreamFirstChunkLatencyMs)}
             </RequestDetailField>
             <RequestDetailField label="创建时间">
               {dateTime(request.createdAt)}

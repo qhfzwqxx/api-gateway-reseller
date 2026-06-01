@@ -4,6 +4,25 @@ import { prisma } from "@gateway/db";
 import { z } from "zod";
 import { requireAdmin, requireUser } from "../services/auth.js";
 
+const walletTransactionSelect = {
+  id: true,
+  type: true,
+  source: true,
+  amount: true,
+  balanceBefore: true,
+  balanceAfter: true,
+  remark: true,
+  metadata: true,
+  createdAt: true,
+  apiRequest: {
+    select: {
+      chargedAmountUsd: true,
+      subscriptionChargedAmountUsd: true,
+      walletChargedAmountUsd: true,
+    },
+  },
+} as const;
+
 export async function walletRoutes(app: FastifyInstance) {
   app.get("/wallet", { preHandler: requireUser }, async (request) => {
     const user = request.user as { sub: string };
@@ -22,18 +41,41 @@ export async function walletRoutes(app: FastifyInstance) {
       where: { userId: user.sub },
       orderBy: { createdAt: "desc" },
       take: 50,
-      select: {
-        id: true,
-        type: true,
-        amount: true,
-        balanceBefore: true,
-        balanceAfter: true,
-        remark: true,
-        createdAt: true,
-      },
+      select: walletTransactionSelect,
     });
 
     return { wallet, transactions };
+  });
+
+  app.get("/wallet/transactions", { preHandler: requireUser }, async (request) => {
+    const user = request.user as { sub: string };
+    const query = z
+      .object({
+        page: z.coerce.number().int().min(1).default(1),
+        pageSize: z.coerce.number().int().min(1).max(100).default(18),
+      })
+      .parse(request.query);
+    const where = { userId: user.sub };
+    const [total, transactions] = await Promise.all([
+      prisma.walletTransaction.count({ where }),
+      prisma.walletTransaction.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        select: walletTransactionSelect,
+      }),
+    ]);
+
+    return {
+      transactions,
+      pagination: {
+        page: query.page,
+        pageSize: query.pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.pageSize)),
+      },
+    };
   });
 
   app.post(

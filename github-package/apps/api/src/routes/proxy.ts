@@ -1304,11 +1304,14 @@ async function runUpstreamAttempt(params: {
     compactFallbackContext,
   });
   const upstreamBody = await applyReasoningEffortTransform(
-    buildUpstreamBody(
+    applyApiKeyFastMode(
+      buildUpstreamBody(
       endpoint,
       fallbackBody,
       provider,
       resolvedUpstreamEndpoint,
+    ),
+      request.apiAuth?.apiKey.forceFastMode === true,
     ),
   );
   const actualReasoningEffort = getReasoningEffortFromBody(upstreamBody);
@@ -1327,6 +1330,7 @@ async function runUpstreamAttempt(params: {
     registerActiveApiRequest(apiRequestId, controller);
     const timeout = setTimeout(() => controller.abort(), provider.timeoutMs);
 
+    const upstreamRequestStartedAt = performance.now();
     const upstreamResponse = await fetch(
       buildUpstreamUrl(provider.baseUrl, resolvedUpstreamRequestUrl),
       {
@@ -1345,6 +1349,9 @@ async function runUpstreamAttempt(params: {
     ).finally(() => {
       clearTimeout(timeout);
     });
+    const upstreamFirstChunkLatencyMs = Math.round(
+      performance.now() - upstreamRequestStartedAt,
+    );
 
     await prisma.apiRequest.update({
       where: { id: apiRequestId },
@@ -1353,6 +1360,7 @@ async function runUpstreamAttempt(params: {
         upstreamProviderKeyId,
         httpStatus: upstreamResponse.status,
         upstreamRequestId: upstreamResponse.headers.get("x-request-id"),
+        upstreamFirstChunkLatencyMs,
       },
     });
 
@@ -1499,6 +1507,7 @@ async function runUpstreamAttempt(params: {
         channelId,
         upstreamProviderKeyId,
         startedAt,
+        upstreamRequestStartedAt,
         logger: app.log,
         compactFallbackTrace: compactFallbackContext.trace,
         compactCacheRequestBody:
@@ -1519,6 +1528,7 @@ async function runUpstreamAttempt(params: {
         activeController: controller,
         apiRequestId,
         startedAt,
+        upstreamRequestStartedAt,
       });
       return { kind: "sent" };
     }
@@ -2013,6 +2023,17 @@ function inferModelFromBody(body: unknown) {
     : undefined;
 }
 
+function applyApiKeyFastMode(body: ProxyBody, forceFastMode: boolean) {
+  if (!forceFastMode || !isPlainObject(body)) {
+    return body;
+  }
+
+  return {
+    ...body,
+    service_tier: "priority",
+  };
+}
+
 async function proxyStream(params: {
   reply: FastifyReply;
   upstreamResponse: Response;
@@ -2028,6 +2049,7 @@ async function proxyStream(params: {
   upstreamProviderKeyId?: string | null;
   priceId: string;
   startedAt: number;
+  upstreamRequestStartedAt: number;
   logger?: {
     warn: (value: unknown, message?: string) => void;
     info?: (value: unknown, message?: string) => void;
@@ -2051,6 +2073,7 @@ async function proxyStream(params: {
     upstreamProviderKeyId,
     priceId,
     startedAt,
+    upstreamRequestStartedAt,
     logger,
     compactFallbackTrace,
     compactCacheRequestBody,
@@ -2065,6 +2088,7 @@ async function proxyStream(params: {
   let pending = "";
   let rawStreamText = "";
   let firstTokenLatencyMs: number | null = null;
+  let upstreamFirstChunkLatencyMs: number | null = null;
   const bufferedStreamChunks: string[] = [];
   let hasForwardedStream = false;
 
@@ -2138,6 +2162,11 @@ async function proxyStream(params: {
           }
 
           if (value) {
+            if (upstreamFirstChunkLatencyMs === null) {
+              upstreamFirstChunkLatencyMs = Math.round(
+                performance.now() - upstreamRequestStartedAt,
+              );
+            }
             const text = decoder.decode(value, { stream: true });
             rawStreamText += text;
             pending += text;
@@ -2249,7 +2278,7 @@ async function proxyStream(params: {
 
         await prisma.apiRequest.update({
           where: { id: apiRequestId },
-          data: { firstTokenLatencyMs },
+          data: { firstTokenLatencyMs, upstreamFirstChunkLatencyMs },
         });
         await recordRoutingFeedback({
           userId,
@@ -2371,10 +2400,18 @@ async function proxyPassthroughStream(params: {
   activeController?: AbortController;
   apiRequestId: string;
   startedAt: number;
+  upstreamRequestStartedAt: number;
 }) {
-  const { reply, upstreamResponse, activeController, apiRequestId, startedAt } =
-    params;
+  const {
+    reply,
+    upstreamResponse,
+    activeController,
+    apiRequestId,
+    startedAt,
+    upstreamRequestStartedAt,
+  } = params;
   let firstTokenLatencyMs: number | null = null;
+  let upstreamFirstChunkLatencyMs: number | null = null;
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const safeController = createSafeStreamController(controller, reply);
@@ -2402,6 +2439,11 @@ async function proxyPassthroughStream(params: {
             break;
           }
           if (value) {
+            if (upstreamFirstChunkLatencyMs === null) {
+              upstreamFirstChunkLatencyMs = Math.round(
+                performance.now() - upstreamRequestStartedAt,
+              );
+            }
             if (firstTokenLatencyMs === null) {
               firstTokenLatencyMs = Math.round(performance.now() - startedAt);
             }
@@ -2416,8 +2458,9 @@ async function proxyPassthroughStream(params: {
         data: {
           status: "SUCCESS",
           resultType: "PROXIED_SUCCESS",
-          latencyMs: Math.round(performance.now() - startedAt),
+            latencyMs: Math.round(performance.now() - startedAt),
             firstTokenLatencyMs,
+            upstreamFirstChunkLatencyMs,
           },
         });
       } catch (error) {

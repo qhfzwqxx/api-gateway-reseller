@@ -65,7 +65,7 @@ export function RequestDetailDrawer({ requestId, onClose }: RequestDetailDrawerP
                 <Info label="API Key" value={formatRef(request.apiKey)} />
                 <Info label="上游" value={request.upstreamProvider ?? "-"} />
                 <Info label="总时间" value={seconds(request.latencyMs)} />
-                <Info label="首 token" value={seconds(request.firstTokenLatencyMs)} />
+                <Info label="首 token" value={seconds(request.upstreamFirstChunkLatencyMs)} />
                 <Info label="思考强度" value={formatReasoningEffortCell(request.reasoningEffort, request.reasoningEffortActual)} />
                 <Info label="计费" value={formatMoney(request.chargedAmountUsd)} />
                 <Info label="成本" value={formatMoney(request.upstreamCostUsd)} />

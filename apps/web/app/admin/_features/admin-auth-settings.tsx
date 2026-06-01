@@ -176,6 +176,19 @@ export function AdminAuthSettings({
     testMutation.mutate({ ...payload, testEmail });
   }
 
+  function applyTencentExmailPreset() {
+    setSmtpHost("smtp.exmail.qq.com");
+    setSmtpPort(465);
+    setSmtpSecure(true);
+    if (!smtpFrom.trim() && smtpUser.trim()) {
+      setSmtpFrom(smtpUser.trim());
+    }
+    if (!smtpUser.trim() && smtpFrom.trim()) {
+      setSmtpUser(smtpFrom.trim());
+    }
+    setSavedMessage("已切换为腾讯企业邮箱 SMTP：smtp.exmail.qq.com / SSL 465。");
+  }
+
   if (error) {
     return <div className="error compact-error">{errorToText(error)}</div>;
   }
@@ -240,6 +253,17 @@ export function AdminAuthSettings({
               </div>
               <StatusPill status={emailCodeLoginEnabled ? "ACTIVE" : "DISABLED"} />
             </div>
+            <div className="button-row">
+              <button className="button secondary" onClick={applyTencentExmailPreset} type="button">
+                腾讯企业邮箱
+              </button>
+              <button className="button secondary" onClick={() => setSavedMessage("已切换为自定义 SMTP，可手动填写 Host、端口与 SSL。")} type="button">
+                自定义 SMTP
+              </button>
+            </div>
+            <p className="field-hint">
+              腾讯企业邮箱使用 smtp.exmail.qq.com，SSL 端口 465。SMTP 用户名和发件人一般填写完整企业邮箱地址，密码填写客户端专用密码或授权码。
+            </p>
             <div className="grid cols-2">
               <label className="check-row"><input checked={emailCodeLoginEnabled} onChange={(event) => setEmailCodeLoginEnabled(event.target.checked)} type="checkbox" />启用邮箱验证码登录</label>
               <label className="check-row"><input checked={emailCodeAutoRegisterEnabled} onChange={(event) => setEmailCodeAutoRegisterEnabled(event.target.checked)} type="checkbox" />允许新邮箱自动创建账号</label>

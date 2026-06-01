@@ -207,6 +207,22 @@ function formatRateLimit(value: number | null | undefined) {
   return !Number.isFinite(numeric) || numeric <= 0 ? "不限" : `${numeric}/min`;
 }
 
+function getUserGroup(item: AdminUser) {
+  if (item.role === "ADMIN") {
+    return "管理员组";
+  }
+  if (item.charityEnabled) {
+    return "公益组";
+  }
+  if (item.status === "RISK_REVIEW") {
+    return "风控组";
+  }
+  if (item.status === "SUSPENDED" || item.status === "DISABLED") {
+    return "受限组";
+  }
+  return "普通组";
+}
+
 function MobileEmpty({ children }: { children: React.ReactNode }) {
   return <div className="mobile-empty">{children}</div>;
 }
@@ -702,6 +718,7 @@ export function AdminUsers({
     { accessorKey: "email", header: "邮箱" },
     { accessorKey: "role", header: "角色" },
     { accessorKey: "status", header: "状态" },
+    { accessorKey: "group", header: "分组" },
     { accessorKey: "balance", header: "余额" },
     { accessorKey: "tier", header: "等级" },
     { accessorKey: "charity", header: "公益" },
@@ -719,6 +736,7 @@ export function AdminUsers({
     email: item.email,
     role: item.role,
     status: <StatusPill status={item.status} />,
+    group: <span className="pill">{getUserGroup(item)}</span>,
     balance: `$${money(item.wallet?.balance ?? "0")}`,
     tier: item.tier ? `${item.tier.name} (${item.tier.code})` : "默认等级",
     charity: item.charityEnabled ? (
@@ -1050,6 +1068,7 @@ export function AdminUsers({
                   <>
                     <StatusPill status={item.status} />
                     <span className="pill">{item.role}</span>
+                    <span className="pill">{getUserGroup(item)}</span>
                   </>
                 }
                 actions={
@@ -1096,6 +1115,7 @@ export function AdminUsers({
                       ? "待配置"
                     : "未公开"}
                 </MobileField>
+                <MobileField label="分组">{getUserGroup(item)}</MobileField>
                 {charityOnly ? (
                   <MobileField label="公益 Key" wide>
                     <code className="inline-secret">
@@ -2019,7 +2039,19 @@ function AdminUserKeysModal({
         type="checkbox"
       />
     ),
-    name: key.name,
+    name: (
+      <div className="key-name-cell">
+        <strong>{key.name}</strong>
+        <button
+          className="icon-text-button"
+          onClick={() => beginEditKey(key)}
+          type="button"
+        >
+          <Pencil size={15} />
+          编辑
+        </button>
+      </div>
+    ),
     secret: (
       <code className="inline-secret">
         {key.keySecret ?? "未保存完整 Key"}

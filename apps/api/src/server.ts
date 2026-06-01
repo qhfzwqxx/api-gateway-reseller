@@ -10,6 +10,7 @@ import { apiKeyRoutes } from "./routes/api-keys.js";
 import { walletRoutes } from "./routes/wallet.js";
 import { usageRoutes } from "./routes/usage.js";
 import { redeemCodeRoutes } from "./routes/redeem-codes.js";
+import { subscriptionRoutes } from "./routes/subscriptions.js";
 import { proxyRoutes } from "./routes/proxy.js";
 import { adminRoutes } from "./routes/admin.js";
 import { publicRoutes } from "./routes/public.js";
@@ -123,6 +124,7 @@ await app.register(apiKeyRoutes);
 await app.register(walletRoutes);
 await app.register(usageRoutes);
 await app.register(redeemCodeRoutes);
+await app.register(subscriptionRoutes);
 await app.register(proxyRoutes);
 await app.register(adminRoutes);
 await app.register(publicRoutes);
@@ -136,7 +138,10 @@ app.addHook("onClose", async () => {
 async function start() {
   try {
     await redis.connect().catch((error: unknown) => {
-      app.log.warn({ error }, "Redis connect failed, API key rate limit may fail");
+      app.log.warn(
+        { error },
+        "Redis connect failed, API key rate limit may fail",
+      );
     });
     await app.listen({
       host: env.API_HOST,
@@ -144,9 +149,14 @@ async function start() {
     });
     const stalePendingResult = await cleanupStalePendingRequests();
     if (stalePendingResult.count > 0) {
-      app.log.info(stalePendingResult, "Stale pending API requests marked failed on startup");
+      app.log.info(
+        stalePendingResult,
+        "Stale pending API requests marked failed on startup",
+      );
     }
-    stopPendingRequestCleanupScheduler = startPendingRequestCleanupScheduler(app.log);
+    stopPendingRequestCleanupScheduler = startPendingRequestCleanupScheduler(
+      app.log,
+    );
     stopModelPoolHealthScheduler = startModelPoolHealthScheduler(app.log);
     stopExternalAlertScheduler = startExternalAlertScheduler(app, app.log);
   } catch (error) {
@@ -157,7 +167,9 @@ async function start() {
 
 void start();
 
-function hasStatusCode(error: unknown): error is { statusCode: number; message: string } {
+function hasStatusCode(
+  error: unknown,
+): error is { statusCode: number; message: string } {
   return (
     typeof error === "object" &&
     error !== null &&

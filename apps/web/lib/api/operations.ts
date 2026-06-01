@@ -4,6 +4,7 @@ export interface RedeemCode {
   id: string;
   code?: string;
   codePrefix: string;
+  rewardType: "BALANCE" | "SUBSCRIPTION";
   amount: string;
   currency: string;
   status: "ACTIVE" | "DISABLED";
@@ -12,14 +13,28 @@ export interface RedeemCode {
   campaignName: string | null;
   validUserTierId: string | null;
   validUserTier: { id: string; code: string; name: string } | null;
+  subscriptionPlanId: string | null;
+  subscriptionPlan: {
+    id: string;
+    code: string;
+    name: string;
+    durationDays: number;
+    tier: { id: string; code: string; name: string; status: string };
+  } | null;
   perUserLimit: number;
   expiresAt: string | null;
   remark: string | null;
   createdAt: string;
-  redemptions?: Array<{ id: string; amount: string; createdAt: string; user: { email: string } }>;
+  redemptions?: Array<{
+    id: string;
+    amount: string;
+    createdAt: string;
+    user: { email: string };
+  }>;
 }
 
 export interface CreateRedeemCodesInput {
+  rewardType?: "BALANCE" | "SUBSCRIPTION";
   amount: string;
   count: number;
   maxRedemptions: number;
@@ -27,6 +42,7 @@ export interface CreateRedeemCodesInput {
   remark?: string;
   campaignName?: string | null;
   validUserTierId?: string | null;
+  subscriptionPlanId?: string | null;
   perUserLimit: number;
 }
 
@@ -103,22 +119,36 @@ export async function downloadFile(url: string, filename: string) {
 }
 
 export async function getRedeemCodes() {
-  const response = await http.get<{ codes: RedeemCode[] }>("/admin/redeem-codes");
+  const response = await http.get<{ codes: RedeemCode[] }>(
+    "/admin/redeem-codes",
+  );
   return response.data.codes;
 }
 
 export async function createRedeemCodes(input: CreateRedeemCodesInput) {
-  const response = await http.post<{ codes: RedeemCode[] }>("/admin/redeem-codes", input);
+  const response = await http.post<{ codes: RedeemCode[] }>(
+    "/admin/redeem-codes",
+    input,
+  );
   return response.data.codes;
 }
 
-export async function updateRedeemCode(id: string, input: UpdateRedeemCodeInput) {
-  const response = await http.patch<{ code: RedeemCode }>(`/admin/redeem-codes/${id}`, input);
+export async function updateRedeemCode(
+  id: string,
+  input: UpdateRedeemCodeInput,
+) {
+  const response = await http.patch<{ code: RedeemCode }>(
+    `/admin/redeem-codes/${id}`,
+    input,
+  );
   return response.data.code;
 }
 
 export function exportRedeemCodesCsv() {
-  return downloadFile("/admin/redeem-codes/export", `redeem-codes-${new Date().toISOString().slice(0, 10)}.csv`);
+  return downloadFile(
+    "/admin/redeem-codes/export",
+    `redeem-codes-${new Date().toISOString().slice(0, 10)}.csv`,
+  );
 }
 
 export async function getReportSummary() {
@@ -127,12 +157,22 @@ export async function getReportSummary() {
 }
 
 export function exportReportSummaryCsv() {
-  return downloadFile("/admin/reports/summary/export", `admin-report-${new Date().toISOString().slice(0, 10)}.csv`);
+  return downloadFile(
+    "/admin/reports/summary/export",
+    `admin-report-${new Date().toISOString().slice(0, 10)}.csv`,
+  );
 }
 
 export async function getLoginLogs(params: LoginLogParams = {}) {
-  const response = await http.get<{ logs: LoginLog[]; total: number }>("/admin/login-logs", {
-    params: Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined && value !== "")),
-  });
+  const response = await http.get<{ logs: LoginLog[]; total: number }>(
+    "/admin/login-logs",
+    {
+      params: Object.fromEntries(
+        Object.entries(params).filter(
+          ([, value]) => value !== undefined && value !== "",
+        ),
+      ),
+    },
+  );
   return response.data;
 }

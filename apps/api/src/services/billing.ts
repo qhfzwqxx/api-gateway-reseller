@@ -10,6 +10,7 @@ import {
 import { sanitizeJsonForPostgres, sanitizePostgresText } from "../lib/db-sanitize.js";
 import { calculateCharges } from "../lib/money.js";
 import { applyUnifiedCustomerPricing } from "./unified-pricing.js";
+import { consumeSubscriptionQuota, getActiveSubscriptionWithPlan } from "./subscriptions.js";
 import type { Usage } from "../types.js";
 
 export const defaultWalletReservationUsd = new Decimal("0.01");
@@ -140,11 +141,17 @@ export async function chargeForRequest(params: {
   userId: string;
   price: ModelPrice;
   usage: Usage;
+  accessTierId?: string | null;
   startedAt?: number;
 }) {
-  const { requestId, userId, price, usage, startedAt } = params;
+  const { requestId, userId, price, usage, accessTierId, startedAt } = params;
   const chargePrice = await applyUnifiedCustomerPricing(price);
-  const { upstreamCostUsd, chargedAmountUsd } = calculateCharges(chargePrice, usage);
+  const { upstreamCostUsd, chargedAmountUsd: baseChargedAmountUsd } =
+    calculateCharges(chargePrice, usage);
+  const billingMultiplier = await readAccessTierBillingMultiplier(accessTierId);
+  const chargedAmountUsd = baseChargedAmountUsd
+    .mul(billingMultiplier)
+    .toDecimalPlaces(8);
 
   return prisma.$transaction(async (tx) => {
     const existingRequest = await tx.apiRequest.findUnique({
@@ -180,6 +187,8 @@ export async function chargeForRequest(params: {
         latencyMs: startedAt === undefined ? undefined : Math.round(performance.now() - startedAt),
         upstreamCostUsd: upstreamCostUsd.toFixed(8),
         chargedAmountUsd: chargedAmountUsd.toFixed(8),
+        subscriptionChargedAmountUsd: "0",
+        walletChargedAmountUsd: "0",
         reservedAmountUsd: "0",
         responseUsage: usage.raw === undefined ? undefined : (sanitizeJsonForPostgres(usage.raw) as object),
       },
@@ -188,51 +197,97 @@ export async function chargeForRequest(params: {
     if (updateResult.count === 0) {
       return existingRequest;
     }
+    const reservedAmount = new Decimal(
+      existingRequest.reservedAmountUsd?.toString() ?? "0",
+    );
 
-    const wallet = await tx.wallet.findUnique({
-      where: { userId },
-    });
+    const subscriptionState = await getActiveSubscriptionWithPlan(tx, userId);
+    const subscriptionCharge = subscriptionState
+      ? (await consumeSubscriptionQuota(tx, {
+          userId,
+          requestId,
+          amountUsd: chargedAmountUsd,
+        })).subscriptionAmount
+      : new Decimal(0);
+    const walletCharge = chargedAmountUsd.minus(subscriptionCharge);
 
-    if (!wallet) {
-      throw new Error("Wallet not found");
-    }
+    let balanceBefore = new Decimal(0);
+    let balanceAfter = new Decimal(0);
+    if (walletCharge.gt(0)) {
+      const wallet = await tx.wallet.findUnique({
+        where: { userId },
+      });
 
-    const balanceBefore = new Decimal(wallet.balance.toString());
-    const reservedAmount = new Decimal(existingRequest.reservedAmountUsd?.toString() ?? "0");
-    const reservedBalance = new Decimal(wallet.reservedBalance.toString());
-    const balanceAfter = balanceBefore.minus(chargedAmountUsd);
+      if (!wallet) {
+        throw new Error("Wallet not found");
+      }
 
-    if (balanceAfter.lt(0)) {
-      throw new Error("Insufficient balance after usage calculation");
-    }
+      balanceBefore = new Decimal(wallet.balance.toString());
+      const reservedBalance = new Decimal(wallet.reservedBalance.toString());
+      balanceAfter = balanceBefore.minus(walletCharge);
 
-    await tx.wallet.update({
-      where: { userId },
-      data: {
-        balance: balanceAfter.toFixed(8),
-        reservedBalance: Decimal.max(0, reservedBalance.minus(reservedAmount)).toFixed(8),
-      },
-    });
-
-    await tx.walletTransaction.create({
-      data: {
-        userId,
-        requestId,
-        type: "CHARGE",
-        source: "API_CHARGE",
-        amount: chargedAmountUsd.negated().toFixed(8),
-        balanceBefore: balanceBefore.toFixed(8),
-        balanceAfter: balanceAfter.toFixed(8),
-        remark: `API usage ${price.model}`,
-        metadata: {
-          inputTokens: usage.inputTokens,
-          cachedInputTokens: usage.cachedInputTokens,
-          totalInputTokens: usage.inputTokens + usage.cachedInputTokens,
-          outputTokens: usage.outputTokens,
-          totalTokens: usage.totalTokens,
-          upstreamCostUsd: upstreamCostUsd.toFixed(8),
-          chargedAmountUsd: chargedAmountUsd.toFixed(8),
+      await tx.wallet.update({
+        where: { userId },
+        data: {
+          balance: balanceAfter.toFixed(8),
+          reservedBalance: Decimal.max(0, reservedBalance.minus(reservedAmount)).toFixed(8),
         },
+      });
+
+      await tx.walletTransaction.create({
+        data: {
+          userId,
+          requestId,
+          type: "CHARGE",
+          source: "API_CHARGE",
+          amount: walletCharge.negated().toFixed(8),
+          balanceBefore: balanceBefore.toFixed(8),
+          balanceAfter: balanceAfter.toFixed(8),
+          remark: `API usage ${price.model}`,
+          metadata: {
+            inputTokens: usage.inputTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            totalInputTokens: usage.inputTokens + usage.cachedInputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            upstreamCostUsd: upstreamCostUsd.toFixed(8),
+            chargedAmountUsd: chargedAmountUsd.toFixed(8),
+            subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
+            walletChargedAmountUsd: walletCharge.toFixed(8),
+          },
+        },
+      });
+    } else if (subscriptionState) {
+      await tx.walletTransaction.create({
+        data: {
+          userId,
+          requestId,
+          type: "CHARGE",
+          source: "SUBSCRIPTION_ONLY",
+          amount: "0",
+          balanceBefore: "0",
+          balanceAfter: "0",
+          remark: `API usage ${price.model}`,
+          metadata: {
+            inputTokens: usage.inputTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            totalInputTokens: usage.inputTokens + usage.cachedInputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            upstreamCostUsd: upstreamCostUsd.toFixed(8),
+            chargedAmountUsd: chargedAmountUsd.toFixed(8),
+            subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
+            walletChargedAmountUsd: "0",
+          },
+        },
+      });
+    }
+
+    await tx.apiRequest.update({
+      where: { id: requestId },
+      data: {
+        subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
+        walletChargedAmountUsd: walletCharge.toFixed(8),
       },
     });
 
@@ -281,6 +336,19 @@ export async function chargeForRequest(params: {
   });
 }
 
+async function readAccessTierBillingMultiplier(accessTierId?: string | null) {
+  if (!accessTierId) {
+    return new Decimal(1);
+  }
+
+  const tier = await prisma.accessTier.findUnique({
+    where: { id: accessTierId },
+    select: { billingMultiplier: true },
+  });
+
+  return new Decimal(tier?.billingMultiplier?.toString() ?? "1");
+}
+
 export async function markRequestFailed(
   request: Pick<ApiRequest, "id">,
   errorMessage: string,
@@ -288,8 +356,8 @@ export async function markRequestFailed(
   latencyMs?: number,
   responseUsage?: unknown,
   resultType: ApiRequestResultType = "GATEWAY_ERROR",
-) {
-  await prisma.$transaction(async (tx) => {
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
     const existingRequest = await tx.apiRequest.findUnique({
       where: { id: request.id },
       select: {
@@ -300,7 +368,7 @@ export async function markRequestFailed(
     });
 
     if (!existingRequest || existingRequest.status !== "PENDING") {
-      return;
+      return false;
     }
 
     const reservedAmount = new Decimal(
@@ -339,5 +407,7 @@ export async function markRequestFailed(
           : { responseUsage: sanitizeJsonForPostgres(responseUsage) as object }),
       },
     });
+
+    return true;
   });
 }

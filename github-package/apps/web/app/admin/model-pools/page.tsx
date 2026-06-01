@@ -10,6 +10,7 @@ import { z } from "zod";
 import {
   checkPoolChannel,
   createModelPool,
+  deleteModelPool,
   deletePoolChannel,
   getModelPools,
   updateModelPoolHealthCheck,
@@ -17,6 +18,7 @@ import {
   type ModelPool,
   type PoolChannelStatus,
 } from "../../../lib/api/routing";
+import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
 import { ChannelManagerDrawer } from "./components/channel-manager-drawer";
 
 const poolSchema = z.object({
@@ -35,6 +37,7 @@ export default function AdminModelPoolsPage() {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedPoolId, setSelectedPoolId] = useState("");
   const [selectedPool, setSelectedPool] = useState<ModelPool | null>(null);
+  const [deletingPool, setDeletingPool] = useState<ModelPool | null>(null);
   const [notice, setNotice] = useState("");
   const [nowMs, setNowMs] = useState(Date.now());
   const [healthReceivedAtMs, setHealthReceivedAtMs] = useState(Date.now());
@@ -43,8 +46,11 @@ export default function AdminModelPoolsPage() {
     successGraceSeconds: "0",
     penaltySeconds: "60",
   });
+  const [editingHealthField, setEditingHealthField] = useState<
+    "intervalSeconds" | "successGraceSeconds" | "penaltySeconds" | null
+  >(null);
 
-  const poolsQuery = useQuery({ queryKey: ["admin", "model-pools"], queryFn: getModelPools, refetchInterval: 1000 });
+  const poolsQuery = useQuery({ queryKey: ["admin", "model-pools"], queryFn: getModelPools, refetchInterval: 10_000 });
   const data = poolsQuery.data;
   const healthCheck = data?.healthCheck ? { ...data.healthCheck, receivedAtMs: healthReceivedAtMs } : null;
   const pools = data?.modelPools ?? [];
@@ -63,7 +69,7 @@ export default function AdminModelPoolsPage() {
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["admin", "model-pools"] });
 
   useEffect(() => {
-    if (data?.healthCheck) {
+    if (data?.healthCheck && !editingHealthField) {
       setHealthReceivedAtMs(Date.now());
       setHealthDraft({
         intervalSeconds: String(data.healthCheck.intervalSeconds),
@@ -71,7 +77,7 @@ export default function AdminModelPoolsPage() {
         penaltySeconds: String(data.healthCheck.penaltySeconds),
       });
     }
-  }, [data?.healthCheck]);
+  }, [data?.healthCheck, editingHealthField]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -126,9 +132,27 @@ export default function AdminModelPoolsPage() {
     },
     onError: (error) => setNotice(errorToText(error)),
   });
+  const deletePoolMutation = useMutation({
+    mutationFn: deleteModelPool,
+    onSuccess: () => {
+      setDeletingPool(null);
+      setSelectedPool(null);
+      setSelectedPoolId("");
+      setNotice("模型池已删除");
+      refresh();
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
   const updateHealthMutation = useMutation({
     mutationFn: updateModelPoolHealthCheck,
-    onSuccess: () => {
+    onSuccess: (healthCheck) => {
+      setEditingHealthField(null);
+      setHealthReceivedAtMs(Date.now());
+      setHealthDraft({
+        intervalSeconds: String(healthCheck.intervalSeconds),
+        successGraceSeconds: String(healthCheck.successGraceSeconds),
+        penaltySeconds: String(healthCheck.penaltySeconds),
+      });
       setNotice("健康检测参数已保存");
       refresh();
     },
@@ -173,8 +197,11 @@ export default function AdminModelPoolsPage() {
               min={healthCheck?.minIntervalSeconds ?? 5}
               max={healthCheck?.maxIntervalSeconds ?? 3600}
               disabled={!healthCheck || updateHealthMutation.isPending}
+              onFocus={() => setEditingHealthField("intervalSeconds")}
               onChange={(value) => setHealthDraft((current) => ({ ...current, intervalSeconds: value }))}
-              onSave={() => updateHealthMutation.mutate({ intervalSeconds: Number(healthDraft.intervalSeconds) })}
+              onSave={() => {
+                updateHealthMutation.mutate({ intervalSeconds: Number(healthDraft.intervalSeconds) });
+              }}
             />
             <EditableHealthFact
               label="成功免检"
@@ -182,8 +209,11 @@ export default function AdminModelPoolsPage() {
               min={healthCheck?.minSuccessGraceSeconds ?? 0}
               max={healthCheck?.maxSuccessGraceSeconds ?? 86400}
               disabled={!healthCheck || updateHealthMutation.isPending}
+              onFocus={() => setEditingHealthField("successGraceSeconds")}
               onChange={(value) => setHealthDraft((current) => ({ ...current, successGraceSeconds: value }))}
-              onSave={() => updateHealthMutation.mutate({ successGraceSeconds: Number(healthDraft.successGraceSeconds) })}
+              onSave={() => {
+                updateHealthMutation.mutate({ successGraceSeconds: Number(healthDraft.successGraceSeconds) });
+              }}
             />
             <EditableHealthFact
               label="惩罚期"
@@ -191,8 +221,11 @@ export default function AdminModelPoolsPage() {
               min={healthCheck?.minPenaltySeconds ?? 1}
               max={healthCheck?.maxPenaltySeconds ?? 86400}
               disabled={!healthCheck || updateHealthMutation.isPending}
+              onFocus={() => setEditingHealthField("penaltySeconds")}
               onChange={(value) => setHealthDraft((current) => ({ ...current, penaltySeconds: value }))}
-              onSave={() => updateHealthMutation.mutate({ penaltySeconds: Number(healthDraft.penaltySeconds) })}
+              onSave={() => {
+                updateHealthMutation.mutate({ penaltySeconds: Number(healthDraft.penaltySeconds) });
+              }}
             />
           </div>
         </div>
@@ -271,6 +304,7 @@ export default function AdminModelPoolsPage() {
                 checkingChannelId={checkingChannelId}
                 forceAvailableButtonEnabled={Boolean(data?.dispatchSettings.forceAvailableButtonEnabled)}
                 onOpenManager={() => setSelectedPool(activePool)}
+                onDeletePool={() => setDeletingPool(activePool)}
                 onCheck={(id) => checkChannelMutation.mutate(id)}
                 onDelete={(id) => deleteChannelMutation.mutate(id)}
                 onSetStatus={(id, status) => updateChannelMutation.mutate({ id, status })}
@@ -291,6 +325,18 @@ export default function AdminModelPoolsPage() {
         forceAvailableButtonEnabled={Boolean(data?.dispatchSettings.forceAvailableButtonEnabled)}
         onClose={() => setSelectedPool(null)}
       />
+      <ConfirmDialog
+        open={Boolean(deletingPool)}
+        title="删除模型池"
+        description={`删除 ${deletingPool?.model ?? ""} / ${deletingPool?.tier?.name ?? "Standard"} 模型池会同时移除池内渠道，用户将不能通过这个等级调用该池。此操作不可撤销。`}
+        confirmText="确认删除"
+        requireInputText="确认删除"
+        loading={deletePoolMutation.isPending}
+        onOpenChange={(open) => !open && setDeletingPool(null)}
+        onConfirm={async () => {
+          if (deletingPool) await deletePoolMutation.mutateAsync(deletingPool.id);
+        }}
+      />
     </div>
   );
 }
@@ -307,6 +353,7 @@ function EditableHealthFact({
   min,
   max,
   disabled,
+  onFocus,
   onChange,
   onSave,
 }: {
@@ -315,6 +362,7 @@ function EditableHealthFact({
   min: number;
   max: number;
   disabled: boolean;
+  onFocus: () => void;
   onChange: (value: string) => void;
   onSave: () => void;
 }) {
@@ -329,6 +377,7 @@ function EditableHealthFact({
           max={max}
           value={value}
           disabled={disabled}
+          onFocus={onFocus}
           onChange={(event) => onChange(event.target.value)}
           className="h-7 min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 text-sm font-semibold tabular-nums text-slate-950 outline-none focus:border-blue-500"
         />
@@ -360,6 +409,7 @@ function PoolChannelBoard({
   checkingChannelId,
   forceAvailableButtonEnabled,
   onOpenManager,
+  onDeletePool,
   onCheck,
   onDelete,
   onSetStatus,
@@ -370,6 +420,7 @@ function PoolChannelBoard({
   checkingChannelId?: string;
   forceAvailableButtonEnabled: boolean;
   onOpenManager: () => void;
+  onDeletePool: () => void;
   onCheck: (id: string) => void;
   onDelete: (id: string) => void;
   onSetStatus: (id: string, status: PoolChannelStatus) => void;
@@ -392,7 +443,10 @@ function PoolChannelBoard({
               等级 {pool.tier?.name ?? "Standard"} · 检测接口 {pool.healthCheckEndpoint} · 已定价 {pool.pricedChannelCount} · 已加入 {pool.channels.length} · 下次 {poolNextCheckText(pool, healthCheck, nowMs)}
             </p>
           </div>
-          <button type="button" onClick={onOpenManager} className={secondaryButton}>添加/管理渠道</button>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={onOpenManager} className={secondaryButton}>添加/管理渠道</button>
+            <button type="button" onClick={onDeletePool} className={dangerButton}><Trash2 className="h-4 w-4" />删除池</button>
+          </div>
         </div>
       </div>
 
@@ -708,6 +762,7 @@ function formatChannelError(value?: string | null) {
 const inputClass = "h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 const primaryButton = "inline-flex h-10 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60";
 const secondaryButton = "inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50";
+const dangerButton = "inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60";
 const stepButton = "w-full rounded-lg border border-slate-200 bg-white p-3 text-left text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50/50";
 const selectedStepButton = "w-full rounded-lg border border-blue-200 bg-blue-50 p-3 text-left text-blue-800 shadow-sm";
 const compactStepButton = "w-full min-w-0 rounded-md border border-slate-200 bg-white p-2 text-left text-xs text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50/50";
