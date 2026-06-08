@@ -1,10 +1,48 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@gateway/db";
-import { requireUser } from "../services/auth.js";
+import { requireApiKey, requireUser } from "../services/auth.js";
 import { resolveAccessRoutePolicy } from "../services/access-routing.js";
 import { getClientIp } from "../services/proxy-request-utils.js";
+import type { ApiRequestWithUser } from "../types.js";
 
 export async function usageRoutes(app: FastifyInstance) {
+  app.get("/v1/models", async (request: ApiRequestWithUser, reply) => {
+    await requireApiKey(app, request, reply);
+    if (reply.sent || !request.apiAuth) {
+      return;
+    }
+
+    const { apiKey, user } = request.apiAuth;
+    const accessRoutePolicy = await resolveAccessRoutePolicy({
+      userId: user.id,
+      apiKeyId: apiKey.id,
+      userTierId: user.tierId,
+      apiKeyTierId: apiKey.tierId,
+      clientIp: getClientIp(request),
+    });
+    const models = await listReadyModels({
+      tierId: accessRoutePolicy.tierId,
+      allowedModels:
+        apiKey.allowedModels.length > 0
+          ? apiKey.allowedModels
+          : user.allowedModels,
+    });
+
+    return {
+      object: "list",
+      data: models.map((model) => ({
+        id: model.model,
+        object: "model",
+        created: 0,
+        owned_by: "gateway",
+        ready_channel_count: model.readyChannelCount,
+        capabilities: {
+          image_generation: model.model.startsWith("gpt-image-"),
+        },
+      })),
+    };
+  });
+
   app.get("/models", { preHandler: requireUser }, async (request, reply) => {
     const authUser = request.user as { sub: string };
     const user = await prisma.user.findUnique({
@@ -23,86 +61,10 @@ export async function usageRoutes(app: FastifyInstance) {
       clientIp: getClientIp(request),
     });
 
-    const pools = await prisma.modelPool.findMany({
-      where: {
-        status: "ACTIVE",
-        tierId: accessRoutePolicy.tierId,
-        ...(user.allowedModels.length > 0
-          ? { model: { in: user.allowedModels } }
-          : {}),
-      },
-      orderBy: { model: "asc" },
-      include: {
-        channels: {
-          where: { status: { in: ["ACTIVE", "FORCED_ACTIVE"] } },
-          orderBy: [
-            { lastFirstTokenLatencyMs: "asc" },
-            { lastLatencyMs: "asc" },
-            { priority: "asc" },
-          ],
-        },
-      },
+    const models = await listReadyModels({
+      tierId: accessRoutePolicy.tierId,
+      allowedModels: user.allowedModels,
     });
-    const [prices, providers] = await Promise.all([
-      prisma.modelPrice.findMany({
-        where: {
-          enabled: true,
-          model: { in: pools.map((pool) => pool.model) },
-        },
-        select: {
-          model: true,
-          upstreamProvider: true,
-        },
-      }),
-      prisma.upstreamProvider.findMany({
-        where: { status: "ACTIVE" },
-        select: {
-          name: true,
-          keys: {
-            where: { status: "ACTIVE" },
-            select: { id: true },
-          },
-        },
-      }),
-    ]);
-    const priceSet = new Set(
-      prices.map((price) => `${price.upstreamProvider}:${price.model}`),
-    );
-    const providerSet = new Set(
-      providers
-        .filter((provider) => provider.keys.length > 0)
-        .map((provider) => provider.name),
-    );
-    const modelsByName = new Map<
-      string,
-      { model: string; status: "READY"; readyChannelCount: number }
-    >();
-
-    for (const pool of pools) {
-        const readyChannelCount = pool.channels.filter(
-          (channel) =>
-            providerSet.has(channel.upstreamProvider) &&
-            priceSet.has(`${channel.upstreamProvider}:${pool.model}`),
-        ).length;
-
-        if (readyChannelCount <= 0) {
-          continue;
-        }
-
-        const existing = modelsByName.get(pool.model);
-        if (existing) {
-          existing.readyChannelCount += readyChannelCount;
-          continue;
-        }
-
-        modelsByName.set(pool.model, {
-          model: pool.model,
-          status: "READY",
-          readyChannelCount,
-        });
-    }
-
-    const models = [...modelsByName.values()];
 
     return { models };
   });
@@ -156,6 +118,92 @@ export async function usageRoutes(app: FastifyInstance) {
 
     return { requests };
   });
+}
+
+async function listReadyModels(params: {
+  tierId?: string | null;
+  allowedModels: string[];
+}) {
+  const pools = await prisma.modelPool.findMany({
+    where: {
+      status: "ACTIVE",
+      tierId: params.tierId,
+      ...(params.allowedModels.length > 0
+        ? { model: { in: params.allowedModels } }
+        : {}),
+    },
+    orderBy: { model: "asc" },
+    include: {
+      channels: {
+        where: { status: { in: ["ACTIVE", "FORCED_ACTIVE"] } },
+        orderBy: [
+          { lastFirstTokenLatencyMs: "asc" },
+          { lastLatencyMs: "asc" },
+          { priority: "asc" },
+        ],
+      },
+    },
+  });
+  const [prices, providers] = await Promise.all([
+    prisma.modelPrice.findMany({
+      where: {
+        enabled: true,
+        model: { in: pools.map((pool) => pool.model) },
+      },
+      select: {
+        model: true,
+        upstreamProvider: true,
+      },
+    }),
+    prisma.upstreamProvider.findMany({
+      where: { status: "ACTIVE" },
+      select: {
+        name: true,
+        keys: {
+          where: { status: "ACTIVE" },
+          select: { id: true },
+        },
+      },
+    }),
+  ]);
+  const priceSet = new Set(
+    prices.map((price) => `${price.upstreamProvider}:${price.model}`),
+  );
+  const providerSet = new Set(
+    providers
+      .filter((provider) => provider.keys.length > 0)
+      .map((provider) => provider.name),
+  );
+  const modelsByName = new Map<
+    string,
+    { model: string; status: "READY"; readyChannelCount: number }
+  >();
+
+  for (const pool of pools) {
+    const readyChannelCount = pool.channels.filter(
+      (channel) =>
+        providerSet.has(channel.upstreamProvider) &&
+        priceSet.has(`${channel.upstreamProvider}:${pool.model}`),
+    ).length;
+
+    if (readyChannelCount <= 0) {
+      continue;
+    }
+
+    const existing = modelsByName.get(pool.model);
+    if (existing) {
+      existing.readyChannelCount += readyChannelCount;
+      continue;
+    }
+
+    modelsByName.set(pool.model, {
+      model: pool.model,
+      status: "READY",
+      readyChannelCount,
+    });
+  }
+
+  return [...modelsByName.values()];
 }
 
 const publicRequestSelect = {
