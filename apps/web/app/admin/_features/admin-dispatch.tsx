@@ -848,7 +848,7 @@ export function AdminDispatchPage({
                       />
                       要求余额检查和预留
                     </span>
-                    <small className="muted">关闭后，该等级不会因余额为 0 或不足预留金额被拦截。</small>
+                    <small className="muted">关闭后，该等级只使用订阅额度；不会检查或扣减钱包余额。</small>
                   </label>
                 </div>
                 <label className="field">

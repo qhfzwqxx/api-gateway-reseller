@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CircleStop, FileText, Flame, RadioTower, Save, ShieldAlert, TextSearch, Trash2 } from "lucide-react";
+import { Ban, CircleStop, FileText, Flame, RadioTower, Save, Search, ShieldAlert, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -19,12 +19,10 @@ import {
   updatePendingAutoTerminateSettings,
   updateRedisFailurePolicySettings,
   updateTemporaryIpNoticeBanSettings,
-  updateUpstreamOutputFilterSettings,
   type GatewayNoticeSettings,
   type GlobalCircuitBreakerSettings,
   type IpBanRule,
   type RedisFailurePolicySettings,
-  type UpstreamOutputFilterSettings,
 } from "../../../lib/api/settings";
 
 const autoTerminateSchema = z.object({
@@ -38,10 +36,6 @@ const autoTerminateSchema = z.object({
   ipBanMessage: z.string().trim().min(1),
 });
 const gatewaySchema = z.record(z.string(), z.string().trim().min(1));
-const upstreamOutputFilterSchema = z.object({
-  enabled: z.boolean(),
-  phrasesText: z.string(),
-});
 const redisSchema = z.object({
   policy: z.enum(["fail-open", "fail-closed", "degraded"]),
   degradedAdminBypassEnabled: z.boolean(),
@@ -64,8 +58,6 @@ const ipBanRuleSchema = z.object({
 type AutoTerminateInput = z.input<typeof autoTerminateSchema>;
 type AutoTerminateValues = z.output<typeof autoTerminateSchema>;
 type GatewayValues = GatewayNoticeSettings;
-type UpstreamOutputFilterInput = z.input<typeof upstreamOutputFilterSchema>;
-type UpstreamOutputFilterValues = z.output<typeof upstreamOutputFilterSchema>;
 type RedisInput = z.input<typeof redisSchema>;
 type RedisValues = z.infer<typeof redisSchema>;
 type CircuitInput = z.input<typeof circuitSchema>;
@@ -140,15 +132,13 @@ export default function AdminRiskControlPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState("");
   const [confirmAction, setConfirmAction] = useState<null | "redis" | "circuit">(null);
-  const [activeModal, setActiveModal] = useState<null | "auto" | "gateway" | "upstream-filter" | "redis" | "circuit" | "ip-ban">(null);
+  const [activeModal, setActiveModal] = useState<null | "auto" | "gateway" | "redis" | "circuit" | "ip-ban">(null);
   const [editingIpRule, setEditingIpRule] = useState<IpBanRule | null>(null);
+  const [ipBanSearch, setIpBanSearch] = useState("");
   const riskQuery = useQuery({ queryKey: ["admin", "risk-center"], queryFn: getRiskCenter });
 
   const autoTerminateForm = useForm<AutoTerminateInput, unknown, AutoTerminateValues>({ resolver: zodResolver(autoTerminateSchema) });
   const gatewayForm = useForm<GatewayValues>();
-  const upstreamOutputFilterForm = useForm<UpstreamOutputFilterInput, unknown, UpstreamOutputFilterValues>({
-    resolver: zodResolver(upstreamOutputFilterSchema),
-  });
   const redisForm = useForm<RedisInput, unknown, RedisValues>({ resolver: zodResolver(redisSchema) });
   const circuitForm = useForm<CircuitInput, unknown, CircuitValues>({ resolver: zodResolver(circuitSchema) });
   const ipBanForm = useForm<IpBanRuleInput, unknown, IpBanRuleValues>({
@@ -170,10 +160,6 @@ export default function AdminRiskControlPage() {
       ipBanMessage: data.temporaryIpNoticeBanSettings.message,
     });
     gatewayForm.reset(data.gatewayNoticeSettings);
-    upstreamOutputFilterForm.reset({
-      enabled: data.upstreamOutputFilterSettings.enabled,
-      phrasesText: data.upstreamOutputFilterSettings.phrases.join("\n"),
-    });
     redisForm.reset({
       ...data.redisFailurePolicySettings,
       degradedUserIdsText: data.redisFailurePolicySettings.degradedUserIds.join("\n"),
@@ -182,7 +168,7 @@ export default function AdminRiskControlPage() {
       ...data.globalCircuitBreakerSettings,
       allowedUserIdsText: data.globalCircuitBreakerSettings.allowedUserIds.join("\n"),
     });
-  }, [autoTerminateForm, circuitForm, gatewayForm, redisForm, riskQuery.data, upstreamOutputFilterForm]);
+  }, [autoTerminateForm, circuitForm, gatewayForm, redisForm, riskQuery.data]);
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["admin", "risk-center"] });
   const autoTerminateMutation = useMutation({
@@ -206,15 +192,6 @@ export default function AdminRiskControlPage() {
     onError: (error) => setNotice(errorToText(error)),
   });
   const gatewayMutation = useMutation({ mutationFn: updateGatewayNoticeSettings, onSuccess: () => { setActiveModal(null); setNotice("网关提示文案已保存"); refresh(); }, onError: (error) => setNotice(errorToText(error)) });
-  const upstreamOutputFilterMutation = useMutation({
-    mutationFn: (values: UpstreamOutputFilterValues) =>
-      updateUpstreamOutputFilterSettings({
-        enabled: values.enabled,
-        phrases: lines(values.phrasesText),
-      }),
-    onSuccess: () => { setActiveModal(null); setNotice("上游输出过滤已保存"); refresh(); },
-    onError: (error) => setNotice(errorToText(error)),
-  });
   const redisMutation = useMutation({ mutationFn: updateRedisFailurePolicySettings, onSuccess: () => { setConfirmAction(null); setNotice("Redis 失败策略已保存"); refresh(); }, onError: (error) => setNotice(errorToText(error)) });
   const circuitMutation = useMutation({ mutationFn: updateGlobalCircuitBreakerSettings, onSuccess: () => { setConfirmAction(null); setNotice("全局熔断配置已保存"); refresh(); }, onError: (error) => setNotice(errorToText(error)) });
   const ipBanMutation = useMutation({
@@ -244,8 +221,14 @@ export default function AdminRiskControlPage() {
   const pendingSettings = riskQuery.data?.pendingAutoTerminateSettings;
   const redisSettings = riskQuery.data?.redisFailurePolicySettings;
   const circuitSettings = riskQuery.data?.globalCircuitBreakerSettings;
-  const upstreamOutputFilterSettings = riskQuery.data?.upstreamOutputFilterSettings;
   const ipBanRules = riskQuery.data?.ipBanRules ?? [];
+  const filteredIpBanRules = ipBanRules.filter((rule) => {
+    const keyword = ipBanSearch.trim().toLowerCase();
+    if (!keyword) return true;
+    return [rule.ip, rule.message, rule.reason ?? ""].some((value) =>
+      value.toLowerCase().includes(keyword),
+    );
+  });
 
   return (
     <div className="risk-control-page space-y-5">
@@ -256,7 +239,7 @@ export default function AdminRiskControlPage() {
       </section>
       {notice ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">{notice}</div> : null}
       <section className="grid gap-4 md:grid-cols-4">
-        <Metric label="PENDING 请求" value={counters?.pendingRequests ?? 0} />
+        <Metric label="实时 PENDING" value={counters?.pendingRequests ?? 0} />
         <Metric label="24h 失败" value={counters?.failedRequests24h ?? 0} />
         <Metric label="24h 网关提示" value={counters?.noticeRequests24h ?? 0} />
         <Metric label="24h 限流" value={counters?.rateLimitedRequests24h ?? 0} />
@@ -272,7 +255,6 @@ export default function AdminRiskControlPage() {
           />
           <RiskActionCard icon={Ban} title="手动 IP 封禁" description="指定 IP 命中后直接返回公告或 403 错误，不再转发上游。" status={`${ipBanRules.length} 条规则`} danger={ipBanRules.length > 0} onClick={() => setActiveModal("ip-ban")} />
           <RiskActionCard icon={FileText} title="网关公告提示" description="限流、并发、模型不可用等返回文案。" status={`${gatewayNoticeFields.length} 个模板`} onClick={() => setActiveModal("gateway")} />
-          <RiskActionCard icon={TextSearch} title="上游输出过滤" description="流式和非流式响应命中固定句子时屏蔽，不展示给用户。" status={upstreamOutputFilterSettings?.enabled ? `${upstreamOutputFilterSettings.phrases.length} 条已启用` : "未启用"} onClick={() => setActiveModal("upstream-filter")} />
           <RiskActionCard icon={ShieldAlert} title="Redis 失败策略" description="控制 Redis 异常时网关放行、拒绝或降级。" status={redisSettings?.policy ?? "未加载"} onClick={() => setActiveModal("redis")} />
           <RiskActionCard icon={Flame} title="全局熔断" description="紧急维护或故障隔离时阻断普通 API 调用。" status={circuitSettings?.enabled ? "已开启" : "未开启"} danger={Boolean(circuitSettings?.enabled)} onClick={() => setActiveModal("circuit")} />
         </section>
@@ -306,15 +288,42 @@ export default function AdminRiskControlPage() {
       ) : null}
 
       {activeModal === "ip-ban" ? (
-        <Modal title="手动 IP 封禁" description="命中手动封禁规则的请求会在网关侧直接返回，不会继续消耗上游。" onClose={() => { setActiveModal(null); setEditingIpRule(null); }} formId="risk-ip-ban-form" loading={ipBanMutation.isPending} wide showHeaderSave={false}>
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
-            <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <Modal title="手动 IP 封禁" description="命中手动封禁规则的请求会在网关侧直接返回，不会继续消耗上游。" onClose={() => { setActiveModal(null); setEditingIpRule(null); setIpBanSearch(""); }} formId="risk-ip-ban-form" loading={ipBanMutation.isPending} wide showHeaderSave={false}>
+          <div className="risk-ip-ban-layout">
+            <div className="risk-ip-ban-form-pane">
+              <SettingCard formId="risk-ip-ban-form" hideActions title={editingIpRule ? "编辑封禁规则" : "新增封禁规则"} description="notice 会按兼容响应格式返回文案；error 会返回 403。默认为公告返回。" form={ipBanForm} loading={ipBanMutation.isPending} onSubmit={(values) => ipBanMutation.mutate(values)}>
+                <label className="grid gap-2"><span className={labelClass}>IP 地址</span><input className={inputClass} disabled={Boolean(editingIpRule)} placeholder="120.231.123.73" {...ipBanForm.register("ip")} /></label>
+                <label className="grid gap-2"><span className={labelClass}>返回方式</span><select className={inputClass} {...ipBanForm.register("mode")}><option value="notice">公告返回</option><option value="error">403 错误</option></select></label>
+                <TextArea label="返回文案" register={ipBanForm.register("message")} />
+                <TextArea label="备注" register={ipBanForm.register("reason")} />
+                <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-4">
+                  {editingIpRule ? <button className="h-10 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { setEditingIpRule(null); ipBanForm.reset({ ip: "", mode: "notice", message: "当前 IP 已被网关封禁，请联系管理员。", reason: "" }); }}>取消编辑</button> : null}
+                  <button className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60" type="submit" disabled={ipBanMutation.isPending}><Save className="h-4 w-4" aria-hidden="true" />{ipBanMutation.isPending ? "保存中" : editingIpRule ? "保存规则" : "新增规则"}</button>
+                </div>
+              </SettingCard>
+            </div>
+            <section className="risk-ip-ban-list-pane">
               <div className="border-b border-slate-200 px-5 py-4">
-                <h3 className="text-base font-semibold text-slate-950">已封禁 IP</h3>
-                <p className="mt-1 text-sm leading-6 text-slate-500">规则立即生效，后端最多有数秒缓存延迟。</p>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">已封禁 IP</h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">规则立即生效，后端最多有数秒缓存延迟。</p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">{filteredIpBanRules.length}/{ipBanRules.length}</span>
+                </div>
+                <label className="risk-ip-ban-search">
+                  <Search className="h-4 w-4" aria-hidden="true" />
+                  <input
+                    type="search"
+                    value={ipBanSearch}
+                    onChange={(event) => setIpBanSearch(event.target.value)}
+                    placeholder="搜索 IP、文案或备注"
+                    aria-label="搜索已封禁 IP"
+                  />
+                </label>
               </div>
-              <div className="divide-y divide-slate-200">
-                {ipBanRules.length ? ipBanRules.map((rule) => (
+              <div className="risk-ip-ban-list-scroll divide-y divide-slate-200">
+                {filteredIpBanRules.length ? filteredIpBanRules.map((rule) => (
                   <article key={rule.ip} className="grid gap-3 px-5 py-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
@@ -330,19 +339,9 @@ export default function AdminRiskControlPage() {
                       <button className="inline-flex h-9 items-center gap-2 rounded-md border border-rose-200 px-3 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60" type="button" disabled={deleteIpBanMutation.isPending} onClick={() => deleteIpBanMutation.mutate(rule.ip)}><Trash2 className="h-4 w-4" aria-hidden="true" />删除</button>
                     </div>
                   </article>
-                )) : <div className="px-5 py-10 text-center text-sm text-slate-500">暂无手动封禁 IP</div>}
+                )) : <div className="px-5 py-10 text-center text-sm text-slate-500">{ipBanRules.length ? "没有匹配的封禁 IP" : "暂无手动封禁 IP"}</div>}
               </div>
             </section>
-            <SettingCard formId="risk-ip-ban-form" hideActions title={editingIpRule ? "编辑封禁规则" : "新增封禁规则"} description="notice 会按兼容响应格式返回文案；error 会返回 403。默认为公告返回。" form={ipBanForm} loading={ipBanMutation.isPending} onSubmit={(values) => ipBanMutation.mutate(values)}>
-              <label className="grid gap-2"><span className={labelClass}>IP 地址</span><input className={inputClass} disabled={Boolean(editingIpRule)} placeholder="120.231.123.73" {...ipBanForm.register("ip")} /></label>
-              <label className="grid gap-2"><span className={labelClass}>返回方式</span><select className={inputClass} {...ipBanForm.register("mode")}><option value="notice">公告返回</option><option value="error">403 错误</option></select></label>
-              <TextArea label="返回文案" register={ipBanForm.register("message")} />
-              <TextArea label="备注" register={ipBanForm.register("reason")} />
-              <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-4">
-                {editingIpRule ? <button className="h-10 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => { setEditingIpRule(null); ipBanForm.reset({ ip: "", mode: "notice", message: "当前 IP 已被网关封禁，请联系管理员。", reason: "" }); }}>取消编辑</button> : null}
-                <button className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60" type="submit" disabled={ipBanMutation.isPending}><Save className="h-4 w-4" aria-hidden="true" />{ipBanMutation.isPending ? "保存中" : editingIpRule ? "保存规则" : "新增规则"}</button>
-              </div>
-            </SettingCard>
           </div>
         </Modal>
       ) : null}
@@ -359,15 +358,6 @@ export default function AdminRiskControlPage() {
                 register={gatewayForm.register(field.key)}
               />
             ))}
-          </SettingCard>
-        </Modal>
-      ) : null}
-
-      {activeModal === "upstream-filter" ? (
-        <Modal title="上游输出过滤" description="每行填写一句需要屏蔽的固定文本；流式输出会先缓存可能命中的前缀，确认不是目标句子后再下发。" onClose={() => setActiveModal(null)} formId="risk-upstream-filter-form" loading={upstreamOutputFilterMutation.isPending}>
-          <SettingCard formId="risk-upstream-filter-form" hideActions title="上游输出过滤" description="适合屏蔽上游固定追加的广告词或污染文本。保存后后端最多有数秒缓存延迟。" form={upstreamOutputFilterForm} loading={upstreamOutputFilterMutation.isPending} onSubmit={(values) => upstreamOutputFilterMutation.mutate(values)}>
-            <Toggle label="启用输出过滤" register={upstreamOutputFilterForm.register("enabled")} />
-            <TextArea label="屏蔽文本，每行一句" register={upstreamOutputFilterForm.register("phrasesText")} />
           </SettingCard>
         </Modal>
       ) : null}

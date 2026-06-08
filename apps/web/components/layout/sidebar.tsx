@@ -20,13 +20,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 
-interface NavItem {
+export interface NavItem {
   title: string;
   href: string;
   icon: ComponentType<{ className?: string }>;
 }
 
-const navItems: NavItem[] = [
+export const navItems: NavItem[] = [
   { title: "运营总览", href: "/admin/overview", icon: Gauge },
   { title: "用户与钱包", href: "/admin/users", icon: Users },
   { title: "兑换码", href: "/admin/redeem-codes", icon: Coins },

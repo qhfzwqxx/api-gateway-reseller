@@ -273,7 +273,7 @@ function AccessTierModal({
             <input type="checkbox" checked={walletRequired} onChange={(event) => setWalletRequired(event.target.checked)} className="mt-1 h-4 w-4 rounded border-slate-300" />
             <span>
               <span className="block text-sm font-medium text-slate-700">要求钱包余额门槛</span>
-              <span className="mt-1 block text-xs leading-5 text-slate-500">关闭后，该等级请求不会因为余额为 0 或不足预留金额而被拦截；最终扣费仍按倍率计算。</span>
+              <span className="mt-1 block text-xs leading-5 text-slate-500">关闭后，该等级只使用订阅额度；不会检查或扣减钱包余额。</span>
             </span>
           </label>
           <label className="grid gap-2">

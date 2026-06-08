@@ -8,6 +8,7 @@ import { createApiKey, createRedeemCode } from "../lib/crypto.js";
 import { hashPassword, requireAdmin, requireUser } from "../services/auth.js";
 import {
   abortActiveApiRequest,
+  countActiveApiRequests,
   createManualTerminateUsage,
   manualTerminateMessage,
   manualTerminateStatusCode,
@@ -38,6 +39,12 @@ import {
   validateReasoningEffortTransformRules,
   normalizeReasoningEffortTransformRule,
 } from "../services/reasoning-effort-transform-settings.js";
+import {
+  defaultImageGenerationToolSettings,
+  normalizeImageGenerationToolSettings,
+  readImageGenerationToolSettings,
+  saveImageGenerationToolSettings,
+} from "../services/image-generation-tool-settings.js";
 import { sendSmtpTestEmail } from "../services/mailer.js";
 import {
   checkModelPoolChannel,
@@ -74,6 +81,7 @@ import {
   ipBanModes,
   ipBanNoticeUsageSource,
   listIpBanRules,
+  normalizeIpAddress,
   saveIpBanRule,
 } from "../services/ip-ban-rules.js";
 import {
@@ -94,10 +102,6 @@ import {
   saveGatewayNoticeSettings,
 } from "../services/gateway-notice-settings.js";
 import {
-  readUpstreamOutputFilterSettings,
-  saveUpstreamOutputFilterSettings,
-} from "../services/upstream-output-filter-settings.js";
-import {
   defaultRedisFailurePolicySettings,
   readRedisFailurePolicySettings,
   redisFailurePolicyValues,
@@ -108,6 +112,13 @@ import {
   readGlobalCircuitBreakerSettings,
   saveGlobalCircuitBreakerSettings,
 } from "../services/global-circuit-breaker-settings.js";
+import {
+  checkImageProxyService,
+  defaultImageProxySettings,
+  normalizeImageProxySettings,
+  readImageProxySettings,
+  saveImageProxySettings,
+} from "../services/image-proxy-settings.js";
 import {
   clearStandardAccessTierCache,
   ensureStandardAccessTier,
@@ -242,8 +253,9 @@ const userRuntimeLimitSchema = z.number().int().min(0).max(10000);
 const optionalTierIdSchema = z.string().min(1).nullable().optional();
 const priceVersionSchema = z.string().trim().min(1).max(80).default("v1");
 const upstreamEndpointSchema = z
-  .enum(["responses", "chat_completions"])
+  .enum(["responses", "chat_completions", "images_generations"])
   .default("responses");
+const pricingModeSchema = z.enum(["token", "request"]).default("token");
 const accessTierCodeSchema = z
   .string()
   .trim()
@@ -365,6 +377,7 @@ const adminCreateApiKeySchema = z.object({
   allowedModels: z.array(z.string()).default([]),
   noticeEnabled: z.boolean().default(false),
   noticeText: noticeTextSchema,
+  forceFastMode: z.boolean().default(false),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
   ipWhitelist: z.array(z.string().trim().min(1).max(128)).max(100).default([]),
 });
@@ -393,6 +406,7 @@ const adminPatchApiKeySchema = z.object({
   allowedModels: z.array(z.string()).optional(),
   noticeEnabled: z.boolean().optional(),
   noticeText: noticeTextSchema,
+  forceFastMode: z.boolean().optional(),
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   disabledReason: z.string().trim().max(500).nullable().optional(),
   ipWhitelist: z.array(z.string().trim().min(1).max(128)).max(100).optional(),
@@ -443,10 +457,6 @@ const gatewayNoticeSettingsSchema = z
     ) as Record<keyof typeof defaultGatewayNoticeSettings, z.ZodString>,
   )
   .partial();
-const upstreamOutputFilterSettingsSchema = z.object({
-  enabled: z.boolean(),
-  phrases: z.array(z.string().trim().min(1).max(2000)).max(50),
-});
 const redisFailurePolicySettingsSchema = z
   .object({
     policy: z.enum(redisFailurePolicyValues),
@@ -567,6 +577,7 @@ const adminApiKeySelect = {
   allowedModels: true,
   noticeEnabled: true,
   noticeText: true,
+  forceFastMode: true,
   tags: true,
   disabledReason: true,
   disabledAt: true,
@@ -972,7 +983,7 @@ async function buildAdminRequestsWhere(query: AdminRequestsQuery) {
 async function getAdminRequestsSummary(
   where: Prisma.ApiRequestWhereInput | undefined,
 ) {
-  const [aggregate, statusGroups] = await Promise.all([
+  const [aggregate, statusGroups, effectivePendingCount] = await Promise.all([
     prisma.apiRequest.aggregate({
       where,
       _count: { _all: true },
@@ -997,6 +1008,7 @@ async function getAdminRequestsSummary(
       where,
       _count: { _all: true },
     }),
+    countEffectivePendingRequests(where),
   ]);
   const countByStatus = Object.fromEntries(
     statusGroups.map((group) => [group.status, group._count._all]),
@@ -1004,7 +1016,6 @@ async function getAdminRequestsSummary(
   const totalCount = aggregate._count._all;
   const successCount = countByStatus.SUCCESS ?? 0;
   const failedCount = countByStatus.FAILED ?? 0;
-  const pendingCount = countByStatus.PENDING ?? 0;
   const chargedAmountUsd = new Decimal(
     aggregate._sum.chargedAmountUsd?.toString() ?? "0",
   );
@@ -1016,7 +1027,7 @@ async function getAdminRequestsSummary(
     totalCount,
     successCount,
     failedCount,
-    pendingCount,
+    pendingCount: effectivePendingCount,
     failureRate: totalCount > 0 ? (failedCount / totalCount) * 100 : 0,
     inputTokens: aggregate._sum.inputTokens ?? 0,
     cachedInputTokens: aggregate._sum.cachedInputTokens ?? 0,
@@ -1028,6 +1039,55 @@ async function getAdminRequestsSummary(
     avgLatencyMs: aggregate._avg.latencyMs,
     avgFirstTokenLatencyMs: aggregate._avg.upstreamFirstChunkLatencyMs,
   };
+}
+
+async function countEffectivePendingRequests(
+  where: Prisma.ApiRequestWhereInput | undefined,
+) {
+  const pendingAutoTerminateSettings = await readPendingAutoTerminateSettings();
+  const staleCutoff = new Date(
+    Date.now() - pendingAutoTerminateSettings.timeoutSeconds * 1000,
+  );
+  const effectivePendingWhere = {
+    AND: [
+      where ?? {},
+      { status: "PENDING" },
+      {
+        OR: [
+          { createdAt: { gte: staleCutoff } },
+          {
+            AND: [
+              { endpoint: { not: "/v1/responses/compact" } },
+              {
+                NOT: [
+                  {
+                    responseUsage: {
+                      path: ["gatewayCompactFallback"],
+                      equals: true,
+                    },
+                  },
+                  {
+                    responseUsage: {
+                      path: ["gatewayCompactKind"],
+                      equals: "normal",
+                    },
+                  },
+                  {
+                    responseUsage: {
+                      path: ["gatewayCompactKind"],
+                      equals: "fallback",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  } satisfies Prisma.ApiRequestWhereInput;
+
+  return prisma.apiRequest.count({ where: effectivePendingWhere });
 }
 
 type ReportDimensionField =
@@ -1885,13 +1945,11 @@ export async function adminRoutes(app: FastifyInstance) {
       temporaryIpNoticeBanSettings,
       pendingAutoTerminateSettings,
       gatewayNoticeSettings,
-      upstreamOutputFilterSettings,
       redisFailurePolicySettings,
       globalCircuitBreakerSettings,
       externalAlertSettings,
       charityAnnouncementSettings,
       reasoningEffortTransformSettings,
-      pendingRequests,
       failedRequests24h,
       noticeRequests24h,
       rateLimitedRequests24h,
@@ -1901,13 +1959,11 @@ export async function adminRoutes(app: FastifyInstance) {
       readTemporaryIpNoticeBanSettings(),
       readPendingAutoTerminateSettings(),
       readGatewayNoticeSettings(),
-      readUpstreamOutputFilterSettings(),
       readRedisFailurePolicySettings(),
       readGlobalCircuitBreakerSettings(),
       readExternalAlertSettings(),
       readCharityAnnouncementSettings(),
       readReasoningEffortTransformSettings(),
-      prisma.apiRequest.count({ where: { status: "PENDING" } }),
       prisma.apiRequest.count({
         where: {
           status: "FAILED",
@@ -1949,7 +2005,6 @@ export async function adminRoutes(app: FastifyInstance) {
         maxTimeoutSeconds: maxPendingAutoTerminateSeconds,
       },
       gatewayNoticeSettings,
-      upstreamOutputFilterSettings,
       redisFailurePolicySettings,
       globalCircuitBreakerSettings,
       externalAlertSettings,
@@ -1960,7 +2015,7 @@ export async function adminRoutes(app: FastifyInstance) {
       },
       reasoningEffortTransformSettings,
       counters: {
-        pendingRequests,
+        pendingRequests: countActiveApiRequests(),
         failedRequests24h,
         noticeRequests24h,
         rateLimitedRequests24h,
@@ -2087,19 +2142,6 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/admin/upstream-output-filter-settings", async () => {
-    return {
-      settings: await readUpstreamOutputFilterSettings(),
-    };
-  });
-
-  app.put("/admin/upstream-output-filter-settings", async (request) => {
-    const body = upstreamOutputFilterSettingsSchema.parse(request.body);
-    return {
-      settings: await saveUpstreamOutputFilterSettings(body),
-    };
-  });
-
   app.get("/admin/redis-failure-policy-settings", async () => {
     const settings = await readRedisFailurePolicySettings();
     return {
@@ -2202,6 +2244,48 @@ export async function adminRoutes(app: FastifyInstance) {
     },
   );
 
+  app.get("/admin/image-generation-tool-settings", async () => {
+    return {
+      settings: await readImageGenerationToolSettings(),
+      defaults: defaultImageGenerationToolSettings,
+    };
+  });
+
+  app.put("/admin/image-generation-tool-settings", async (request) => {
+    const body = normalizeImageGenerationToolSettings(request.body);
+    const settings = await saveImageGenerationToolSettings(body);
+    return { settings, defaults: defaultImageGenerationToolSettings };
+  });
+
+  app.get("/admin/image-proxy-settings", async () => {
+    const [settings, models] = await Promise.all([
+      readImageProxySettings(),
+      prisma.modelPrice.findMany({
+        where: {
+          enabled: true,
+          upstreamEndpoint: "images_generations",
+        },
+        select: { model: true },
+        orderBy: { model: "asc" },
+      }),
+    ]);
+    return {
+      settings,
+      defaults: defaultImageProxySettings,
+      models: [...new Set(models.map((item) => item.model))],
+    };
+  });
+
+  app.put("/admin/image-proxy-settings", async (request) => {
+    const body = normalizeImageProxySettings(request.body);
+    const settings = await saveImageProxySettings(body);
+    return { settings, defaults: defaultImageProxySettings };
+  });
+
+  app.post("/admin/image-proxy-settings/check", async () => {
+    return { result: await checkImageProxyService() };
+  });
+
   app.get("/admin/users", async (request) => {
     const query = z
       .object({
@@ -2292,6 +2376,130 @@ export async function adminRoutes(app: FastifyInstance) {
         })),
       ),
     };
+  });
+
+  app.get("/admin/users/:id/ips", async (request, reply) => {
+    const params = z.object({ id: z.string() }).parse(request.params);
+    const user = await prisma.user.findUnique({
+      where: { id: params.id },
+      select: { id: true, email: true },
+    });
+
+    if (!user) {
+      return reply.status(404).send({ message: "User not found" });
+    }
+
+    const [loginGroups, apiGroups, ipBanRules] = await Promise.all([
+      prisma.loginLog.groupBy({
+        by: ["ip", "success"],
+        where: {
+          userId: user.id,
+          ip: { not: null },
+        },
+        _count: { _all: true },
+        _min: { createdAt: true },
+        _max: { createdAt: true },
+      }),
+      prisma.apiRequest.groupBy({
+        by: ["clientIp"],
+        where: {
+          userId: user.id,
+          clientIp: { not: null },
+        },
+        _count: { _all: true },
+        _min: { createdAt: true },
+        _max: { createdAt: true },
+      }),
+      listIpBanRules(),
+    ]);
+
+    const banRuleByIp = new Map(
+      ipBanRules.map((rule) => [normalizeIpAddress(rule.ip) ?? rule.ip, rule]),
+    );
+    const ipMap = new Map<
+      string,
+      {
+        ip: string;
+        loginSuccessCount: number;
+        loginFailureCount: number;
+        apiRequestCount: number;
+        firstSeenAt: Date | null;
+        lastSeenAt: Date | null;
+      }
+    >();
+
+    function touchIp(
+      rawIp: string | null,
+      counts: {
+        loginSuccessCount?: number;
+        loginFailureCount?: number;
+        apiRequestCount?: number;
+      },
+      firstSeenAt?: Date | null,
+      lastSeenAt?: Date | null,
+    ) {
+      const normalizedIp = normalizeIpAddress(rawIp);
+      if (!normalizedIp) {
+        return;
+      }
+      const current =
+        ipMap.get(normalizedIp) ??
+        {
+          ip: normalizedIp,
+          loginSuccessCount: 0,
+          loginFailureCount: 0,
+          apiRequestCount: 0,
+          firstSeenAt: null,
+          lastSeenAt: null,
+        };
+      current.loginSuccessCount += counts.loginSuccessCount ?? 0;
+      current.loginFailureCount += counts.loginFailureCount ?? 0;
+      current.apiRequestCount += counts.apiRequestCount ?? 0;
+      if (firstSeenAt && (!current.firstSeenAt || firstSeenAt < current.firstSeenAt)) {
+        current.firstSeenAt = firstSeenAt;
+      }
+      if (lastSeenAt && (!current.lastSeenAt || lastSeenAt > current.lastSeenAt)) {
+        current.lastSeenAt = lastSeenAt;
+      }
+      ipMap.set(normalizedIp, current);
+    }
+
+    for (const group of loginGroups) {
+      touchIp(
+        group.ip,
+        group.success
+          ? { loginSuccessCount: group._count._all }
+          : { loginFailureCount: group._count._all },
+        group._min.createdAt,
+        group._max.createdAt,
+      );
+    }
+
+    for (const group of apiGroups) {
+      touchIp(
+        group.clientIp,
+        { apiRequestCount: group._count._all },
+        group._min.createdAt,
+        group._max.createdAt,
+      );
+    }
+
+    const ips = Array.from(ipMap.values())
+      .map((item) => ({
+        ...item,
+        totalCount:
+          item.loginSuccessCount +
+          item.loginFailureCount +
+          item.apiRequestCount,
+        firstSeenAt: item.firstSeenAt?.toISOString() ?? null,
+        lastSeenAt: item.lastSeenAt?.toISOString() ?? null,
+        banRule: banRuleByIp.get(item.ip) ?? null,
+      }))
+      .sort((left, right) =>
+        (right.lastSeenAt ?? "").localeCompare(left.lastSeenAt ?? ""),
+      );
+
+    return { user, ips };
   });
 
   app.get("/admin/users/:id/subscriptions", async (request) => {
@@ -2828,6 +3036,7 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedModels: body.allowedModels,
         noticeEnabled: body.noticeEnabled,
         noticeText: body.noticeText ?? null,
+        forceFastMode: body.forceFastMode,
         tags: normalizeTags(body.tags),
         ipWhitelist: normalizeIpPatterns(body.ipWhitelist),
       },
@@ -3032,6 +3241,9 @@ export async function adminRoutes(app: FastifyInstance) {
           : {}),
         ...(body.noticeText !== undefined
           ? { noticeText: body.noticeText }
+          : {}),
+        ...(body.forceFastMode !== undefined
+          ? { forceFastMode: body.forceFastMode }
           : {}),
         ...(body.tags !== undefined ? { tags: normalizeTags(body.tags) } : {}),
         ...(body.ipWhitelist !== undefined
@@ -4676,16 +4888,19 @@ export async function adminRoutes(app: FastifyInstance) {
         model: z.string().min(1).max(120),
         upstreamProvider: z.string().min(1).max(80).default("default"),
         upstreamEndpoint: upstreamEndpointSchema,
+        pricingMode: pricingModeSchema,
         currency: z.string().default("USD"),
         upstreamInputPer1MTok: z.string().or(z.number()),
         upstreamOutputPer1MTok: z.string().or(z.number()),
         upstreamCachedInputPer1MTok: z.string().or(z.number()).default("0"),
         upstreamPriceMultiplier: z.string().or(z.number()).default("1"),
+        upstreamPerRequestUsd: z.string().or(z.number()).default("0"),
         customerInputPer1MTok: z.string().or(z.number()),
         customerOutputPer1MTok: z.string().or(z.number()),
         customerCachedInputPer1MTok: z.string().or(z.number()).default("0"),
         customerPriceMultiplier: z.string().or(z.number()).default("1"),
         minimumChargeUsd: z.string().or(z.number()).default("0"),
+        perRequestUsd: z.string().or(z.number()).default("0"),
         enabled: z.boolean().default(true),
         priceVersion: priceVersionSchema,
         effectiveFrom: expiresAtSchema,
@@ -4711,16 +4926,19 @@ export async function adminRoutes(app: FastifyInstance) {
       update: {
         upstreamProvider: body.upstreamProvider,
         upstreamEndpoint: body.upstreamEndpoint,
+        pricingMode: body.pricingMode,
         currency: body.currency,
         upstreamInputPer1MTok: String(body.upstreamInputPer1MTok),
         upstreamOutputPer1MTok: String(body.upstreamOutputPer1MTok),
         upstreamCachedInputPer1MTok: String(body.upstreamCachedInputPer1MTok),
         upstreamPriceMultiplier: String(body.upstreamPriceMultiplier),
+        upstreamPerRequestUsd: String(body.upstreamPerRequestUsd),
         customerInputPer1MTok: String(body.customerInputPer1MTok),
         customerOutputPer1MTok: String(body.customerOutputPer1MTok),
         customerCachedInputPer1MTok: String(body.customerCachedInputPer1MTok),
         customerPriceMultiplier: String(body.customerPriceMultiplier),
         minimumChargeUsd: String(body.minimumChargeUsd),
+        perRequestUsd: String(body.perRequestUsd),
         enabled: body.enabled,
         priceVersion: body.priceVersion,
         ...(body.effectiveFrom !== undefined
@@ -4735,16 +4953,19 @@ export async function adminRoutes(app: FastifyInstance) {
         model: body.model,
         upstreamProvider: body.upstreamProvider,
         upstreamEndpoint: body.upstreamEndpoint,
+        pricingMode: body.pricingMode,
         currency: body.currency,
         upstreamInputPer1MTok: String(body.upstreamInputPer1MTok),
         upstreamOutputPer1MTok: String(body.upstreamOutputPer1MTok),
         upstreamCachedInputPer1MTok: String(body.upstreamCachedInputPer1MTok),
         upstreamPriceMultiplier: String(body.upstreamPriceMultiplier),
+        upstreamPerRequestUsd: String(body.upstreamPerRequestUsd),
         customerInputPer1MTok: String(body.customerInputPer1MTok),
         customerOutputPer1MTok: String(body.customerOutputPer1MTok),
         customerCachedInputPer1MTok: String(body.customerCachedInputPer1MTok),
         customerPriceMultiplier: String(body.customerPriceMultiplier),
         minimumChargeUsd: String(body.minimumChargeUsd),
+        perRequestUsd: String(body.perRequestUsd),
         enabled: body.enabled,
         priceVersion: body.priceVersion,
         effectiveFrom: body.effectiveFrom,
@@ -4764,6 +4985,7 @@ export async function adminRoutes(app: FastifyInstance) {
             z.object({
               model: z.string().min(1).max(120),
               enabled: z.boolean(),
+              pricingMode: pricingModeSchema,
               customerInputPer1MTok: z.string().or(z.number()),
               customerCachedInputPer1MTok: z
                 .string()
@@ -4771,6 +4993,7 @@ export async function adminRoutes(app: FastifyInstance) {
                 .default("0"),
               customerOutputPer1MTok: z.string().or(z.number()),
               customerPriceMultiplier: z.string().or(z.number()).default("1"),
+              perRequestUsd: z.string().or(z.number()).default("0"),
             }),
           )
           .min(1),
@@ -4783,12 +5006,14 @@ export async function adminRoutes(app: FastifyInstance) {
         {
           model: update.model,
           enabled: update.enabled,
+          pricingMode: update.pricingMode,
           customerInputPer1MTok: String(update.customerInputPer1MTok),
           customerCachedInputPer1MTok: String(
             update.customerCachedInputPer1MTok,
           ),
           customerOutputPer1MTok: String(update.customerOutputPer1MTok),
           customerPriceMultiplier: String(update.customerPriceMultiplier),
+          perRequestUsd: String(update.perRequestUsd),
         },
       ]),
     );
@@ -4820,16 +5045,19 @@ export async function adminRoutes(app: FastifyInstance) {
         model: z.string().min(1).max(120).optional(),
         upstreamProvider: z.string().min(1).max(80).optional(),
         upstreamEndpoint: upstreamEndpointSchema.optional(),
+        pricingMode: pricingModeSchema.optional(),
         currency: z.string().optional(),
         upstreamInputPer1MTok: z.string().or(z.number()).optional(),
         upstreamOutputPer1MTok: z.string().or(z.number()).optional(),
         upstreamCachedInputPer1MTok: z.string().or(z.number()).optional(),
         upstreamPriceMultiplier: z.string().or(z.number()).optional(),
+        upstreamPerRequestUsd: z.string().or(z.number()).optional(),
         customerInputPer1MTok: z.string().or(z.number()).optional(),
         customerOutputPer1MTok: z.string().or(z.number()).optional(),
         customerCachedInputPer1MTok: z.string().or(z.number()).optional(),
         customerPriceMultiplier: z.string().or(z.number()).optional(),
         minimumChargeUsd: z.string().or(z.number()).optional(),
+        perRequestUsd: z.string().or(z.number()).optional(),
         enabled: z.boolean().optional(),
         priceVersion: z.string().trim().min(1).max(80).optional(),
         effectiveFrom: expiresAtSchema,
@@ -5790,16 +6018,19 @@ type ModelPriceBody = {
   model?: string;
   upstreamProvider?: string;
   upstreamEndpoint?: string;
+  pricingMode?: string;
   currency?: string;
   upstreamInputPer1MTok?: string | number;
   upstreamOutputPer1MTok?: string | number;
   upstreamCachedInputPer1MTok?: string | number;
   upstreamPriceMultiplier?: string | number;
+  upstreamPerRequestUsd?: string | number;
   customerInputPer1MTok?: string | number;
   customerOutputPer1MTok?: string | number;
   customerCachedInputPer1MTok?: string | number;
   customerPriceMultiplier?: string | number;
   minimumChargeUsd?: string | number;
+  perRequestUsd?: string | number;
   enabled?: boolean;
   priceVersion?: string;
   effectiveFrom?: Date | null;
@@ -5815,6 +6046,7 @@ function buildModelPriceUpdateData(body: ModelPriceBody) {
     ...(body.upstreamEndpoint !== undefined
       ? { upstreamEndpoint: body.upstreamEndpoint }
       : {}),
+    ...(body.pricingMode !== undefined ? { pricingMode: body.pricingMode } : {}),
     ...(body.currency !== undefined ? { currency: body.currency } : {}),
     ...(body.upstreamInputPer1MTok !== undefined
       ? { upstreamInputPer1MTok: String(body.upstreamInputPer1MTok) }
@@ -5829,6 +6061,9 @@ function buildModelPriceUpdateData(body: ModelPriceBody) {
       : {}),
     ...(body.upstreamPriceMultiplier !== undefined
       ? { upstreamPriceMultiplier: String(body.upstreamPriceMultiplier) }
+      : {}),
+    ...(body.upstreamPerRequestUsd !== undefined
+      ? { upstreamPerRequestUsd: String(body.upstreamPerRequestUsd) }
       : {}),
     ...(body.customerInputPer1MTok !== undefined
       ? { customerInputPer1MTok: String(body.customerInputPer1MTok) }
@@ -5846,6 +6081,9 @@ function buildModelPriceUpdateData(body: ModelPriceBody) {
       : {}),
     ...(body.minimumChargeUsd !== undefined
       ? { minimumChargeUsd: String(body.minimumChargeUsd) }
+      : {}),
+    ...(body.perRequestUsd !== undefined
+      ? { perRequestUsd: String(body.perRequestUsd) }
       : {}),
     ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
     ...(body.priceVersion !== undefined
@@ -5883,16 +6121,19 @@ type ModelPriceExportRow = {
   model: string;
   upstreamProvider: string;
   upstreamEndpoint: string;
+  pricingMode: string;
   currency: string;
   upstreamInputPer1MTok: Decimal;
   upstreamCachedInputPer1MTok: Decimal;
   upstreamOutputPer1MTok: Decimal;
   upstreamPriceMultiplier: Decimal;
+  upstreamPerRequestUsd: Decimal;
   customerInputPer1MTok: Decimal;
   customerCachedInputPer1MTok: Decimal;
   customerOutputPer1MTok: Decimal;
   customerPriceMultiplier: Decimal;
   minimumChargeUsd: Decimal;
+  perRequestUsd: Decimal;
   enabled: boolean;
   priceVersion: string;
   effectiveFrom: Date | null;
@@ -5976,16 +6217,19 @@ function buildModelPricesCsv(modelPrices: ModelPriceExportRow[]) {
     "model",
     "upstreamProvider",
     "upstreamEndpoint",
+    "pricingMode",
     "currency",
     "upstreamInputPer1MTok",
     "upstreamCachedInputPer1MTok",
     "upstreamOutputPer1MTok",
     "upstreamPriceMultiplier",
+    "upstreamPerRequestUsd",
     "customerInputPer1MTok",
     "customerCachedInputPer1MTok",
     "customerOutputPer1MTok",
     "customerPriceMultiplier",
     "minimumChargeUsd",
+    "perRequestUsd",
     "enabled",
     "priceVersion",
     "effectiveFrom",
@@ -5999,16 +6243,19 @@ function buildModelPricesCsv(modelPrices: ModelPriceExportRow[]) {
     price.model,
     price.upstreamProvider,
     price.upstreamEndpoint,
+    price.pricingMode,
     price.currency,
     price.upstreamInputPer1MTok.toString(),
     price.upstreamCachedInputPer1MTok.toString(),
     price.upstreamOutputPer1MTok.toString(),
     price.upstreamPriceMultiplier.toString(),
+    price.upstreamPerRequestUsd.toString(),
     price.customerInputPer1MTok.toString(),
     price.customerCachedInputPer1MTok.toString(),
     price.customerOutputPer1MTok.toString(),
     price.customerPriceMultiplier.toString(),
     price.minimumChargeUsd.toString(),
+    price.perRequestUsd.toString(),
     String(price.enabled),
     price.priceVersion,
     price.effectiveFrom?.toISOString() ?? "",
@@ -6189,6 +6436,7 @@ function normalizeImportedModelPriceRow(row: Record<string, unknown>) {
     model,
     upstreamProvider,
     upstreamEndpoint: readImportUpstreamEndpoint(row),
+    pricingMode: readImportPricingMode(row),
     currency: readImportString(row, "currency", false) || "USD",
     upstreamInputPer1MTok: readImportDecimal(row, "upstreamInputPer1MTok"),
     upstreamCachedInputPer1MTok: readImportDecimal(
@@ -6202,6 +6450,7 @@ function normalizeImportedModelPriceRow(row: Record<string, unknown>) {
       "upstreamPriceMultiplier",
       "1",
     ),
+    upstreamPerRequestUsd: readImportDecimal(row, "upstreamPerRequestUsd", "0"),
     customerInputPer1MTok: readImportDecimal(row, "customerInputPer1MTok"),
     customerCachedInputPer1MTok: readImportDecimal(
       row,
@@ -6215,6 +6464,7 @@ function normalizeImportedModelPriceRow(row: Record<string, unknown>) {
       "1",
     ),
     minimumChargeUsd: readImportDecimal(row, "minimumChargeUsd", "0"),
+    perRequestUsd: readImportDecimal(row, "perRequestUsd", "0"),
     enabled: readImportBoolean(row, "enabled", true),
     priceVersion: readImportString(row, "priceVersion", false) || "v1",
     effectiveFrom,
@@ -6224,11 +6474,26 @@ function normalizeImportedModelPriceRow(row: Record<string, unknown>) {
 
 function readImportUpstreamEndpoint(row: Record<string, unknown>) {
   const value = readImportString(row, "upstreamEndpoint", false) || "responses";
-  if (value === "responses" || value === "chat_completions") {
+  if (
+    value === "responses" ||
+    value === "chat_completions" ||
+    value === "images_generations"
+  ) {
     return value;
   }
 
-  throw new Error("upstreamEndpoint must be responses or chat_completions");
+  throw new Error(
+    "upstreamEndpoint must be responses, chat_completions or images_generations",
+  );
+}
+
+function readImportPricingMode(row: Record<string, unknown>) {
+  const value = readImportString(row, "pricingMode", false) || "token";
+  if (value === "token" || value === "request") {
+    return value;
+  }
+
+  throw new Error("pricingMode must be token or request");
 }
 
 function asStringRecord(value: unknown) {

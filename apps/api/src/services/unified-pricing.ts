@@ -4,10 +4,12 @@ import type { ChargePrice } from "../lib/money.js";
 export type UnifiedPriceSetting = {
   model: string;
   enabled: boolean;
+  pricingMode: string;
   customerInputPer1MTok: string;
   customerCachedInputPer1MTok: string;
   customerOutputPer1MTok: string;
   customerPriceMultiplier: string;
+  perRequestUsd: string;
 };
 
 export type UnifiedPriceSettingUpdate = UnifiedPriceSetting;
@@ -37,6 +39,7 @@ export async function saveUnifiedPriceSettings(updates: UnifiedPriceSettingUpdat
     const existing = current[update.model];
     current[update.model] = {
       enabled: update.enabled,
+      pricingMode: normalizePricingMode(update.pricingMode, existing?.pricingMode ?? "token"),
       customerInputPer1MTok: normalizePriceText(update.customerInputPer1MTok, existing?.customerInputPer1MTok ?? "0"),
       customerCachedInputPer1MTok: normalizePriceText(
         update.customerCachedInputPer1MTok,
@@ -44,6 +47,7 @@ export async function saveUnifiedPriceSettings(updates: UnifiedPriceSettingUpdat
       ),
       customerOutputPer1MTok: normalizePriceText(update.customerOutputPer1MTok, existing?.customerOutputPer1MTok ?? "0"),
       customerPriceMultiplier: normalizePriceText(update.customerPriceMultiplier, existing?.customerPriceMultiplier ?? "1"),
+      perRequestUsd: normalizePriceText(update.perRequestUsd, existing?.perRequestUsd ?? "0"),
     };
   }
 
@@ -68,10 +72,12 @@ export async function applyUnifiedCustomerPricing(price: ModelPrice): Promise<Ch
 
   return {
     ...price,
+    pricingMode: setting.pricingMode,
     customerInputPer1MTok: setting.customerInputPer1MTok,
     customerCachedInputPer1MTok: setting.customerCachedInputPer1MTok,
     customerOutputPer1MTok: setting.customerOutputPer1MTok,
     customerPriceMultiplier: setting.customerPriceMultiplier,
+    perRequestUsd: setting.perRequestUsd,
   };
 }
 
@@ -118,14 +124,20 @@ function normalizeStoredSettings(value: unknown): StoredUnifiedPriceSettings {
     const entry = setting as Record<string, unknown>;
     settings[model] = {
       enabled: entry.enabled === true,
+      pricingMode: normalizePricingMode(entry.pricingMode, "token"),
       customerInputPer1MTok: normalizePriceText(entry.customerInputPer1MTok, "0"),
       customerCachedInputPer1MTok: normalizePriceText(entry.customerCachedInputPer1MTok, "0"),
       customerOutputPer1MTok: normalizePriceText(entry.customerOutputPer1MTok, "0"),
       customerPriceMultiplier: normalizePriceText(entry.customerPriceMultiplier, "1"),
+      perRequestUsd: normalizePriceText(entry.perRequestUsd, "0"),
     };
   }
 
   return settings;
+}
+
+function normalizePricingMode(value: unknown, fallback: string) {
+  return value === "request" || value === "token" ? value : fallback;
 }
 
 function normalizePriceText(value: unknown, fallback: string) {

@@ -950,6 +950,7 @@ a {
 }
 
 .metric-item {
+  min-width: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -998,15 +999,36 @@ a {
 
 .metric-item strong {
   display: block;
+  max-width: 100%;
   margin-top: 12px;
+  overflow: visible;
   color: #0f172a;
   font-size: clamp(36px, 4.8vw, 54px);
   font-weight: 780;
   line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-grid.three .metric-item strong {
-  font-size: clamp(30px, 3.2vw, 42px);
+  font-size: clamp(26px, 2.35vw, 36px);
+}
+
+.metric-grid.three .metric-item strong.metric-value-compact {
+  font-size: clamp(24px, 2.05vw, 32px);
+}
+
+.metric-grid.three .metric-item strong.metric-value-tight {
+  font-size: clamp(21px, 1.75vw, 28px);
+}
+
+.metric-grid.three .metric-item {
+  min-width: 0;
+  padding: 22px 16px;
+}
+
+.metric-grid.three .metric-item span {
   white-space: nowrap;
 }
 
@@ -9448,6 +9470,160 @@ td .button-row.compact {
   text-align: center;
 }
 
+@media (max-width: 767px) {
+  .admin-app-shell {
+    display: block;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .admin-app-frame {
+    display: block;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  #admin-main-scroll {
+    display: block;
+    min-height: auto;
+    overflow: visible;
+    padding: 12px;
+    scroll-padding-top: 76px;
+  }
+
+  #admin-main-scroll > * {
+    min-width: 0;
+  }
+
+  #admin-main-scroll section,
+  #admin-main-scroll article,
+  #admin-main-scroll .rounded-lg,
+  #admin-main-scroll .rounded-xl,
+  #admin-main-scroll .rounded-2xl {
+    max-width: 100%;
+  }
+
+  #admin-main-scroll .grid {
+    min-width: 0;
+  }
+
+  #admin-main-scroll .h-full,
+  #admin-main-scroll .min-h-0,
+  #admin-main-scroll .overflow-hidden {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  #admin-main-scroll .overflow-y-auto,
+  #admin-main-scroll .overflow-auto {
+    overscroll-behavior: auto;
+  }
+
+  #admin-main-scroll .overflow-x-auto,
+  #admin-main-scroll .overflow-auto,
+  #admin-main-scroll .audit-table-wrap {
+    overflow-x: visible;
+  }
+
+  #admin-main-scroll table {
+    min-width: 0 !important;
+  }
+
+  #admin-main-scroll .overflow-x-auto > table,
+  #admin-main-scroll .overflow-auto > table,
+  #admin-main-scroll .audit-table-wrap > table {
+    display: block;
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  #admin-main-scroll .overflow-x-auto > table > thead,
+  #admin-main-scroll .overflow-auto > table > thead,
+  #admin-main-scroll .audit-table-wrap > table > thead {
+    display: none;
+  }
+
+  #admin-main-scroll .overflow-x-auto > table > tbody,
+  #admin-main-scroll .overflow-auto > table > tbody,
+  #admin-main-scroll .audit-table-wrap > table > tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  #admin-main-scroll .overflow-x-auto > table > tbody > tr,
+  #admin-main-scroll .overflow-auto > table > tbody > tr,
+  #admin-main-scroll .audit-table-wrap > table > tbody > tr {
+    display: grid;
+    gap: 10px;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 10px;
+    background: #ffffff;
+    padding: 12px;
+    box-shadow: 0 8px 22px rgb(15 23 42 / 5%);
+  }
+
+  #admin-main-scroll .overflow-x-auto > table > tbody > tr > td,
+  #admin-main-scroll .overflow-auto > table > tbody > tr > td,
+  #admin-main-scroll .audit-table-wrap > table > tbody > tr > td {
+    display: block;
+    border: 0;
+    padding: 0;
+    text-align: left;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  #admin-main-scroll .overflow-x-auto > table > tbody > tr > td:last-child,
+  #admin-main-scroll .overflow-auto > table > tbody > tr > td:last-child,
+  #admin-main-scroll .audit-table-wrap > table > tbody > tr > td:last-child {
+    padding-top: 4px;
+  }
+
+  #admin-main-scroll td .flex.justify-end,
+  #admin-main-scroll td .items-center.justify-end {
+    justify-content: flex-start;
+  }
+
+  #admin-main-scroll td button,
+  #admin-main-scroll td a {
+    min-height: 40px;
+  }
+
+  #admin-main-scroll td .flex,
+  #admin-main-scroll td .inline-flex {
+    flex-wrap: wrap;
+  }
+
+  #admin-main-scroll input,
+  #admin-main-scroll select,
+  #admin-main-scroll textarea {
+    min-height: 42px;
+    font-size: 16px;
+  }
+
+  #admin-main-scroll .sticky {
+    top: 0;
+  }
+
+  .form-modal,
+  .form-modal.modal-wide,
+  .config-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    border-radius: 10px;
+  }
+
+  .modal-footer,
+  .admin-confirm-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
 .admin-console-v2 .admin-page-loading {
   display: grid;
   min-height: 120px;
@@ -10849,6 +11025,101 @@ td .button-row.compact {
   box-shadow: 0 -12px 28px rgb(15 23 42 / 8%);
 }
 
+.risk-ip-ban-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+  height: min(620px, calc(100dvh - 190px));
+}
+
+.risk-ip-ban-form-pane {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  min-width: 0;
+}
+
+.risk-ip-ban-form-pane > section {
+  border-color: #dbe4f0;
+  box-shadow: 0 12px 30px rgb(15 23 42 / 7%);
+}
+
+.risk-ip-ban-list-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 6%);
+}
+
+.risk-ip-ban-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(360px, 100%);
+  height: 36px;
+  margin-top: 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  padding: 0 11px;
+  color: #64748b;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.risk-ip-ban-search:focus-within {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 12%);
+}
+
+.risk-ip-ban-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  font-size: 13px;
+  outline: 0;
+}
+
+.risk-ip-ban-search input::placeholder {
+  color: #94a3b8;
+}
+
+.risk-ip-ban-list-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.risk-ip-ban-list-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.risk-ip-ban-list-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.risk-ip-ban-list-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #cbd5e1;
+}
+
+.risk-ip-ban-list-scroll::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
 @media (max-width: 900px) {
   .risk-action-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -10861,6 +11132,19 @@ td .button-row.compact {
   .risk-action-card button {
     grid-column: 1 / -1;
     justify-content: center;
+  }
+
+  .risk-ip-ban-layout {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .risk-ip-ban-form-pane {
+    position: static;
+  }
+
+  .risk-ip-ban-list-pane {
+    max-height: 520px;
   }
 }
 

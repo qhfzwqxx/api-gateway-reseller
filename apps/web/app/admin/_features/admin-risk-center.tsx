@@ -66,11 +66,6 @@ type GatewayNoticeSettings = {
   upstreamBalanceInsufficientMessage: string;
 };
 
-type UpstreamOutputFilterSettings = {
-  enabled: boolean;
-  phrases: string[];
-};
-
 type RedisFailurePolicySettings = {
   policy: "fail-open" | "fail-closed" | "degraded";
   degradedAdminBypassEnabled: boolean;
@@ -111,7 +106,6 @@ type RiskCenter = {
   temporaryIpNoticeBanSettings: TemporaryIpNoticeBanSettings;
   pendingAutoTerminateSettings: PendingAutoTerminateSettings;
   gatewayNoticeSettings: GatewayNoticeSettings;
-  upstreamOutputFilterSettings: UpstreamOutputFilterSettings;
   redisFailurePolicySettings: RedisFailurePolicySettings;
   globalCircuitBreakerSettings: GlobalCircuitBreakerSettings;
   externalAlertSettings: ExternalAlertSettings;
@@ -335,7 +329,7 @@ function AdminRiskCenterPanel({
         </div>
         <div className="metric-grid">
           <Metric
-            label="PENDING 请求"
+            label="实时 PENDING"
             value={String(riskCenter?.counters.pendingRequests ?? 0)}
           />
           <Metric

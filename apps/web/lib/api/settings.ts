@@ -13,11 +13,6 @@ export interface GatewayNoticeSettings {
   upstreamBalanceInsufficientMessage: string;
 }
 
-export interface UpstreamOutputFilterSettings {
-  enabled: boolean;
-  phrases: string[];
-}
-
 export interface RedisFailurePolicySettings {
   policy: "fail-open" | "fail-closed" | "degraded";
   degradedAdminBypassEnabled: boolean;
@@ -76,6 +71,28 @@ export interface ReasoningEffortTransformSettings {
   rules: ReasoningEffortTransformRule[];
 }
 
+export interface ImageGenerationToolSettings {
+  routingModel: string;
+}
+
+export type ImageProxyMode = "direct" | "tencent_cos";
+
+export interface ImageProxySettings {
+  mode: ImageProxyMode;
+  enabledModels: string[];
+}
+
+export interface ImageProxyHealthCheck {
+  ok: boolean;
+  mode: ImageProxyMode;
+  checks: Array<{
+    name: string;
+    ok: boolean;
+    message: string;
+    statusCode?: number;
+  }>;
+}
+
 export interface AuthSettings {
   emailCodeLoginEnabled: boolean;
   emailCodeAutoRegisterEnabled: boolean;
@@ -118,7 +135,6 @@ export interface RiskCenterData {
   temporaryIpNoticeBanSettings: TemporaryIpNoticeBanSettings;
   pendingAutoTerminateSettings: PendingAutoTerminateSettings;
   gatewayNoticeSettings: GatewayNoticeSettings;
-  upstreamOutputFilterSettings: UpstreamOutputFilterSettings;
   redisFailurePolicySettings: RedisFailurePolicySettings;
   globalCircuitBreakerSettings: GlobalCircuitBreakerSettings;
   charityAnnouncementSettings: CharityAnnouncementSettings;
@@ -208,11 +224,6 @@ export async function updateGatewayNoticeSettings(input: Partial<GatewayNoticeSe
   return response.data;
 }
 
-export async function updateUpstreamOutputFilterSettings(input: UpstreamOutputFilterSettings) {
-  const response = await http.put<{ settings: UpstreamOutputFilterSettings }>("/admin/upstream-output-filter-settings", input);
-  return response.data.settings;
-}
-
 export async function getRedisFailurePolicySettings() {
   const response = await http.get<{ settings: RedisFailurePolicySettings; defaults: RedisFailurePolicySettings; policies: RedisFailurePolicySettings["policy"][] }>("/admin/redis-failure-policy-settings");
   return response.data;
@@ -266,6 +277,41 @@ export async function getReasoningEffortTransformSettings() {
 export async function updateReasoningEffortTransformSettings(input: ReasoningEffortTransformSettings) {
   const response = await http.put<{ settings: ReasoningEffortTransformSettings }>("/admin/reasoning-effort-transform-settings", input);
   return response.data.settings;
+}
+
+export async function getImageGenerationToolSettings() {
+  const response = await http.get<{
+    settings: ImageGenerationToolSettings;
+    defaults: ImageGenerationToolSettings;
+  }>("/admin/image-generation-tool-settings");
+  return response.data;
+}
+
+export async function updateImageGenerationToolSettings(input: ImageGenerationToolSettings) {
+  const response = await http.put<{
+    settings: ImageGenerationToolSettings;
+    defaults: ImageGenerationToolSettings;
+  }>("/admin/image-generation-tool-settings", input);
+  return response.data.settings;
+}
+
+export async function getImageProxySettings() {
+  const response = await http.get<{
+    settings: ImageProxySettings;
+    defaults: ImageProxySettings;
+    models: string[];
+  }>("/admin/image-proxy-settings");
+  return response.data;
+}
+
+export async function updateImageProxySettings(input: ImageProxySettings) {
+  const response = await http.put<{ settings: ImageProxySettings; defaults: ImageProxySettings }>("/admin/image-proxy-settings", input);
+  return response.data.settings;
+}
+
+export async function checkImageProxySettings() {
+  const response = await http.post<{ result: ImageProxyHealthCheck }>("/admin/image-proxy-settings/check");
+  return response.data.result;
 }
 
 export async function getAuditLogs(params: AuditLogParams = {}) {

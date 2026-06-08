@@ -12,11 +12,13 @@ export type ChargePrice = Omit<
   | "customerCachedInputPer1MTok"
   | "customerOutputPer1MTok"
   | "customerPriceMultiplier"
+  | "perRequestUsd"
 > & {
   customerInputPer1MTok: PriceValue;
   customerCachedInputPer1MTok: PriceValue;
   customerOutputPer1MTok: PriceValue;
   customerPriceMultiplier: PriceValue;
+  perRequestUsd: PriceValue;
 };
 
 export function toDecimal(value: Decimal.Value) {
@@ -24,11 +26,29 @@ export function toDecimal(value: Decimal.Value) {
 }
 
 export function calculateCharges(price: ChargePrice, usage: Usage) {
+  const upstreamMultiplier = new Decimal(price.upstreamPriceMultiplier.toString());
+  const customerMultiplier = new Decimal(price.customerPriceMultiplier.toString());
+  const minimumCharge = new Decimal(price.minimumChargeUsd.toString());
+
+  if (price.pricingMode === "request") {
+    const upstreamCostUsd = new Decimal(price.upstreamPerRequestUsd.toString())
+      .mul(upstreamMultiplier)
+      .toDecimalPlaces(8);
+    const computedCustomerCharge = new Decimal(price.perRequestUsd.toString())
+      .mul(customerMultiplier)
+      .toDecimalPlaces(8);
+    return {
+      upstreamCostUsd,
+      chargedAmountUsd: Decimal.max(
+        computedCustomerCharge,
+        minimumCharge,
+      ).toDecimalPlaces(8),
+    };
+  }
+
   const inputTokens = new Decimal(usage.inputTokens);
   const cachedInputTokens = new Decimal(usage.cachedInputTokens);
   const outputTokens = new Decimal(usage.outputTokens);
-  const upstreamMultiplier = new Decimal(price.upstreamPriceMultiplier.toString());
-  const customerMultiplier = new Decimal(price.customerPriceMultiplier.toString());
 
   const upstreamInput = inputTokens
     .div(ONE_MILLION)
@@ -63,7 +83,6 @@ export function calculateCharges(price: ChargePrice, usage: Usage) {
     .plus(customerCachedInput)
     .plus(customerOutput)
     .toDecimalPlaces(8);
-  const minimumCharge = new Decimal(price.minimumChargeUsd.toString());
   const chargedAmountUsd = Decimal.max(
     computedCustomerCharge,
     minimumCharge,

@@ -1,0 +1,2 @@
+ALTER TABLE "ModelPrice" ADD COLUMN "pricingMode" TEXT NOT NULL DEFAULT 'token';
+ALTER TABLE "ModelPrice" ADD COLUMN "upstreamPerRequestUsd" DECIMAL(18,8) NOT NULL DEFAULT 0;

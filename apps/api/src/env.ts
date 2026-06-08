@@ -11,6 +11,10 @@ const envSchema = z.object({
   UPSTREAM_API_KEY: z.string().default(""),
   UPSTREAM_TIMEOUT_MS: z.coerce.number().default(60000),
   UPSTREAM_KEY_ENCRYPTION_SECRET: z.string().optional(),
+  TENCENT_IMAGE_SCF_URL: z.string().url().optional(),
+  TENCENT_IMAGE_SCF_CALL_SECRET: z.string().optional(),
+  TENCENT_IMAGE_COS_PREFIX: z.string().optional(),
+  TENCENT_IMAGE_PUBLIC_BASE_URL: z.string().url().optional(),
   DEFAULT_CURRENCY: z.string().default("USD"),
 });
 

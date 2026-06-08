@@ -70,13 +70,20 @@ export interface ApiRequestRecord {
 }
 
 export interface AdminRequestsSummary {
-  total: number;
-  pending: number;
-  success: number;
-  failed: number;
+  totalCount: number;
+  pendingCount: number;
+  successCount: number;
+  failedCount: number;
+  failureRate: number;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
   totalTokens: number;
   chargedAmountUsd: string | null;
   upstreamCostUsd: string | null;
+  grossProfitUsd?: string | null;
+  avgLatencyMs?: number | null;
+  avgFirstTokenLatencyMs?: number | null;
 }
 
 export interface IpBanRule {

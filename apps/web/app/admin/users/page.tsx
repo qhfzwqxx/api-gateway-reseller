@@ -31,7 +31,9 @@ import {
   adjustUserBalance,
   createAdminUserApiKey,
   createAdminUser,
+  deleteAdminUserIpBanRule,
   deleteAdminUser,
+  getAdminUserIps,
   getAdminUsers,
   logoutAdminUser,
   updateAdminApiKey,
@@ -39,6 +41,7 @@ import {
   updateUserModelMappings,
   type AdminUser,
   type AdminUserApiKey,
+  type AdminUserIpSummary,
   type AdminUserModelMapping,
   type UpsertAdminApiKeyInput,
   type UpsertAdminUserInput,
@@ -73,6 +76,7 @@ export default function AdminUsersPage() {
   const [subscriptionUser, setSubscriptionUser] = useState<AdminUser | null>(
     null,
   );
+  const [ipUser, setIpUser] = useState<AdminUser | null>(null);
   const [ipRulesOpen, setIpRulesOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [notice, setNotice] = useState<string>("");
@@ -509,6 +513,14 @@ export default function AdminUsersPage() {
                                   </button>
                                   <button
                                     type="button"
+                                    onClick={() => setIpUser(user)}
+                                    className={tableActionButton}
+                                  >
+                                    <Network className="h-4 w-4" />
+                                    IP
+                                  </button>
+                                  <button
+                                    type="button"
                                     onClick={() => setSubscriptionUser(user)}
                                     className={tableActionButton}
                                   >
@@ -622,6 +634,13 @@ export default function AdminUsersPage() {
         onNotice={setNotice}
       />
 
+      <UserIpsModal
+        open={Boolean(ipUser)}
+        user={ipUser}
+        onClose={() => setIpUser(null)}
+        onNotice={setNotice}
+      />
+
       <IpAccessTierRulesDrawer
         open={ipRulesOpen}
         tiers={tiers}
@@ -646,6 +665,163 @@ export default function AdminUsersPage() {
         onConfirm={handleConfirm}
       />
     </div>
+  );
+}
+
+function UserIpsModal({
+  open,
+  user,
+  onClose,
+  onNotice,
+}: {
+  open: boolean;
+  user: AdminUser | null;
+  onClose: () => void;
+  onNotice: (message: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const ipsQuery = useQuery({
+    queryKey: ["admin", "users", user?.id, "ips"],
+    queryFn: () => getAdminUserIps(user?.id ?? ""),
+    enabled: open && Boolean(user?.id),
+  });
+  const unbanMutation = useMutation({
+    mutationFn: deleteAdminUserIpBanRule,
+    onSuccess: async () => {
+      onNotice("IP 封禁已解除");
+      await queryClient.invalidateQueries({
+        queryKey: ["admin", "users", user?.id, "ips"],
+      });
+    },
+    onError: (error) => onNotice(errorToText(error)),
+  });
+
+  if (!open || !user) {
+    return null;
+  }
+
+  const ips = ipsQuery.data?.ips ?? [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4">
+      <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">用户 IP</h2>
+            <p className="mt-1 text-sm text-slate-500">{user.email}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+            aria-label="关闭"
+          >
+            ×
+          </button>
+        </div>
+        <div className="overflow-auto p-6">
+          {ipsQuery.isLoading ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              正在加载 IP 记录...
+            </div>
+          ) : ips.length === 0 ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              暂无登录或调用 IP 记录
+            </div>
+          ) : (
+            <table className="min-w-full divide-y divide-slate-200 text-left">
+              <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">IP</th>
+                  <th className="px-4 py-3">来源统计</th>
+                  <th className="px-4 py-3">首次出现</th>
+                  <th className="px-4 py-3">最近出现</th>
+                  <th className="px-4 py-3">封禁</th>
+                  <th className="px-4 py-3 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {ips.map((item) => (
+                  <UserIpRow
+                    item={item}
+                    key={item.ip}
+                    unbanBusy={unbanMutation.isPending}
+                    onUnban={(ip) => unbanMutation.mutate(ip)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UserIpRow({
+  item,
+  unbanBusy,
+  onUnban,
+}: {
+  item: AdminUserIpSummary;
+  unbanBusy: boolean;
+  onUnban: (ip: string) => void;
+}) {
+  const isBanned = Boolean(item.banRule);
+
+  return (
+    <tr className="hover:bg-slate-50/70">
+      <td className="px-4 py-3">
+        <code className="rounded bg-slate-100 px-2 py-1 text-sm font-semibold text-slate-950">
+          {item.ip}
+        </code>
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-600">
+        <div>API 调用：{formatInteger(item.apiRequestCount)}</div>
+        <div className="mt-1">
+          登录成功：{formatInteger(item.loginSuccessCount)} · 登录失败：
+          {formatInteger(item.loginFailureCount)}
+        </div>
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-600">
+        {item.firstSeenAt ? formatDate(item.firstSeenAt) : "-"}
+      </td>
+      <td className="px-4 py-3 text-sm text-slate-600">
+        {item.lastSeenAt ? formatDate(item.lastSeenAt) : "-"}
+      </td>
+      <td className="px-4 py-3 text-sm">
+        {isBanned ? (
+          <div className="grid gap-1">
+            <span className="inline-flex w-fit rounded-full bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">
+              已封禁 · {item.banRule?.mode === "notice" ? "公告" : "报错"}
+            </span>
+            {item.banRule?.reason ? (
+              <span className="text-xs text-slate-500">
+                {item.banRule.reason}
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <span className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+            未封禁
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-right">
+        {isBanned ? (
+          <button
+            type="button"
+            disabled={unbanBusy}
+            onClick={() => onUnban(item.ip)}
+            className={tableActionButton}
+          >
+            解封
+          </button>
+        ) : (
+          <span className="text-sm text-slate-400">-</span>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -1558,6 +1734,9 @@ function ApiKeyForm({
     Boolean(apiKey?.noticeEnabled),
   );
   const [noticeText, setNoticeText] = useState(apiKey?.noticeText ?? "");
+  const [forceFastMode, setForceFastMode] = useState(
+    Boolean(apiKey?.forceFastMode),
+  );
   const [disabledReason, setDisabledReason] = useState(
     apiKey?.disabledReason ?? "",
   );
@@ -1594,6 +1773,7 @@ function ApiKeyForm({
       tags: splitComma(tags),
       noticeEnabled,
       noticeText: noticeText.trim() || null,
+      forceFastMode,
       disabledReason: disabledReason.trim() || null,
     });
   }
@@ -1716,6 +1896,15 @@ function ApiKeyForm({
           className="h-4 w-4 rounded border-slate-300"
         />
         启用 Key 公告
+      </label>
+      <label className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-700">
+        <input
+          type="checkbox"
+          checked={forceFastMode}
+          onChange={(event) => setForceFastMode(event.target.checked)}
+          className="h-4 w-4 rounded border-slate-300"
+        />
+        强制 Fast 模式
       </label>
       {noticeEnabled ? (
         <textarea

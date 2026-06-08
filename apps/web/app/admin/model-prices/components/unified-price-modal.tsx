@@ -51,6 +51,10 @@ export function UnifiedPriceModal({
     }));
   }
 
+  function pricingModeLabel(mode?: string) {
+    return mode === "request" ? "按次" : "按 Token";
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
       <aside className="flex h-full w-full max-w-5xl flex-col bg-white shadow-xl">
@@ -73,6 +77,7 @@ export function UnifiedPriceModal({
               {groups.map((group) => {
                 const draft = drafts[group.model] ?? draftFromGroup(group);
                 const selected = enabled[group.model] ?? false;
+                const requestMode = draft.pricingMode === "request";
                 return (
                   <section key={group.model} className="rounded-lg border border-slate-200 bg-white p-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -88,13 +93,21 @@ export function UnifiedPriceModal({
                           统一模式
                         </label>
                         <span className={selected ? activeBadge : neutralBadge}>{selected ? "已开启" : "普通模式"}</span>
+                        <span className={neutralBadge}>{pricingModeLabel(draft.pricingMode)}</span>
                         {group.hasDifferentOriginalCustomerPricing ? <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">原价有差异</span> : null}
                       </div>
                     </div>
                     <div className="mt-4 grid gap-3 md:grid-cols-4">
-                      <Field label="统一 Input / 1M"><input disabled={!selected} value={draft.customerInputPer1MTok} onChange={(event) => updateDraft(group.model, "customerInputPer1MTok", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
-                      <Field label="统一缓存 / 1M"><input disabled={!selected} value={draft.customerCachedInputPer1MTok ?? "0"} onChange={(event) => updateDraft(group.model, "customerCachedInputPer1MTok", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
-                      <Field label="统一 Output / 1M"><input disabled={!selected} value={draft.customerOutputPer1MTok} onChange={(event) => updateDraft(group.model, "customerOutputPer1MTok", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
+                      <Field label="价格模式"><select disabled={!selected} value={draft.pricingMode ?? "token"} onChange={(event) => updateDraft(group.model, "pricingMode", event.target.value)} className={inputClass}><option value="token">按 Token</option><option value="request">按次</option></select></Field>
+                      {requestMode ? (
+                        <Field label="下游每次 USD"><input disabled={!selected} value={draft.perRequestUsd ?? "0"} onChange={(event) => updateDraft(group.model, "perRequestUsd", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
+                      ) : (
+                        <>
+                          <Field label="统一 Input / 1M"><input disabled={!selected} value={draft.customerInputPer1MTok} onChange={(event) => updateDraft(group.model, "customerInputPer1MTok", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
+                          <Field label="统一缓存 / 1M"><input disabled={!selected} value={draft.customerCachedInputPer1MTok ?? "0"} onChange={(event) => updateDraft(group.model, "customerCachedInputPer1MTok", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
+                          <Field label="统一 Output / 1M"><input disabled={!selected} value={draft.customerOutputPer1MTok} onChange={(event) => updateDraft(group.model, "customerOutputPer1MTok", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
+                        </>
+                      )}
                       <Field label="客户倍率"><input disabled={!selected} value={draft.customerPriceMultiplier ?? "1"} onChange={(event) => updateDraft(group.model, "customerPriceMultiplier", event.target.value)} className={inputClass} inputMode="decimal" /></Field>
                     </div>
                   </section>
@@ -116,10 +129,12 @@ export function UnifiedPriceModal({
 function draftFromGroup(group?: ModelPriceGroup): Draft {
   const first = group?.prices[0];
   return {
+    pricingMode: group?.setting?.pricingMode ?? first?.pricingMode ?? "token",
     customerInputPer1MTok: group?.setting?.customerInputPer1MTok ?? first?.customerInputPer1MTok ?? "0",
     customerCachedInputPer1MTok: group?.setting?.customerCachedInputPer1MTok ?? first?.customerCachedInputPer1MTok ?? "0",
     customerOutputPer1MTok: group?.setting?.customerOutputPer1MTok ?? first?.customerOutputPer1MTok ?? "0",
     customerPriceMultiplier: group?.setting?.customerPriceMultiplier ?? first?.customerPriceMultiplier ?? "1",
+    perRequestUsd: group?.setting?.perRequestUsd ?? first?.perRequestUsd ?? "0",
   };
 }
 

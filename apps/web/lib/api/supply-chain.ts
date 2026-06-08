@@ -62,17 +62,20 @@ export interface ModelPrice {
   id: string;
   model: string;
   upstreamProvider: string;
-  upstreamEndpoint: "responses" | "chat_completions";
+  upstreamEndpoint: "responses" | "chat_completions" | "images_generations";
+  pricingMode: "token" | "request";
   currency: string;
   upstreamInputPer1MTok: string;
   upstreamOutputPer1MTok: string;
   upstreamCachedInputPer1MTok: string;
   upstreamPriceMultiplier: string;
+  upstreamPerRequestUsd: string;
   customerInputPer1MTok: string;
   customerOutputPer1MTok: string;
   customerCachedInputPer1MTok: string;
   customerPriceMultiplier: string;
   minimumChargeUsd: string;
+  perRequestUsd: string;
   enabled: boolean;
   priceVersion: string;
   effectiveFrom: string | null;
@@ -85,26 +88,31 @@ export interface ModelPrice {
 export interface UnifiedPriceSetting {
   model: string;
   enabled: boolean;
+  pricingMode: "token" | "request";
   customerInputPer1MTok: string;
   customerCachedInputPer1MTok: string;
   customerOutputPer1MTok: string;
   customerPriceMultiplier: string;
+  perRequestUsd: string;
 }
 
 export interface ModelPriceInput {
   model: string;
   upstreamProvider: string;
-  upstreamEndpoint: "responses" | "chat_completions";
+  upstreamEndpoint: "responses" | "chat_completions" | "images_generations";
+  pricingMode: "token" | "request";
   currency: string;
   upstreamInputPer1MTok: string;
   upstreamOutputPer1MTok: string;
   upstreamCachedInputPer1MTok: string;
   upstreamPriceMultiplier: string;
+  upstreamPerRequestUsd: string;
   customerInputPer1MTok: string;
   customerOutputPer1MTok: string;
   customerCachedInputPer1MTok: string;
   customerPriceMultiplier: string;
   minimumChargeUsd: string;
+  perRequestUsd: string;
   enabled: boolean;
   priceVersion: string;
   effectiveFrom?: string | null;
@@ -114,10 +122,12 @@ export interface ModelPriceInput {
 export interface UnifiedPriceInput {
   model: string;
   enabled: boolean;
+  pricingMode?: "token" | "request";
   customerInputPer1MTok: string;
   customerCachedInputPer1MTok?: string;
   customerOutputPer1MTok: string;
   customerPriceMultiplier?: string;
+  perRequestUsd?: string;
 }
 
 export interface UnifiedPriceBatchInput {

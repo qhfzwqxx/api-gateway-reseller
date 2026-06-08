@@ -326,7 +326,21 @@ export default function CharityVueApp({ data }: { data: CharityDashboard | null 
         }
 
         function metricItem(label: string, value: string) {
-          return h("div", { class: "metric-item" }, [h("span", label), h("strong", value)]);
+          return h("div", { class: "metric-item" }, [
+            h("span", label),
+            h("strong", { class: metricValueSize(value), title: value }, value),
+          ]);
+        }
+
+        function metricValueSize(value: string) {
+          const length = value.length;
+          if (length >= 7) {
+            return "metric-value-tight";
+          }
+          if (length >= 5) {
+            return "metric-value-compact";
+          }
+          return "";
         }
 
         function usageLine(label: string, value: string) {

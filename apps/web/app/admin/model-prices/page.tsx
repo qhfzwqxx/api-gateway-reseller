@@ -25,17 +25,20 @@ import { UnifiedPriceModal } from "./components/unified-price-modal";
 const priceSchema = z.object({
   model: z.string().trim().min(1, "请输入模型名").max(120),
   upstreamProvider: z.string().trim().min(1, "请选择 Provider").max(80),
-  upstreamEndpoint: z.enum(["responses", "chat_completions"]).default("responses"),
+  upstreamEndpoint: z.enum(["responses", "chat_completions", "images_generations"]).default("responses"),
+  pricingMode: z.enum(["token", "request"]).default("token"),
   currency: z.string().trim().min(1).default("USD"),
-  upstreamInputPer1MTok: z.string().trim().min(1),
-  upstreamOutputPer1MTok: z.string().trim().min(1),
+  upstreamInputPer1MTok: z.string().trim().default("0"),
+  upstreamOutputPer1MTok: z.string().trim().default("0"),
   upstreamCachedInputPer1MTok: z.string().trim().default("0"),
   upstreamPriceMultiplier: z.string().trim().default("1"),
-  customerInputPer1MTok: z.string().trim().min(1),
-  customerOutputPer1MTok: z.string().trim().min(1),
+  upstreamPerRequestUsd: z.string().trim().default("0"),
+  customerInputPer1MTok: z.string().trim().default("0"),
+  customerOutputPer1MTok: z.string().trim().default("0"),
   customerCachedInputPer1MTok: z.string().trim().default("0"),
   customerPriceMultiplier: z.string().trim().default("1"),
   minimumChargeUsd: z.string().trim().default("0"),
+  perRequestUsd: z.string().trim().default("0"),
   enabled: z.boolean(),
   priceVersion: z.string().trim().min(1).default("v1"),
 });
@@ -266,10 +269,10 @@ function ModelPriceGroupModal({
             <tbody className="divide-y divide-slate-100">
               {group.prices.map((price) => (
                 <tr key={price.id} className="hover:bg-slate-50/70">
-                  <td className="px-5 py-4"><div className="font-semibold text-slate-950">{price.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{endpointLabel(price.upstreamEndpoint)} · {price.currency} · {price.priceVersion}</div></td>
-                  <td className="px-5 py-4 text-sm tabular-nums text-slate-700"><div>Input：{money(price.upstreamInputPer1MTok)}</div><div className="mt-1">Output：{money(price.upstreamOutputPer1MTok)}</div></td>
-                  <td className="px-5 py-4 text-sm tabular-nums text-slate-700"><div>Input：{money(price.customerInputPer1MTok)}</div><div className="mt-1">Output：{money(price.customerOutputPer1MTok)}</div></td>
-                  <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-950"><div>Input：{money(effectiveCustomerInput(price, group.setting))}</div><div className="mt-1">Output：{money(effectiveCustomerOutput(price, group.setting))}</div></td>
+                  <td className="px-5 py-4"><div className="font-semibold text-slate-950">{price.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{endpointLabel(price.upstreamEndpoint)} · {price.pricingMode === "request" ? "按次" : "按 Token"} · {price.currency} · {price.priceVersion}</div></td>
+                  <td className="px-5 py-4 text-sm tabular-nums text-slate-700">{price.pricingMode === "request" ? <div>每次：{money(price.upstreamPerRequestUsd)}</div> : <><div>Input：{money(price.upstreamInputPer1MTok)}</div><div className="mt-1">Output：{money(price.upstreamOutputPer1MTok)}</div></>}</td>
+                  <td className="px-5 py-4 text-sm tabular-nums text-slate-700">{price.pricingMode === "request" ? <div>每次：{money(price.perRequestUsd ?? "0")}</div> : <><div>Input：{money(price.customerInputPer1MTok)}</div><div className="mt-1">Output：{money(price.customerOutputPer1MTok)}</div></>}</td>
+                  <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-950">{effectivePricingMode(price, group.setting) === "request" ? <div>每次：{money(effectiveCustomerPerRequest(price, group.setting))}</div> : <><div>Input：{money(effectiveCustomerInput(price, group.setting))}</div><div className="mt-1">Output：{money(effectiveCustomerOutput(price, group.setting))}</div></>}</td>
                   <td className="px-5 py-4 text-sm text-slate-700"><div>上游：{price.upstreamPriceMultiplier}</div><div className="mt-1">客户：{group.setting?.enabled ? group.setting.customerPriceMultiplier : price.customerPriceMultiplier}</div><div className="mt-1">最低：{money(price.minimumChargeUsd)}</div></td>
                   <td className="px-5 py-4"><Badge active={price.enabled}>{price.enabled ? "ENABLED" : "DISABLED"}</Badge></td>
                   <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2"><button type="button" onClick={() => onEdit(price)} className={secondaryButton}><Edit3 className="h-4 w-4" /> 编辑</button><button type="button" onClick={() => onDelete(price)} className={dangerButton}><Trash2 className="h-4 w-4" /> 删除</button></div></td>
@@ -302,6 +305,7 @@ function PriceModal({
 }) {
   const form = useForm<PriceFormInput, unknown, PriceValues>({ resolver: zodResolver(priceSchema), defaultValues: defaultPrice(price, providers[0]) });
   const watchedModel = form.watch("model");
+  const pricingMode = form.watch("pricingMode");
   const unifiedModelMatch = enabledUnifiedModels.find(
     (model) => model.toLowerCase() === watchedModel.trim().toLowerCase(),
   );
@@ -339,6 +343,13 @@ function PriceModal({
                 <select className={inputClass} {...form.register("upstreamEndpoint")}>
                   <option value="responses">Responses API</option>
                   <option value="chat_completions">Chat Completions API</option>
+                  <option value="images_generations">Image Generations API</option>
+                </select>
+              </Field>
+              <Field label="价格模式">
+                <select className={inputClass} {...form.register("pricingMode")}>
+                  <option value="token">按 Token</option>
+                  <option value="request">按次</option>
                 </select>
               </Field>
               <Field label="价格版本"><input className={inputClass} {...form.register("priceVersion")} /></Field>
@@ -348,18 +359,30 @@ function PriceModal({
             <div className="grid gap-5 xl:grid-cols-2">
               <PriceFormSection title="上游成本" description="用于利润和成本报表，不影响客户扣费。">
                 <div className="grid gap-4 md:grid-cols-2">
-              <Field label="上游 Input / 1M" error={form.formState.errors.upstreamInputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("upstreamInputPer1MTok")} /></Field>
-              <Field label="上游 Output / 1M" error={form.formState.errors.upstreamOutputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("upstreamOutputPer1MTok")} /></Field>
-              <Field label="上游缓存 Input"><input className={inputClass} inputMode="decimal" {...form.register("upstreamCachedInputPer1MTok")} /></Field>
+              {pricingMode === "request" ? (
+                <Field label="上游每次 USD"><input className={inputClass} inputMode="decimal" {...form.register("upstreamPerRequestUsd")} /></Field>
+              ) : (
+                <>
+                  <Field label="上游 Input / 1M" error={form.formState.errors.upstreamInputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("upstreamInputPer1MTok")} /></Field>
+                  <Field label="上游 Output / 1M" error={form.formState.errors.upstreamOutputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("upstreamOutputPer1MTok")} /></Field>
+                  <Field label="上游缓存 Input"><input className={inputClass} inputMode="decimal" {...form.register("upstreamCachedInputPer1MTok")} /></Field>
+                </>
+              )}
               <Field label="上游倍率"><input className={inputClass} inputMode="decimal" {...form.register("upstreamPriceMultiplier")} /></Field>
                 </div>
               </PriceFormSection>
 
               <PriceFormSection title="客户售价" description="用于客户实际扣费；统一价格开启时会被统一配置覆盖展示。">
                 <div className="grid gap-4 md:grid-cols-2">
-              <Field label="客户 Input / 1M" error={form.formState.errors.customerInputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("customerInputPer1MTok")} /></Field>
-              <Field label="客户 Output / 1M" error={form.formState.errors.customerOutputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("customerOutputPer1MTok")} /></Field>
-              <Field label="客户缓存 Input"><input className={inputClass} inputMode="decimal" {...form.register("customerCachedInputPer1MTok")} /></Field>
+              {pricingMode === "request" ? (
+                <Field label="下游每次 USD"><input className={inputClass} inputMode="decimal" {...form.register("perRequestUsd")} /></Field>
+              ) : (
+                <>
+                  <Field label="客户 Input / 1M" error={form.formState.errors.customerInputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("customerInputPer1MTok")} /></Field>
+                  <Field label="客户 Output / 1M" error={form.formState.errors.customerOutputPer1MTok?.message}><input className={inputClass} inputMode="decimal" {...form.register("customerOutputPer1MTok")} /></Field>
+                  <Field label="客户缓存 Input"><input className={inputClass} inputMode="decimal" {...form.register("customerCachedInputPer1MTok")} /></Field>
+                </>
+              )}
               <Field label="客户倍率"><input className={inputClass} inputMode="decimal" {...form.register("customerPriceMultiplier")} /></Field>
                 </div>
               </PriceFormSection>
@@ -408,16 +431,19 @@ function defaultPrice(price: ModelPrice | null, provider?: string): PriceValues 
     model: price?.model ?? "",
     upstreamProvider: price?.upstreamProvider ?? provider ?? "default",
     upstreamEndpoint: price?.upstreamEndpoint ?? "responses",
+    pricingMode: price?.pricingMode ?? "token",
     currency: price?.currency ?? "USD",
-    upstreamInputPer1MTok: price?.upstreamInputPer1MTok ?? "",
-    upstreamOutputPer1MTok: price?.upstreamOutputPer1MTok ?? "",
+    upstreamInputPer1MTok: price?.upstreamInputPer1MTok ?? "0",
+    upstreamOutputPer1MTok: price?.upstreamOutputPer1MTok ?? "0",
     upstreamCachedInputPer1MTok: price?.upstreamCachedInputPer1MTok ?? "0",
     upstreamPriceMultiplier: price?.upstreamPriceMultiplier ?? "1",
-    customerInputPer1MTok: price?.customerInputPer1MTok ?? "",
-    customerOutputPer1MTok: price?.customerOutputPer1MTok ?? "",
+    upstreamPerRequestUsd: price?.upstreamPerRequestUsd ?? "0",
+    customerInputPer1MTok: price?.customerInputPer1MTok ?? "0",
+    customerOutputPer1MTok: price?.customerOutputPer1MTok ?? "0",
     customerCachedInputPer1MTok: price?.customerCachedInputPer1MTok ?? "0",
     customerPriceMultiplier: price?.customerPriceMultiplier ?? "1",
     minimumChargeUsd: price?.minimumChargeUsd ?? "0",
+    perRequestUsd: price?.perRequestUsd ?? "0",
     enabled: price?.enabled ?? true,
     priceVersion: price?.priceVersion ?? "v1",
   };
@@ -462,7 +488,13 @@ function money(value: string | number) {
   return `$${Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`;
 }
 function endpointLabel(value: ModelPrice["upstreamEndpoint"]) {
-  return value === "chat_completions" ? "Chat Completions" : "Responses";
+  if (value === "chat_completions") {
+    return "Chat Completions";
+  }
+  if (value === "images_generations") {
+    return "Image Generations";
+  }
+  return "Responses";
 }
 function errorToText(error: unknown) { return error instanceof Error ? error.message : "操作失败，请稍后重试。"; }
 
@@ -499,8 +531,14 @@ function sameCustomerPrice(left: ModelPrice, right?: ModelPrice) {
     Number(left.customerInputPer1MTok) === Number(right.customerInputPer1MTok) &&
     Number(left.customerCachedInputPer1MTok) === Number(right.customerCachedInputPer1MTok) &&
     Number(left.customerOutputPer1MTok) === Number(right.customerOutputPer1MTok) &&
-    Number(left.customerPriceMultiplier) === Number(right.customerPriceMultiplier)
+    Number(left.customerPriceMultiplier) === Number(right.customerPriceMultiplier) &&
+    Number(left.perRequestUsd ?? "0") === Number(right.perRequestUsd ?? "0") &&
+    left.pricingMode === right.pricingMode
   );
+}
+
+function effectivePricingMode(price: ModelPrice, setting?: UnifiedPriceSetting) {
+  return setting?.enabled ? setting.pricingMode : price.pricingMode;
 }
 
 function effectiveCustomerInput(price: ModelPrice, setting?: UnifiedPriceSetting) {
@@ -509,6 +547,10 @@ function effectiveCustomerInput(price: ModelPrice, setting?: UnifiedPriceSetting
 
 function effectiveCustomerOutput(price: ModelPrice, setting?: UnifiedPriceSetting) {
   return multiplyPrice(setting?.enabled ? setting.customerOutputPer1MTok : price.customerOutputPer1MTok, setting?.enabled ? setting.customerPriceMultiplier : price.customerPriceMultiplier);
+}
+
+function effectiveCustomerPerRequest(price: ModelPrice, setting?: UnifiedPriceSetting) {
+  return multiplyPrice(setting?.enabled ? setting.perRequestUsd : price.perRequestUsd, setting?.enabled ? setting.customerPriceMultiplier : price.customerPriceMultiplier);
 }
 
 function multiplyPrice(value: string, multiplier: string) {

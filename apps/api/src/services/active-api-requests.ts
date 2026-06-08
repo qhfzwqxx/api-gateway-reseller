@@ -41,6 +41,10 @@ export function abortActiveApiRequest(requestId: string) {
   };
 }
 
+export function countActiveApiRequests() {
+  return activeRequests.size;
+}
+
 export function isManualTerminateError(error: unknown) {
   return error instanceof Error && error.message === manualTerminateMessage;
 }

@@ -142,9 +142,18 @@ export async function chargeForRequest(params: {
   price: ModelPrice;
   usage: Usage;
   accessTierId?: string | null;
+  walletChargeAllowed?: boolean;
   startedAt?: number;
 }) {
-  const { requestId, userId, price, usage, accessTierId, startedAt } = params;
+  const {
+    requestId,
+    userId,
+    price,
+    usage,
+    accessTierId,
+    walletChargeAllowed = true,
+    startedAt,
+  } = params;
   const chargePrice = await applyUnifiedCustomerPricing(price);
   const { upstreamCostUsd, chargedAmountUsd: baseChargedAmountUsd } =
     calculateCharges(chargePrice, usage);
@@ -209,7 +218,10 @@ export async function chargeForRequest(params: {
           amountUsd: chargedAmountUsd,
         })).subscriptionAmount
       : new Decimal(0);
-    const walletCharge = chargedAmountUsd.minus(subscriptionCharge);
+    const walletCharge = walletChargeAllowed
+      ? chargedAmountUsd.minus(subscriptionCharge)
+      : new Decimal(0);
+    const finalChargedAmountUsd = subscriptionCharge.plus(walletCharge);
 
     let balanceBefore = new Decimal(0);
     let balanceAfter = new Decimal(0);
@@ -251,9 +263,11 @@ export async function chargeForRequest(params: {
             outputTokens: usage.outputTokens,
             totalTokens: usage.totalTokens,
             upstreamCostUsd: upstreamCostUsd.toFixed(8),
-            chargedAmountUsd: chargedAmountUsd.toFixed(8),
+            chargedAmountUsd: finalChargedAmountUsd.toFixed(8),
+            calculatedChargedAmountUsd: chargedAmountUsd.toFixed(8),
             subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
             walletChargedAmountUsd: walletCharge.toFixed(8),
+            walletChargeAllowed,
           },
         },
       });
@@ -275,10 +289,31 @@ export async function chargeForRequest(params: {
             outputTokens: usage.outputTokens,
             totalTokens: usage.totalTokens,
             upstreamCostUsd: upstreamCostUsd.toFixed(8),
-            chargedAmountUsd: chargedAmountUsd.toFixed(8),
+            chargedAmountUsd: finalChargedAmountUsd.toFixed(8),
+            calculatedChargedAmountUsd: chargedAmountUsd.toFixed(8),
             subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
             walletChargedAmountUsd: "0",
+            walletChargeAllowed,
           },
+        },
+      });
+    }
+
+    if (reservedAmount.gt(0) && walletCharge.lte(0)) {
+      const wallet = await tx.wallet.findUnique({
+        where: { userId },
+        select: { reservedBalance: true },
+      });
+      const reservedBalance = new Decimal(
+        wallet?.reservedBalance?.toString() ?? "0",
+      );
+      await tx.wallet.update({
+        where: { userId },
+        data: {
+          reservedBalance: Decimal.max(
+            0,
+            reservedBalance.minus(reservedAmount),
+          ).toFixed(8),
         },
       });
     }
@@ -286,8 +321,10 @@ export async function chargeForRequest(params: {
     await tx.apiRequest.update({
       where: { id: requestId },
       data: {
+        chargedAmountUsd: finalChargedAmountUsd.toFixed(8),
         subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
         walletChargedAmountUsd: walletCharge.toFixed(8),
+        reservedAmountUsd: "0",
       },
     });
 

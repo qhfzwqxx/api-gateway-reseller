@@ -36,6 +36,7 @@ export interface AdminUserApiKey {
   allowedModels: string[];
   noticeEnabled: boolean;
   noticeText?: string | null;
+  forceFastMode?: boolean;
   tags: string[];
   disabledReason?: string | null;
   disabledAt?: string | null;
@@ -53,6 +54,26 @@ export interface AdminUserModelMapping {
   toModel: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface AdminUserIpBanRule {
+  ip: string;
+  mode: "error" | "notice";
+  message: string;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminUserIpSummary {
+  ip: string;
+  loginSuccessCount: number;
+  loginFailureCount: number;
+  apiRequestCount: number;
+  totalCount: number;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  banRule: AdminUserIpBanRule | null;
 }
 
 export interface AdminUserTier {
@@ -100,6 +121,11 @@ export interface AdminUsersResponse {
   users: AdminUser[];
 }
 
+export interface AdminUserIpsResponse {
+  user: Pick<AdminUser, "id" | "email">;
+  ips: AdminUserIpSummary[];
+}
+
 export interface UpsertAdminUserInput {
   email: string;
   role: UserRole;
@@ -127,6 +153,7 @@ export interface UpsertAdminApiKeyInput {
   allowedModels?: string[];
   noticeEnabled?: boolean;
   noticeText?: string | null;
+  forceFastMode?: boolean;
   tags?: string[];
   ipWhitelist?: string[];
   disabledReason?: string | null;
@@ -141,6 +168,22 @@ export async function getAdminUsers() {
   const response = await http.get<AdminUsersResponse>("/admin/users");
 
   return response.data.users;
+}
+
+export async function getAdminUserIps(id: string) {
+  const response = await http.get<AdminUserIpsResponse>(`/admin/users/${id}/ips`);
+
+  return response.data;
+}
+
+export async function deleteAdminUserIpBanRule(ip: string) {
+  const response = await http.delete<{
+    ip: string;
+    deleted: boolean;
+    rules: AdminUserIpBanRule[];
+  }>(`/admin/ip-ban-rules/${encodeURIComponent(ip)}`);
+
+  return response.data;
 }
 
 export async function getAdminCharityUsers() {

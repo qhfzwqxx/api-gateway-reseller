@@ -81,17 +81,20 @@ type ModelPrice = {
   id: string;
   model: string;
   upstreamProvider: string;
-  upstreamEndpoint: "responses" | "chat_completions";
+  upstreamEndpoint: "responses" | "chat_completions" | "images_generations";
+  pricingMode: "token" | "request";
   currency: string;
   upstreamInputPer1MTok: string;
   upstreamCachedInputPer1MTok: string;
   upstreamOutputPer1MTok: string;
   upstreamPriceMultiplier: string;
+  upstreamPerRequestUsd: string;
   customerInputPer1MTok: string;
   customerCachedInputPer1MTok: string;
   customerOutputPer1MTok: string;
   customerPriceMultiplier: string;
   minimumChargeUsd: string;
+  perRequestUsd: string;
   enabled: boolean;
   priceVersion: string;
   effectiveFrom?: string | null;
@@ -131,16 +134,19 @@ type ModelPriceImportPreviewRow = {
   data: {
     model: string;
     upstreamProvider: string;
+    pricingMode: "token" | "request";
     currency: string;
     upstreamInputPer1MTok: string;
     upstreamCachedInputPer1MTok: string;
     upstreamOutputPer1MTok: string;
     upstreamPriceMultiplier: string;
+    upstreamPerRequestUsd: string;
     customerInputPer1MTok: string;
     customerCachedInputPer1MTok: string;
     customerOutputPer1MTok: string;
     customerPriceMultiplier: string;
     minimumChargeUsd: string;
+    perRequestUsd: string;
     enabled: boolean;
     priceVersion: string;
     effectiveFrom?: string | null;
@@ -164,8 +170,8 @@ type ModelPricesResponse = {
 };
 
 const modelPriceImportExampleCsv = [
-  "model,upstreamProvider,upstreamEndpoint,currency,upstreamInputPer1MTok,upstreamCachedInputPer1MTok,upstreamOutputPer1MTok,upstreamPriceMultiplier,customerInputPer1MTok,customerCachedInputPer1MTok,customerOutputPer1MTok,customerPriceMultiplier,minimumChargeUsd,enabled,priceVersion,effectiveFrom,effectiveTo",
-  "gpt-4o-mini,openai,responses,USD,5,0.5,30,1,6,0.6,36,1,0,true,v1,,",
+  "model,upstreamProvider,upstreamEndpoint,pricingMode,currency,upstreamInputPer1MTok,upstreamCachedInputPer1MTok,upstreamOutputPer1MTok,upstreamPriceMultiplier,upstreamPerRequestUsd,customerInputPer1MTok,customerCachedInputPer1MTok,customerOutputPer1MTok,customerPriceMultiplier,minimumChargeUsd,perRequestUsd,enabled,priceVersion,effectiveFrom,effectiveTo",
+  "gpt-4o-mini,openai,responses,token,USD,5,0.5,30,1,0,6,0.6,36,1,0,0,true,v1,,",
 ].join("\n");
 
 function errorToText(error: unknown) { return error instanceof Error ? error.message : "未知错误"; }
@@ -287,7 +293,7 @@ export function UpstreamProviders({
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
   const [priceProvider, setPriceProvider] = useState("");
   const [upstreamEndpoint, setUpstreamEndpoint] = useState<
-    "responses" | "chat_completions"
+    "responses" | "chat_completions" | "images_generations"
   >("responses");
   const [model, setModel] = useState("gpt-4o-mini");
   const [upstreamInput, setUpstreamInput] = useState("5");
@@ -298,6 +304,7 @@ export function UpstreamProviders({
   const [customerCachedInput, setCustomerCachedInput] = useState("0.5");
   const [customerOutput, setCustomerOutput] = useState("30");
   const [customerMultiplier, setCustomerMultiplier] = useState("0.12");
+  const [perRequestUsd, setPerRequestUsd] = useState("0");
   const [enabled, setEnabled] = useState(true);
   const [priceModalOpen, setPriceModalOpen] = useState(false);
   const [busyPriceId, setBusyPriceId] = useState<string | null>(null);
@@ -411,15 +418,18 @@ export function UpstreamProviders({
             model,
             upstreamProvider: priceProvider,
             upstreamEndpoint,
+            pricingMode: "token",
             upstreamInputPer1MTok: upstreamInput,
             upstreamCachedInputPer1MTok: upstreamCachedInput,
             upstreamOutputPer1MTok: upstreamOutput,
             upstreamPriceMultiplier: upstreamMultiplier,
+            upstreamPerRequestUsd: "0",
             customerInputPer1MTok: customerInput,
             customerCachedInputPer1MTok: customerCachedInput,
             customerOutputPer1MTok: customerOutput,
             customerPriceMultiplier: customerMultiplier,
             minimumChargeUsd: "0",
+            perRequestUsd,
             enabled,
           }),
         },
@@ -445,6 +455,7 @@ export function UpstreamProviders({
     setCustomerCachedInput(price.customerCachedInputPer1MTok);
     setCustomerOutput(price.customerOutputPer1MTok);
     setCustomerMultiplier(price.customerPriceMultiplier);
+    setPerRequestUsd(price.perRequestUsd ?? "0");
     setEnabled(price.enabled);
     setPriceModalOpen(true);
   }
@@ -462,6 +473,7 @@ export function UpstreamProviders({
     setCustomerCachedInput("0.5");
     setCustomerOutput("30");
     setCustomerMultiplier("0.12");
+    setPerRequestUsd("0");
     setEnabled(true);
     setPriceModalOpen(true);
   }
@@ -2319,13 +2331,17 @@ export function UpstreamProviders({
                           setUpstreamEndpoint(
                             event.target.value as
                               | "responses"
-                              | "chat_completions",
+                              | "chat_completions"
+                              | "images_generations",
                           )
                         }
                       >
                         <option value="responses">Responses API</option>
                         <option value="chat_completions">
                           Chat Completions API
+                        </option>
+                        <option value="images_generations">
+                          Image Generations API
                         </option>
                       </select>
                     </label>
@@ -2418,6 +2434,16 @@ export function UpstreamProviders({
                           }
                         />
                       </label>
+                      <label className="field">
+                        <span>按次费用 USD</span>
+                        <input
+                          className="input"
+                          value={perRequestUsd}
+                          onChange={(event) =>
+                            setPerRequestUsd(event.target.value)
+                          }
+                        />
+                      </label>
                     </div>
                   </section>
                 </div>
@@ -2446,6 +2472,10 @@ export function UpstreamProviders({
                   <InfoLine
                     label="站点输出"
                     value={`$${money(customerEffective.output)}`}
+                  />
+                  <InfoLine
+                    label="每次请求"
+                    value={`$${money(perRequestUsd)}`}
                   />
                 </aside>
               </div>
@@ -2571,7 +2601,13 @@ function multiplied(value: string | number, multiplier: string | number) {
 }
 
 function endpointLabel(value: ModelPrice["upstreamEndpoint"]) {
-  return value === "chat_completions" ? "Chat Completions" : "Responses";
+  if (value === "chat_completions") {
+    return "Chat Completions";
+  }
+  if (value === "images_generations") {
+    return "Image Generations";
+  }
+  return "Responses";
 }
 
 function priceTriplet(

@@ -25,9 +25,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <QueryProvider>
-      <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-950">
+      <div className="admin-app-shell flex h-screen overflow-hidden bg-slate-50 text-slate-950">
         <Sidebar />
-        <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden lg:pl-64">
+        <div className="admin-app-frame flex h-full min-w-0 flex-1 flex-col overflow-hidden lg:pl-64">
           <Header />
           <main id="admin-main-scroll" className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4">{children}</main>
         </div>

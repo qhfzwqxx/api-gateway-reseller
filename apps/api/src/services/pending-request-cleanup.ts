@@ -36,6 +36,7 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
       id: true,
       createdAt: true,
       clientIp: true,
+      endpoint: true,
       responseUsage: true,
     },
     orderBy: {
@@ -48,6 +49,10 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
   let abortedActiveCount = 0;
 
   for (const pendingRequest of pendingRequests) {
+    if (isProtectedImageRequest(pendingRequest.endpoint)) {
+      continue;
+    }
+
     if (isProtectedCompactRequest(pendingRequest.responseUsage)) {
       continue;
     }
@@ -76,6 +81,13 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
   }
 
   return { count, abortedActiveCount, skipped: false as const };
+}
+
+function isProtectedImageRequest(endpoint: string) {
+  return (
+    endpoint === "/v1/images/generations" ||
+    endpoint === "/v1/images/edits"
+  );
 }
 
 function isProtectedCompactRequest(responseUsage: unknown) {

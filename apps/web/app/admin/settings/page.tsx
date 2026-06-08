@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Send, Trash2 } from "lucide-react";
+import { CheckCircle2, Loader2, Plus, Send, Trash2, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -11,11 +11,19 @@ import { SecretInput } from "../../../components/shared/secret-input";
 import { SettingCard } from "../../../components/shared/setting-card";
 import {
   getAuthSettings,
+  getImageGenerationToolSettings,
+  getImageProxySettings,
   getReasoningEffortTransformSettings,
+  checkImageProxySettings,
   testAuthEmail,
   updateAuthSettings,
+  updateImageGenerationToolSettings,
+  updateImageProxySettings,
   updateReasoningEffortTransformSettings,
   type AuthSettingsInput,
+  type ImageProxyHealthCheck,
+  type ImageProxySettings,
+  type ImageGenerationToolSettings,
   type ReasoningEffortTransformRule,
   type ReasoningEffortTransformSettings,
 } from "../../../lib/api/settings";
@@ -41,29 +49,86 @@ const reasoningSchema = z.object({
     to: z.enum(["low", "medium", "high", "xhigh"]),
   })),
 });
+const imageGenerationToolSchema = z.object({
+  routingModel: z.string().trim().min(1, "请输入转接模型"),
+});
+const imageProxySchema = z.object({
+  mode: z.enum(["direct", "tencent_cos"]),
+  enabledModelsText: z.string(),
+});
 
 type AuthInput = z.input<typeof authSchema>;
 type AuthValues = z.output<typeof authSchema>;
 type ReasoningValues = z.output<typeof reasoningSchema>;
+type ImageGenerationToolValues = z.output<typeof imageGenerationToolSchema>;
+type ImageProxyValues = z.output<typeof imageProxySchema>;
 
 export default function AdminSettingsPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState("");
   const authQuery = useQuery({ queryKey: ["admin", "auth-settings"], queryFn: getAuthSettings });
   const reasoningQuery = useQuery({ queryKey: ["admin", "reasoning-effort-transform-settings"], queryFn: getReasoningEffortTransformSettings });
+  const imageGenerationToolQuery = useQuery({ queryKey: ["admin", "image-generation-tool-settings"], queryFn: getImageGenerationToolSettings });
+  const imageProxyQuery = useQuery({ queryKey: ["admin", "image-proxy-settings"], queryFn: getImageProxySettings });
 
   const authForm = useForm<AuthInput, unknown, AuthValues>({ resolver: zodResolver(authSchema) });
   const reasoningForm = useForm<ReasoningValues>({ resolver: zodResolver(reasoningSchema), defaultValues: { rules: [] } });
+  const imageGenerationToolForm = useForm<ImageGenerationToolValues>({
+    resolver: zodResolver(imageGenerationToolSchema),
+    defaultValues: { routingModel: "gpt-image-2" },
+  });
+  const imageProxyForm = useForm<ImageProxyValues>({
+    resolver: zodResolver(imageProxySchema),
+    defaultValues: {
+      mode: "tencent_cos",
+      enabledModelsText: "gpt-image-2",
+    },
+  });
+  const [imageProxyCheck, setImageProxyCheck] = useState<ImageProxyHealthCheck | null>(null);
 
   useEffect(() => {
     if (!authQuery.data) return;
     authForm.reset({ ...authQuery.data, smtpPassword: "", testEmail: authQuery.data.smtpUser || "" });
   }, [authForm, authQuery.data]);
   useEffect(() => { if (reasoningQuery.data) reasoningForm.reset({ rules: reasoningQuery.data.settings.rules }); }, [reasoningForm, reasoningQuery.data]);
+  useEffect(() => {
+    if (imageGenerationToolQuery.data) {
+      imageGenerationToolForm.reset(imageGenerationToolQuery.data.settings);
+    }
+  }, [imageGenerationToolForm, imageGenerationToolQuery.data]);
+  useEffect(() => {
+    if (!imageProxyQuery.data) return;
+    imageProxyForm.reset(toImageProxyValues(imageProxyQuery.data.settings));
+  }, [imageProxyForm, imageProxyQuery.data]);
 
   const authMutation = useMutation({ mutationFn: updateAuthSettings, onSuccess: () => { setNotice("Auth & SMTP 设置已保存"); void queryClient.invalidateQueries({ queryKey: ["admin", "auth-settings"] }); }, onError: (error) => setNotice(errorToText(error)) });
   const testMutation = useMutation({ mutationFn: testAuthEmail, onSuccess: () => setNotice("测试邮件已发送"), onError: (error) => setNotice(errorToText(error)) });
   const reasoningMutation = useMutation({ mutationFn: updateReasoningEffortTransformSettings, onSuccess: () => { setNotice("推理强度转换规则已保存"); void queryClient.invalidateQueries({ queryKey: ["admin", "reasoning-effort-transform-settings"] }); }, onError: (error) => setNotice(errorToText(error)) });
+  const imageGenerationToolMutation = useMutation({
+    mutationFn: (values: ImageGenerationToolValues) =>
+      updateImageGenerationToolSettings(toImageGenerationToolSettings(values)),
+    onSuccess: () => {
+      setNotice("Responses 生图工具桥接设置已保存");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "image-generation-tool-settings"] });
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+  const imageProxyMutation = useMutation({
+    mutationFn: (values: ImageProxyValues) => updateImageProxySettings(fromImageProxyValues(values)),
+    onSuccess: () => {
+      setNotice("生图云函数/COS 设置已保存");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "image-proxy-settings"] });
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+  const imageProxyCheckMutation = useMutation({
+    mutationFn: checkImageProxySettings,
+    onSuccess: (result) => {
+      setImageProxyCheck(result);
+      setNotice(result.ok ? "云函数/COS 服务验证通过" : "云函数/COS 服务验证未通过，请查看检查项");
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
 
   function applyTencentExmailPreset() {
     const currentUser = authForm.getValues("smtpUser")?.trim() ?? "";
@@ -140,6 +205,64 @@ export default function AdminSettingsPage() {
             onChange={(rules) => reasoningForm.setValue("rules", rules, { shouldDirty: true })}
           />
         </SettingCard>
+
+        <SettingCard
+          title="Responses 生图工具桥接"
+          description="Codex 内置 image_generation 工具请求会转接到这里配置的模型，并按该模型的模型池选择上游。"
+          form={imageGenerationToolForm}
+          loading={imageGenerationToolMutation.isPending}
+          onSubmit={(values) => imageGenerationToolMutation.mutate(values)}
+        >
+          <TextInput label="转接模型" register={imageGenerationToolForm.register("routingModel")} />
+          <p className="text-xs leading-5 text-slate-500">
+            例如 gpt-image-2。普通文字 Responses 请求不受影响；只有带 image_generation 内置工具的请求才会走这个模型的模型池。
+          </p>
+        </SettingCard>
+
+        <SettingCard
+          title="生图云函数/COS 设置"
+          description="控制图片接口是否经腾讯云函数上传 COS，或恢复普通网关直连上游模式。"
+          form={imageProxyForm}
+          loading={imageProxyMutation.isPending}
+          onSubmit={(values) => imageProxyMutation.mutate(values)}
+          footer={
+            <button
+              type="button"
+              onClick={() => imageProxyCheckMutation.mutate()}
+              className={secondaryButton}
+              disabled={imageProxyCheckMutation.isPending}
+            >
+              {imageProxyCheckMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              验证服务
+            </button>
+          }
+        >
+          <div className="grid gap-2">
+            <span className={labelClass}>生图调用模式</span>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className={choiceClass}>
+                <input type="radio" value="tencent_cos" {...imageProxyForm.register("mode")} />
+                <span>
+                  <strong>云函数 + COS</strong>
+                  <small>生成后返回公网图片 URL</small>
+                </span>
+              </label>
+              <label className={choiceClass}>
+                <input type="radio" value="direct" {...imageProxyForm.register("mode")} />
+                <span>
+                  <strong>直连上游</strong>
+                  <small>恢复普通网关代理模式</small>
+                </span>
+              </label>
+            </div>
+          </div>
+          <ImageProxyModelSelector
+            models={imageProxyQuery.data?.models ?? []}
+            value={imageProxyForm.watch("enabledModelsText")}
+            onChange={(value) => imageProxyForm.setValue("enabledModelsText", value, { shouldDirty: true })}
+          />
+          {imageProxyCheck ? <ImageProxyCheckResult result={imageProxyCheck} /> : null}
+        </SettingCard>
       </section>
     </div>
   );
@@ -149,10 +272,90 @@ function cleanAuth(values: AuthValues): AuthSettingsInput {
   const { smtpPassword, testEmail: _testEmail, ...rest } = values;
   return smtpPassword?.trim() ? { ...rest, smtpPassword } : rest;
 }
+function toImageGenerationToolSettings(values: ImageGenerationToolValues): ImageGenerationToolSettings {
+  return { routingModel: values.routingModel.trim() };
+}
+function toImageProxyValues(settings: ImageProxySettings): ImageProxyValues {
+  return {
+    mode: settings.mode,
+    enabledModelsText: settings.enabledModels.join("\n"),
+  };
+}
+function fromImageProxyValues(values: ImageProxyValues): ImageProxySettings {
+  return {
+    mode: values.mode,
+    enabledModels: parseModelsText(values.enabledModelsText),
+  };
+}
+function parseModelsText(value: string) {
+  return [...new Set(value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))];
+}
 function TextInput({ label, register }: { label: string; register: object }) { return <label className="grid gap-2"><span className={labelClass}>{label}</span><input className={inputClass} {...register} /></label>; }
 function NumberInput({ label, register }: { label: string; register: object }) { return <label className="grid gap-2"><span className={labelClass}>{label}</span><input type="number" className={inputClass} {...register} /></label>; }
 function TextArea({ label, register, rows = 4 }: { label: string; register: object; rows?: number }) { return <label className="grid gap-2"><span className={labelClass}>{label}</span><textarea rows={rows} className={textareaClass} {...register} /></label>; }
 function Toggle({ label, register }: { label: string; register: object }) { return <label className="flex h-10 items-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-medium text-slate-700"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" {...register} />{label}</label>; }
+function ImageProxyModelSelector({
+  models,
+  value,
+  onChange,
+}: {
+  models: string[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const selected = new Set(parseModelsText(value));
+  function toggleModel(model: string) {
+    const next = new Set(selected);
+    if (next.has(model)) next.delete(model);
+    else next.add(model);
+    onChange([...next].join("\n"));
+  }
+  return (
+    <div className="grid gap-2">
+      <span className={labelClass}>走云函数/COS 的生图模型</span>
+      {models.length ? (
+        <div className="flex flex-wrap gap-2">
+          {models.map((model) => (
+            <button
+              key={model}
+              type="button"
+              onClick={() => toggleModel(model)}
+              className={selected.has(model) ? selectedPillButton : secondaryButton}
+            >
+              {model}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <textarea
+        rows={4}
+        className={textareaClass}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="gpt-image-2&#10;另一个生图模型"
+      />
+      <p className="text-xs leading-5 text-slate-500">每行或逗号分隔一个模型。留空表示所有生图模型都走云函数/COS。</p>
+    </div>
+  );
+}
+function ImageProxyCheckResult({ result }: { result: ImageProxyHealthCheck }) {
+  return (
+    <div className={`grid gap-2 rounded-md border p-3 ${result.ok ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+        {result.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <XCircle className="h-4 w-4 text-amber-600" />}
+        {result.ok ? "验证通过" : "验证未通过"}
+      </div>
+      <div className="grid gap-2">
+        {result.checks.map((check) => (
+          <div key={check.name} className="flex items-start gap-2 text-xs leading-5 text-slate-600">
+            {check.ok ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" /> : <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />}
+            <span>{check.message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 function ReasoningRulesEditor({
   rules,
   options,
@@ -209,4 +412,6 @@ const labelClass = "text-sm font-medium text-slate-700";
 const inputClass = "h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 const textareaClass = "w-full resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 const secondaryButton = "inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50";
+const selectedPillButton = "inline-flex h-10 items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100";
 const dangerButton = "inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 text-sm font-medium text-red-700 transition-colors hover:bg-red-100";
+const choiceClass = "flex min-h-20 cursor-pointer items-start gap-3 rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700 transition-colors hover:bg-slate-50 [&_input]:mt-1 [&_small]:mt-1 [&_small]:block [&_small]:text-xs [&_small]:font-normal [&_small]:text-slate-500 [&_strong]:block [&_strong]:font-semibold [&_strong]:text-slate-900";

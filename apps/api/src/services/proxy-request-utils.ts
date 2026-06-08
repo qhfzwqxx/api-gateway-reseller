@@ -15,6 +15,7 @@ export const proxiedEndpoints = new Set([
   "/v1/embeddings",
   "/v1/completions",
   "/v1/images/generations",
+  "/v1/images/edits",
 ]);
 
 export function normalizeEndpoint(endpoint: string) {
@@ -39,7 +40,8 @@ export function normalizeEndpoint(endpoint: string) {
     endpoint === "/chat/completions" ||
     endpoint === "/embeddings" ||
     endpoint === "/completions" ||
-    endpoint === "/images/generations"
+    endpoint === "/images/generations" ||
+    endpoint === "/images/edits"
   ) {
     return `/v1${endpoint}`;
   }
@@ -111,6 +113,7 @@ export function shouldCheckNewRequestLimits(endpoint: string, method: string) {
       endpoint === "/v1/completions" ||
       endpoint === "/v1/embeddings" ||
       endpoint === "/v1/images/generations" ||
+      endpoint === "/v1/images/edits" ||
       endpoint === "/v1/responses")
   );
 }
@@ -122,10 +125,59 @@ export function isBillableEndpoint(endpoint: string, method: string) {
       endpoint === "/v1/completions" ||
       endpoint === "/v1/embeddings" ||
       endpoint === "/v1/images/generations" ||
+      endpoint === "/v1/images/edits" ||
       endpoint === "/v1/responses" ||
       endpoint === "/v1/responses/compact" ||
       endpoint === "/v1/responses/input_tokens")
   );
+}
+
+export function parseMultipartProxyBody(
+  body: Buffer,
+  contentType: string | undefined,
+) {
+  return {
+    model: readMultipartTextField(body, contentType, "model") ?? undefined,
+    prompt: readMultipartTextField(body, contentType, "prompt") ?? undefined,
+    multipart: true,
+  } satisfies ProxyBody;
+}
+
+function readMultipartTextField(
+  body: Buffer,
+  contentType: string | undefined,
+  fieldName: string,
+) {
+  const boundary = contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[1] ??
+    contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[2];
+  if (!boundary) {
+    return null;
+  }
+
+  const text = body.toString("latin1");
+  const parts = text.split(`--${boundary}`);
+  const fieldPattern = new RegExp(`name="${escapeRegExp(fieldName)}"`);
+
+  for (const part of parts) {
+    if (!fieldPattern.test(part)) {
+      continue;
+    }
+    const separatorIndex = part.indexOf("\r\n\r\n");
+    if (separatorIndex < 0) {
+      continue;
+    }
+    return part
+      .slice(separatorIndex + 4)
+      .replace(/\r\n--$/, "")
+      .replace(/\r\n$/, "")
+      .trim();
+  }
+
+  return null;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function inferModelFromEndpoint(endpoint: string) {
@@ -444,7 +496,11 @@ function replaceRequestPath(requestUrl: string, nextPath: string) {
 }
 
 function normalizeUpstreamEndpointSetting(value: string | null | undefined) {
-  return value === "chat_completions" ? value : "responses";
+  if (value === "chat_completions" || value === "images_generations") {
+    return value;
+  }
+
+  return "responses";
 }
 
 function buildResponsesToChatCompletionsBody(body: ProxyBody): ProxyBody {
@@ -959,15 +1015,24 @@ export function isPlainObject(
 
 export const UPSTREAM_RESPONSE_MAX_BYTES = 5 * 1024 * 1024; // 5MB
 export const UPSTREAM_COMPACT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024; // 16MB
+export const UPSTREAM_IMAGE_RESPONSE_MAX_BYTES = 80 * 1024 * 1024; // 80MB
 
 type SafeBodyResult =
   | { json: unknown; text: string }
   | { error: { message: string; statusCode: number } };
 
 export function getUpstreamResponseMaxBytes(endpoint: string) {
-  return endpoint === "/v1/responses/compact"
-    ? UPSTREAM_COMPACT_RESPONSE_MAX_BYTES
-    : UPSTREAM_RESPONSE_MAX_BYTES;
+  if (endpoint === "/v1/responses/compact") {
+    return UPSTREAM_COMPACT_RESPONSE_MAX_BYTES;
+  }
+  if (
+    endpoint === "/v1/images/generations" ||
+    endpoint === "/v1/images/edits"
+  ) {
+    return UPSTREAM_IMAGE_RESPONSE_MAX_BYTES;
+  }
+
+  return UPSTREAM_RESPONSE_MAX_BYTES;
 }
 
 export async function safeReadUpstreamBody(

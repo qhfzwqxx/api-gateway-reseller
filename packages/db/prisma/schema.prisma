@@ -261,6 +261,7 @@ model ApiKey {
   concurrencyLimit   Int          @default(0)
   noticeEnabled      Boolean      @default(false)
   noticeText         String?
+  forceFastMode      Boolean      @default(false)
   tags               String[]     @default([])
   disabledReason     String?
   disabledAt         DateTime?
@@ -421,11 +422,14 @@ model ModelPrice {
   upstreamOutputPer1MTok      Decimal   @db.Decimal(18, 8)
   upstreamCachedInputPer1MTok Decimal   @default(0) @db.Decimal(18, 8)
   upstreamPriceMultiplier     Decimal   @default(1) @db.Decimal(18, 8)
+  upstreamPerRequestUsd       Decimal   @default(0) @db.Decimal(18, 8)
   customerInputPer1MTok       Decimal   @db.Decimal(18, 8)
   customerOutputPer1MTok      Decimal   @db.Decimal(18, 8)
   customerCachedInputPer1MTok Decimal   @default(0) @db.Decimal(18, 8)
   customerPriceMultiplier     Decimal   @default(1) @db.Decimal(18, 8)
   minimumChargeUsd            Decimal   @default(0) @db.Decimal(18, 8)
+  perRequestUsd               Decimal   @default(0) @db.Decimal(18, 8)
+  pricingMode                 String    @default("token")
   enabled                     Boolean   @default(true)
   priceVersion                String    @default("v1")
   effectiveFrom               DateTime?

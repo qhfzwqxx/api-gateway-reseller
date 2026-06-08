@@ -51,6 +51,14 @@ const app = Fastify({
   trustProxy: true,
   bodyLimit: 20 * 1024 * 1024,
 });
+
+app.addContentTypeParser(
+  /^multipart\/form-data/i,
+  { parseAs: "buffer", bodyLimit: 80 * 1024 * 1024 },
+  (_request, body, done) => {
+    done(null, body);
+  },
+);
 let stopModelPoolHealthScheduler: (() => void) | undefined;
 let stopPendingRequestCleanupScheduler: (() => void) | undefined;
 let stopExternalAlertScheduler: (() => void) | undefined;

@@ -196,7 +196,6 @@ type RiskCenter = {
   temporaryIpNoticeBanSettings: TemporaryIpNoticeBanSettings;
   pendingAutoTerminateSettings: PendingAutoTerminateSettings;
   gatewayNoticeSettings: GatewayNoticeSettings;
-  upstreamOutputFilterSettings: UpstreamOutputFilterSettings;
   redisFailurePolicySettings: RedisFailurePolicySettings;
   globalCircuitBreakerSettings: GlobalCircuitBreakerSettings;
   externalAlertSettings: ExternalAlertSettings;
@@ -256,11 +255,6 @@ type GatewayNoticeSettings = {
   upstreamBalanceInsufficientMessage: string;
 };
 
-type UpstreamOutputFilterSettings = {
-  enabled: boolean;
-  phrases: string[];
-};
-
 type RedisFailurePolicySettings = {
   policy: "fail-open" | "fail-closed" | "degraded";
   degradedAdminBypassEnabled: boolean;
@@ -314,8 +308,8 @@ type PublicAuthSettings = Pick<
 >;
 
 const modelPriceImportExampleCsv = [
-  "model,upstreamProvider,upstreamEndpoint,currency,upstreamInputPer1MTok,upstreamCachedInputPer1MTok,upstreamOutputPer1MTok,upstreamPriceMultiplier,customerInputPer1MTok,customerCachedInputPer1MTok,customerOutputPer1MTok,customerPriceMultiplier,minimumChargeUsd,enabled,priceVersion,effectiveFrom,effectiveTo",
-  "gpt-4o-mini,openai,responses,USD,5,0.5,30,1,6,0.6,36,1,0,true,v1,,",
+  "model,upstreamProvider,upstreamEndpoint,pricingMode,currency,upstreamInputPer1MTok,upstreamCachedInputPer1MTok,upstreamOutputPer1MTok,upstreamPriceMultiplier,upstreamPerRequestUsd,customerInputPer1MTok,customerCachedInputPer1MTok,customerOutputPer1MTok,customerPriceMultiplier,minimumChargeUsd,perRequestUsd,enabled,priceVersion,effectiveFrom,effectiveTo",
+  "gpt-4o-mini,openai,responses,token,USD,5,0.5,30,1,0,6,0.6,36,1,0,0,true,v1,,",
 ].join("\n");
 
 const frontNav = [

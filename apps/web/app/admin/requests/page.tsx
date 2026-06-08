@@ -150,10 +150,13 @@ export default function AdminRequestsPage() {
             <h2 className="mt-1 text-2xl font-semibold text-slate-950">调用记录</h2>
             <p className="mt-2 text-sm text-slate-500">联合筛选、游标分页与敏感报文审计。</p>
           </div>
-          <div className="grid grid-cols-3 gap-3 text-sm">
-            <Summary label="总数" value={firstPage?.summary.total ?? 0} />
-            <Summary label="成功" value={firstPage?.summary.success ?? 0} />
-            <Summary label="失败" value={firstPage?.summary.failed ?? 0} />
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6">
+            <Summary label="总数" value={firstPage?.summary.totalCount ?? 0} />
+            <Summary label="成功" value={firstPage?.summary.successCount ?? 0} />
+            <Summary label="失败" value={firstPage?.summary.failedCount ?? 0} />
+            <Summary label="Token" value={firstPage?.summary.totalTokens ?? 0} />
+            <Summary label="平均总耗时" value={seconds(firstPage?.summary.avgLatencyMs)} />
+            <Summary label="平均首 token" value={seconds(firstPage?.summary.avgFirstTokenLatencyMs)} />
           </div>
         </div>
       </section>
@@ -408,11 +411,13 @@ export default function AdminRequestsPage() {
   );
 }
 
-function Summary({ label, value }: { label: string; value: number }) {
+function Summary({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
       <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-950">{formatInteger(value)}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums text-slate-950">
+        {typeof value === "number" ? formatInteger(value) : value}
+      </p>
     </div>
   );
 }
