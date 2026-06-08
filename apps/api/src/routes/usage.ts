@@ -4,6 +4,7 @@ import { requireApiKey, requireUser } from "../services/auth.js";
 import { resolveAccessRoutePolicy } from "../services/access-routing.js";
 import { getClientIp } from "../services/proxy-request-utils.js";
 import type { ApiRequestWithUser } from "../types.js";
+import { readImageGenerationToolSettings } from "../services/image-generation-tool-settings.js";
 
 export async function usageRoutes(app: FastifyInstance) {
   app.get("/v1/models", async (request: ApiRequestWithUser, reply) => {
@@ -27,6 +28,10 @@ export async function usageRoutes(app: FastifyInstance) {
           ? apiKey.allowedModels
           : user.allowedModels,
     });
+    const imageGenerationSettings = await readImageGenerationToolSettings();
+    const canBridgeImageGeneration = models.some(
+      (model) => model.model === imageGenerationSettings.routingModel,
+    );
 
     return {
       object: "list",
@@ -37,7 +42,9 @@ export async function usageRoutes(app: FastifyInstance) {
         owned_by: "gateway",
         ready_channel_count: model.readyChannelCount,
         capabilities: {
-          image_generation: model.model.startsWith("gpt-image-"),
+          image_generation:
+            model.model.startsWith("gpt-image-") ||
+            (canBridgeImageGeneration && !model.model.startsWith("gpt-image-")),
         },
       })),
     };
