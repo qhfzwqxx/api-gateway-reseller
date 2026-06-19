@@ -174,9 +174,15 @@ const modelPriceImportExampleCsv = [
   "gpt-4o-mini,openai,responses,token,USD,5,0.5,30,1,0,6,0.6,36,1,0,0,true,v1,,",
 ].join("\n");
 
-function errorToText(error: unknown) { return error instanceof Error ? error.message : "未知错误"; }
-function displayUpstreamProviderKeyName(name: string) { return name === "默认 Key" ? "key-1" : name; }
-function displayCompactItemType(type?: UpstreamProvider["compactItemType"]) { return type === "compaction" ? "compaction" : "compaction_summary"; }
+function errorToText(error: unknown) {
+  return error instanceof Error ? error.message : "未知错误";
+}
+function displayUpstreamProviderKeyName(name: string) {
+  return name === "默认 Key" ? "key-1" : name;
+}
+function displayCompactItemType(type?: UpstreamProvider["compactItemType"]) {
+  return type === "compaction" ? "compaction" : "compaction_summary";
+}
 function normalizeOptionalNumberText(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
@@ -202,7 +208,9 @@ function parseBatchProviderKeys(value: string) {
 function MobileEmpty({ children }: { children: React.ReactNode }) {
   return <div className="mobile-empty">{children}</div>;
 }
-function formatPriceValidity(price: Pick<ModelPrice, "effectiveFrom" | "effectiveTo">) {
+function formatPriceValidity(
+  price: Pick<ModelPrice, "effectiveFrom" | "effectiveTo">,
+) {
   const starts = price.effectiveFrom ? dateTime(price.effectiveFrom) : "立即";
   const expires = price.effectiveTo ? dateTime(price.effectiveTo) : "长期";
   return `${starts} - ${expires}`;
@@ -290,6 +298,9 @@ export function UpstreamProviders({
   const [batchKeyPriority, setBatchKeyPriority] = useState(100);
   const [batchKeyBusy, setBatchKeyBusy] = useState(false);
   const [busyKeyId, setBusyKeyId] = useState<string | null>(null);
+  const [selectedProviderKeyIds, setSelectedProviderKeyIds] = useState<
+    string[]
+  >([]);
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
   const [priceProvider, setPriceProvider] = useState("");
   const [upstreamEndpoint, setUpstreamEndpoint] = useState<
@@ -335,13 +346,21 @@ export function UpstreamProviders({
     [hiddenProviderIds, providers],
   );
   const hiddenProviders = useMemo(
-    () => providers.filter((provider) => hiddenProviderIds.includes(provider.id)),
+    () =>
+      providers.filter((provider) => hiddenProviderIds.includes(provider.id)),
     [hiddenProviderIds, providers],
   );
   const selectedProvider =
     visibleProviders.find((provider) => provider.id === selectedProviderId) ??
     visibleProviders[0] ??
     null;
+  const selectedProviderKeys = selectedProvider?.keys ?? [];
+  const selectedProviderKeysForDeletion = selectedProviderKeys.filter((key) =>
+    selectedProviderKeyIds.includes(key.id),
+  );
+  const allProviderKeysSelected =
+    selectedProviderKeys.length > 0 &&
+    selectedProviderKeysForDeletion.length === selectedProviderKeys.length;
   const selectedUnifiedPriceCount = unifiedPriceGroups.filter(
     (group) => unifiedPriceSelections[group.model],
   ).length;
@@ -371,8 +390,14 @@ export function UpstreamProviders({
   }, [selectedProviderId, visibleProviders]);
 
   useEffect(() => {
+    setSelectedProviderKeyIds([]);
+  }, [selectedProvider?.id]);
+
+  useEffect(() => {
     try {
-      const raw = window.localStorage.getItem("admin:hidden-upstream-providers");
+      const raw = window.localStorage.getItem(
+        "admin:hidden-upstream-providers",
+      );
       if (!raw) {
         return;
       }
@@ -860,18 +885,21 @@ export function UpstreamProviders({
       }
 
       for (const row of rows) {
-        await apiFetch(`/admin/upstream-providers/${batchKeyModalProvider.id}/keys`, {
-          method: "POST",
-          body: JSON.stringify({
-            name: row.name,
-            key: row.key,
-            priority: Number(batchKeyPriority),
-            status: "ACTIVE",
-            dailyLimitUsd: null,
-            monthlyLimitUsd: null,
-            providerRateLimit: null,
-          }),
-        });
+        await apiFetch(
+          `/admin/upstream-providers/${batchKeyModalProvider.id}/keys`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              name: row.name,
+              key: row.key,
+              priority: Number(batchKeyPriority),
+              status: "ACTIVE",
+              dailyLimitUsd: null,
+              monthlyLimitUsd: null,
+              providerRateLimit: null,
+            }),
+          },
+        );
       }
 
       setBatchKeyModalProvider(null);
@@ -920,6 +948,39 @@ export function UpstreamProviders({
       await apiFetch(`/admin/upstream-provider-keys/${key.id}`, {
         method: "DELETE",
       });
+      onChanged();
+    } catch (deleteError) {
+      onError(errorToText(deleteError));
+    } finally {
+      setBusyKeyId(null);
+    }
+  }
+
+  async function deleteSelectedProviderKeys() {
+    if (selectedProviderKeysForDeletion.length === 0) {
+      return;
+    }
+
+    const confirmed = await confirmAdminAction({
+      title: "批量删除上游 Key",
+      description: `确定删除选中的 ${selectedProviderKeysForDeletion.length} 个上游 Key 吗？删除后这些 Key 不再参与调度。`,
+      confirmText: "删除 Key",
+      danger: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    onError(null);
+    setBusyKeyId("__batch_delete__");
+    try {
+      await apiFetch("/admin/upstream-provider-keys", {
+        method: "DELETE",
+        body: JSON.stringify({
+          ids: selectedProviderKeysForDeletion.map((key) => key.id),
+        }),
+      });
+      setSelectedProviderKeyIds([]);
       onChanged();
     } catch (deleteError) {
       onError(errorToText(deleteError));
@@ -1054,19 +1115,36 @@ export function UpstreamProviders({
       provider.status.toLowerCase().includes(keyword)
     );
   });
-  const filteredSelectedProviderPrices = selectedProviderPrices.filter((price) => {
-    const keyword = priceSearch.trim().toLowerCase();
-    if (!keyword) {
-      return true;
-    }
-    return (
-      price.model.toLowerCase().includes(keyword) ||
-      price.priceVersion.toLowerCase().includes(keyword) ||
-      price.upstreamProvider.toLowerCase().includes(keyword)
-    );
-  });
+  const filteredSelectedProviderPrices = selectedProviderPrices.filter(
+    (price) => {
+      const keyword = priceSearch.trim().toLowerCase();
+      if (!keyword) {
+        return true;
+      }
+      return (
+        price.model.toLowerCase().includes(keyword) ||
+        price.priceVersion.toLowerCase().includes(keyword) ||
+        price.upstreamProvider.toLowerCase().includes(keyword)
+      );
+    },
+  );
   const selectedProviderKeyRows = (selectedProvider?.keys ?? []).map((key) => ({
     id: key.id,
+    select: (
+      <input
+        aria-label={`选择 ${displayUpstreamProviderKeyName(key.name)}`}
+        checked={selectedProviderKeyIds.includes(key.id)}
+        disabled={busyKeyId === "__batch_delete__"}
+        onChange={() =>
+          setSelectedProviderKeyIds((current) =>
+            current.includes(key.id)
+              ? current.filter((id) => id !== key.id)
+              : [...current, key.id],
+          )
+        }
+        type="checkbox"
+      />
+    ),
     name: displayUpstreamProviderKeyName(key.name),
     prefix: <code>{key.keyPrefix || key.key}</code>,
     status: <StatusPill status={key.status} />,
@@ -1119,73 +1197,77 @@ export function UpstreamProviders({
       </div>
     ),
   }));
-  const selectedProviderPriceRows = filteredSelectedProviderPrices.map((price) => ({
-    id: price.id,
-    model: price.model,
-    status: <StatusPill status={price.enabled ? "ACTIVE" : "DISABLED"} />,
-    upstreamRaw: priceTriplet(
-      price.upstreamInputPer1MTok,
-      price.upstreamCachedInputPer1MTok,
-      price.upstreamOutputPer1MTok,
-    ),
-    upstreamEffective: (
-      <>
-        x{price.upstreamPriceMultiplier}:{" "}
-        {priceTriplet(
-          multiplied(
-            price.upstreamInputPer1MTok,
-            price.upstreamPriceMultiplier,
-          ),
-          multiplied(
-            price.upstreamCachedInputPer1MTok,
-            price.upstreamPriceMultiplier,
-          ),
-          multiplied(
-            price.upstreamOutputPer1MTok,
-            price.upstreamPriceMultiplier,
-          ),
-        )}
-      </>
-    ),
-    customerPrice: renderCustomerPrice(price),
-    marginRisk: renderMarginRisk(price),
-    version: (
-      <>
-        {price.priceVersion || "v1"}
-        <br />
-        <span className="muted-cell">{endpointLabel(price.upstreamEndpoint)}</span>
-        <br />
-        <span className="muted-cell">{formatPriceValidity(price)}</span>
-      </>
-    ),
-    actions: (
-      <div className="button-row compact">
-        <button
-          className="button secondary"
-          onClick={() => editPrice(price)}
-          type="button"
-        >
-          编辑
-        </button>
-        <button
-          className="button secondary"
-          onClick={() => togglePrice(price)}
-          type="button"
-        >
-          {price.enabled ? "停用" : "启用"}
-        </button>
-        <button
-          className="button danger"
-          disabled={busyPriceId === price.id}
-          onClick={() => deletePrice(price)}
-          type="button"
-        >
-          <Trash2 size={15} />
-          删除
-        </button>
-      </div>
-    ),
-  }));
+  const selectedProviderPriceRows = filteredSelectedProviderPrices.map(
+    (price) => ({
+      id: price.id,
+      model: price.model,
+      status: <StatusPill status={price.enabled ? "ACTIVE" : "DISABLED"} />,
+      upstreamRaw: priceTriplet(
+        price.upstreamInputPer1MTok,
+        price.upstreamCachedInputPer1MTok,
+        price.upstreamOutputPer1MTok,
+      ),
+      upstreamEffective: (
+        <>
+          x{price.upstreamPriceMultiplier}:{" "}
+          {priceTriplet(
+            multiplied(
+              price.upstreamInputPer1MTok,
+              price.upstreamPriceMultiplier,
+            ),
+            multiplied(
+              price.upstreamCachedInputPer1MTok,
+              price.upstreamPriceMultiplier,
+            ),
+            multiplied(
+              price.upstreamOutputPer1MTok,
+              price.upstreamPriceMultiplier,
+            ),
+          )}
+        </>
+      ),
+      customerPrice: renderCustomerPrice(price),
+      marginRisk: renderMarginRisk(price),
+      version: (
+        <>
+          {price.priceVersion || "v1"}
+          <br />
+          <span className="muted-cell">
+            {endpointLabel(price.upstreamEndpoint)}
+          </span>
+          <br />
+          <span className="muted-cell">{formatPriceValidity(price)}</span>
+        </>
+      ),
+      actions: (
+        <div className="button-row compact">
+          <button
+            className="button secondary"
+            onClick={() => editPrice(price)}
+            type="button"
+          >
+            编辑
+          </button>
+          <button
+            className="button secondary"
+            onClick={() => togglePrice(price)}
+            type="button"
+          >
+            {price.enabled ? "停用" : "启用"}
+          </button>
+          <button
+            className="button danger"
+            disabled={busyPriceId === price.id}
+            onClick={() => deletePrice(price)}
+            type="button"
+          >
+            <Trash2 size={15} />
+            删除
+          </button>
+        </div>
+      ),
+    }),
+  );
   const priceImportPreviewRows =
     priceImportPreview?.rows.slice(0, 20).map((row) => ({
       id: `${row.data.upstreamProvider}:${row.data.model}`,
@@ -1217,7 +1299,8 @@ export function UpstreamProviders({
                 <div>
                   <h2 className="section-title">上游渠道</h2>
                   <p className="section-subtitle">
-                    {activeProviderCount}/{providers.length} 启用 · {totalProviderKeyCount} Key · {enabledPriceCount} 价格
+                    {activeProviderCount}/{providers.length} 启用 ·{" "}
+                    {totalProviderKeyCount} Key · {enabledPriceCount} 价格
                   </p>
                 </div>
                 <input
@@ -1262,41 +1345,43 @@ export function UpstreamProviders({
                 </p>
               </div>
               <div className="button-row admin-toolbar-actions">
-            <button
-              className="button secondary"
-              onClick={() => setHiddenProvidersOpen(true)}
-              type="button"
-            >
-              <Eye size={17} />
-              隐藏区
-              {hiddenProviders.length > 0 ? ` (${hiddenProviders.length})` : ""}
-            </button>
-            <button
-              className="button"
-              onClick={openCreateProvider}
-              type="button"
-            >
-              <Plus size={17} />
-              添加上游
-            </button>
-            <button
-              className="button secondary"
-              onClick={openPriceImportModal}
-              type="button"
-            >
-              <FileSearch size={17} />
-              导入价格
-            </button>
-            <button
-              className="button secondary"
-              disabled={unifiedPriceGroups.length === 0}
-              onClick={openUnifiedPriceModal}
-              type="button"
-            >
-              <SlidersHorizontal size={17} />
-              统一定价
-            </button>
-          </div>
+                <button
+                  className="button secondary"
+                  onClick={() => setHiddenProvidersOpen(true)}
+                  type="button"
+                >
+                  <Eye size={17} />
+                  隐藏区
+                  {hiddenProviders.length > 0
+                    ? ` (${hiddenProviders.length})`
+                    : ""}
+                </button>
+                <button
+                  className="button"
+                  onClick={openCreateProvider}
+                  type="button"
+                >
+                  <Plus size={17} />
+                  添加上游
+                </button>
+                <button
+                  className="button secondary"
+                  onClick={openPriceImportModal}
+                  type="button"
+                >
+                  <FileSearch size={17} />
+                  导入价格
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={unifiedPriceGroups.length === 0}
+                  onClick={openUnifiedPriceModal}
+                  type="button"
+                >
+                  <SlidersHorizontal size={17} />
+                  统一定价
+                </button>
+              </div>
             </>
           }
         >
@@ -1306,7 +1391,10 @@ export function UpstreamProviders({
                 const providerPrices = pricesForProvider(provider.name);
 
                 return (
-                  <section className="provider-panel provider-detail-panel" key={provider.id}>
+                  <section
+                    className="provider-panel provider-detail-panel"
+                    key={provider.id}
+                  >
                     <div className="provider-head">
                       <div>
                         <div className="provider-title">
@@ -1404,7 +1492,9 @@ export function UpstreamProviders({
                         <button
                           key={id}
                           className={providerDetailTab === id ? "active" : ""}
-                          onClick={() => setProviderDetailTab(id as typeof providerDetailTab)}
+                          onClick={() =>
+                            setProviderDetailTab(id as typeof providerDetailTab)
+                          }
                           type="button"
                         >
                           {label}
@@ -1414,35 +1504,82 @@ export function UpstreamProviders({
 
                     {providerDetailTab === "overview" ? (
                       <div className="grid cols-3 metric-row">
-                        <Metric label="Key" value={`${provider.keys?.filter((key) => key.status === "ACTIVE").length ?? 0}/${provider.keys?.length ?? 0}`} />
-                        <Metric label="模型价格" value={`${providerPrices.filter((price) => price.enabled).length}/${providerPrices.length}`} />
-                        <Metric label="超时" value={seconds(provider.timeoutMs)} />
+                        <Metric
+                          label="Key"
+                          value={`${provider.keys?.filter((key) => key.status === "ACTIVE").length ?? 0}/${provider.keys?.length ?? 0}`}
+                        />
+                        <Metric
+                          label="模型价格"
+                          value={`${providerPrices.filter((price) => price.enabled).length}/${providerPrices.length}`}
+                        />
+                        <Metric
+                          label="超时"
+                          value={seconds(provider.timeoutMs)}
+                        />
                       </div>
                     ) : null}
 
                     {providerDetailTab === "keys" ? (
                       <>
-                    <div className="section-head compact-head">
-                      <div>
-                        <h3 className="section-title">Key 池</h3>
-                        <p className="section-subtitle">调度会在 ACTIVE Key 中按进行中请求数均摊。</p>
-                      </div>
-                    </div>
-                    <AdminDataTable
-                      columns={[
-                        { accessorKey: "name", header: "名称" },
-                        { accessorKey: "prefix", header: "前缀" },
-                        { accessorKey: "status", header: "状态" },
-                        { accessorKey: "priority", header: "优先级" },
-                        { accessorKey: "quota", header: "额度/限流" },
-                        { accessorKey: "checkedAt", header: "最近检测" },
-                        { accessorKey: "usedAt", header: "最近使用" },
-                        { accessorKey: "error", header: "错误" },
-                        { accessorKey: "actions", header: "操作" },
-                      ]}
-                      data={selectedProviderKeyRows}
-                      empty="暂无 Key"
-                    />
+                        <div className="section-head compact-head">
+                          <div>
+                            <h3 className="section-title">Key 池</h3>
+                            <p className="section-subtitle">
+                              调度会在 ACTIVE Key 中按进行中请求数均摊。
+                            </p>
+                          </div>
+                          <div className="button-row compact">
+                            <label className="checkbox-line">
+                              <input
+                                checked={allProviderKeysSelected}
+                                disabled={
+                                  selectedProviderKeys.length === 0 ||
+                                  busyKeyId === "__batch_delete__"
+                                }
+                                onChange={(event) =>
+                                  setSelectedProviderKeyIds(
+                                    event.target.checked
+                                      ? selectedProviderKeys.map(
+                                          (key) => key.id,
+                                        )
+                                      : [],
+                                  )
+                                }
+                                type="checkbox"
+                              />
+                              已选 {selectedProviderKeysForDeletion.length}/
+                              {selectedProviderKeys.length}
+                            </label>
+                            <button
+                              className="button danger"
+                              disabled={
+                                selectedProviderKeysForDeletion.length === 0 ||
+                                busyKeyId === "__batch_delete__"
+                              }
+                              onClick={deleteSelectedProviderKeys}
+                              type="button"
+                            >
+                              <Trash2 size={15} />
+                              批量删除
+                            </button>
+                          </div>
+                        </div>
+                        <AdminDataTable
+                          columns={[
+                            { accessorKey: "select", header: "" },
+                            { accessorKey: "name", header: "名称" },
+                            { accessorKey: "prefix", header: "前缀" },
+                            { accessorKey: "status", header: "状态" },
+                            { accessorKey: "priority", header: "优先级" },
+                            { accessorKey: "quota", header: "额度/限流" },
+                            { accessorKey: "checkedAt", header: "最近检测" },
+                            { accessorKey: "usedAt", header: "最近使用" },
+                            { accessorKey: "error", header: "错误" },
+                            { accessorKey: "actions", header: "操作" },
+                          ]}
+                          data={selectedProviderKeyRows}
+                          empty="暂无 Key"
+                        />
                       </>
                     ) : null}
                     <div className="mobile-record-list">
@@ -1521,46 +1658,54 @@ export function UpstreamProviders({
 
                     {providerDetailTab === "prices" ? (
                       <>
-                    <div className="section-head compact-head">
-                      <div>
-                        <h3 className="section-title">模型价格</h3>
-                        <p className="section-subtitle">
-                          输入 / 缓存输入 / 输出分别计价，再乘以倍率。
-                        </p>
-                      </div>
-                      <input
-                        className="input search-input"
-                        placeholder="搜索模型 / 版本"
-                        value={priceSearch}
-                        onChange={(event) => setPriceSearch(event.target.value)}
-                      />
-                      <button
-                        className="button secondary"
-                        onClick={() => openCreatePrice(provider.name)}
-                        type="button"
-                      >
-                        <Plus size={17} />
-                        新增价格
-                      </button>
-                    </div>
+                        <div className="section-head compact-head">
+                          <div>
+                            <h3 className="section-title">模型价格</h3>
+                            <p className="section-subtitle">
+                              输入 / 缓存输入 / 输出分别计价，再乘以倍率。
+                            </p>
+                          </div>
+                          <input
+                            className="input search-input"
+                            placeholder="搜索模型 / 版本"
+                            value={priceSearch}
+                            onChange={(event) =>
+                              setPriceSearch(event.target.value)
+                            }
+                          />
+                          <button
+                            className="button secondary"
+                            onClick={() => openCreatePrice(provider.name)}
+                            type="button"
+                          >
+                            <Plus size={17} />
+                            新增价格
+                          </button>
+                        </div>
 
-                    <AdminDataTable
-                      columns={[
-                        { accessorKey: "model", header: "模型" },
-                        { accessorKey: "status", header: "状态" },
-                        {
-                          accessorKey: "upstreamRaw",
-                          header: "上游原价 输入/缓存/输出",
-                        },
-                        { accessorKey: "upstreamEffective", header: "上游实价" },
-                        { accessorKey: "customerPrice", header: "站点售价" },
-                        { accessorKey: "marginRisk", header: "毛利风险" },
-                        { accessorKey: "version", header: "版本/有效期" },
-                        { accessorKey: "actions", header: "操作" },
-                      ]}
-                      data={selectedProviderPriceRows}
-                      empty="暂无模型价格"
-                    />
+                        <AdminDataTable
+                          columns={[
+                            { accessorKey: "model", header: "模型" },
+                            { accessorKey: "status", header: "状态" },
+                            {
+                              accessorKey: "upstreamRaw",
+                              header: "上游原价 输入/缓存/输出",
+                            },
+                            {
+                              accessorKey: "upstreamEffective",
+                              header: "上游实价",
+                            },
+                            {
+                              accessorKey: "customerPrice",
+                              header: "站点售价",
+                            },
+                            { accessorKey: "marginRisk", header: "毛利风险" },
+                            { accessorKey: "version", header: "版本/有效期" },
+                            { accessorKey: "actions", header: "操作" },
+                          ]}
+                          data={selectedProviderPriceRows}
+                          empty="暂无模型价格"
+                        />
                       </>
                     ) : null}
                     <div className="mobile-record-list">
@@ -1650,7 +1795,11 @@ export function UpstreamProviders({
                             <strong>导入价格</strong>
                             <small>批量创建或更新模型价格。</small>
                           </div>
-                          <button className="button secondary" onClick={openPriceImportModal} type="button">
+                          <button
+                            className="button secondary"
+                            onClick={openPriceImportModal}
+                            type="button"
+                          >
                             <FileSearch size={16} />
                             导入
                           </button>
@@ -1661,8 +1810,20 @@ export function UpstreamProviders({
                             <small>导出当前全站模型价格配置。</small>
                           </div>
                           <div className="button-row">
-                            <button className="button secondary" onClick={() => exportModelPrices("json")} type="button">JSON</button>
-                            <button className="button secondary" onClick={() => exportModelPrices("csv")} type="button">CSV</button>
+                            <button
+                              className="button secondary"
+                              onClick={() => exportModelPrices("json")}
+                              type="button"
+                            >
+                              JSON
+                            </button>
+                            <button
+                              className="button secondary"
+                              onClick={() => exportModelPrices("csv")}
+                              type="button"
+                            >
+                              CSV
+                            </button>
                           </div>
                         </section>
                       </div>
@@ -1803,9 +1964,9 @@ export function UpstreamProviders({
                 <span className="field-hint">
                   用于二次 compact 替换时写回请求的 item 类型。New API
                   中转站一般选 compaction；subAPI 类中转站一般选
-                  compaction_summary。
-                  这个选项不会让上游自动支持 compact，真正可用必须看
-                  /v1/responses/compact 是否返回 encrypted_content。
+                  compaction_summary。 这个选项不会让上游自动支持
+                  compact，真正可用必须看 /v1/responses/compact 是否返回
+                  encrypted_content。
                 </span>
               </label>
             </div>
@@ -1948,7 +2109,9 @@ export function UpstreamProviders({
                   className="input textarea"
                   value={batchKeyContent}
                   onChange={(event) => setBatchKeyContent(event.target.value)}
-                  placeholder={"apishare11-gwhUAx    sk-A0utvWeIKVXV1TRvzTiA63ml9m7OOrvCUJMy2tu2rmaksIU0\napishare11    sk-kbttGI7dS7VpHe4jWcUdrGozegYrMY3IbYzqVpyE9qFUGXDk"}
+                  placeholder={
+                    "apishare11-gwhUAx    sk-example-upstream-key-001\napishare11    sk-example-upstream-key-002"
+                  }
                   rows={8}
                 />
                 <span className="field-hint">

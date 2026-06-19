@@ -1,8 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 import { Decimal } from "decimal.js";
+import { z } from "zod";
 import { prisma } from "@gateway/db";
+import {
+  isSmtpConfigured,
+  readAuthSettings,
+} from "../services/auth-settings.js";
 import { readCharityAnnouncementSettings } from "../services/charity-announcement-settings.js";
+import { sendEmergencyAdminCallEmail } from "../services/mailer.js";
 import { onPublicStatusChanged } from "../services/public-status-events.js";
 import { readUnifiedPriceSettings } from "../services/unified-pricing.js";
 
@@ -52,8 +58,54 @@ type PublicReadyChannelRow = {
   count: bigint;
 };
 
+const emergencyAdminEmail = "1810499229@qq.com";
+const emergencyAdminCallCooldownSeconds = 5 * 60;
+const emergencyAdminFallbackLimits = new Map<string, number>();
+const emergencyAdminCallSchema = z.object({
+  message: z.string().trim().max(1000).optional().default(""),
+  source: z.string().trim().max(40).optional(),
+});
+
 export async function publicRoutes(app: FastifyInstance) {
   app.get("/public/charity-status", async () => getPublicModelPoolStatus());
+
+  app.post("/public/emergency-admin-call", async (request, reply) => {
+    const body = emergencyAdminCallSchema.parse(request.body ?? {});
+    const ip = normalizeClientIp(request.ip);
+    const allowed = await reserveEmergencyAdminCallSlot(app, ip);
+
+    if (!allowed) {
+      return reply.status(429).send({
+        message: "同一 IP 5 分钟内只能呼叫一次管理员，请稍后再试。",
+      });
+    }
+
+    const settings = await readAuthSettings();
+    if (!isSmtpConfigured(settings)) {
+      return reply.status(503).send({
+        message: "邮件服务尚未配置，请稍后再试。",
+      });
+    }
+
+    try {
+      await sendEmergencyAdminCallEmail(settings, {
+        to: emergencyAdminEmail,
+        ip,
+        calledAt: new Date(),
+        message: body.message,
+      });
+    } catch (error) {
+      app.log.error({ error, ip }, "Failed to send emergency admin call email");
+      return reply.status(502).send({
+        message: "呼叫邮件发送失败，请稍后再试。",
+      });
+    }
+
+    return {
+      ok: true,
+      message: "已呼叫管理员，请等待处理。",
+    };
+  });
 
   app.get("/public/charity-status/events", async (request, reply) => {
     reply.raw.writeHead(200, {
@@ -171,6 +223,58 @@ export async function publicRoutes(app: FastifyInstance) {
       }
     }, 15000);
   });
+}
+
+async function reserveEmergencyAdminCallSlot(
+  app: FastifyInstance,
+  ip: string,
+) {
+  const key = `public:emergency-admin-call:${ip}`;
+
+  try {
+    const result = await app.redis.set(
+      key,
+      String(Date.now()),
+      "EX",
+      emergencyAdminCallCooldownSeconds,
+      "NX",
+    );
+    return result === "OK";
+  } catch (error) {
+    app.log.warn(
+      { error, ip },
+      "Redis unavailable for emergency admin call rate limit; using memory fallback",
+    );
+  }
+
+  const now = Date.now();
+  const blockedUntil = emergencyAdminFallbackLimits.get(ip) ?? 0;
+  if (blockedUntil > now) {
+    return false;
+  }
+
+  emergencyAdminFallbackLimits.set(
+    ip,
+    now + emergencyAdminCallCooldownSeconds * 1000,
+  );
+  cleanupEmergencyAdminFallbackLimits(now);
+  return true;
+}
+
+function cleanupEmergencyAdminFallbackLimits(now: number) {
+  if (emergencyAdminFallbackLimits.size < 1000) {
+    return;
+  }
+
+  for (const [ip, blockedUntil] of emergencyAdminFallbackLimits) {
+    if (blockedUntil <= now) {
+      emergencyAdminFallbackLimits.delete(ip);
+    }
+  }
+}
+
+function normalizeClientIp(ip: string) {
+  return ip.replace(/^::ffff:/, "");
 }
 
 async function getCharityDashboard() {

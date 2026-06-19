@@ -135,41 +135,79 @@ export interface UnifiedPriceBatchInput {
 }
 
 export async function getUpstreamProviders() {
-  const response = await http.get<{ providers: UpstreamProvider[] }>("/admin/upstream-providers");
+  const response = await http.get<{ providers: UpstreamProvider[] }>(
+    "/admin/upstream-providers",
+  );
 
   return response.data.providers;
 }
 
-export async function createUpstreamProvider(input: UpstreamProviderInput & { apiKey: string }) {
-  const response = await http.post<{ provider: UpstreamProvider }>("/admin/upstream-providers", input);
+export async function createUpstreamProvider(
+  input: UpstreamProviderInput & { apiKey: string },
+) {
+  const response = await http.post<{ provider: UpstreamProvider }>(
+    "/admin/upstream-providers",
+    input,
+  );
 
   return response.data.provider;
 }
 
-export async function updateUpstreamProvider(id: string, input: UpstreamProviderInput) {
-  const response = await http.patch<{ provider: UpstreamProvider }>(`/admin/upstream-providers/${id}`, input);
+export async function updateUpstreamProvider(
+  id: string,
+  input: UpstreamProviderInput,
+) {
+  const response = await http.patch<{ provider: UpstreamProvider }>(
+    `/admin/upstream-providers/${id}`,
+    input,
+  );
 
   return response.data.provider;
 }
 
 export async function deleteUpstreamProvider(id: string) {
-  const response = await http.delete<{ ok: true; provider: UpstreamProvider }>(`/admin/upstream-providers/${id}`);
+  const response = await http.delete<{ ok: true; provider: UpstreamProvider }>(
+    `/admin/upstream-providers/${id}`,
+  );
 
   return response.data;
 }
 
-export async function createUpstreamProviderKey(providerId: string, input: UpstreamProviderKeyInput & { key: string }) {
-  const response = await http.post<{ key: UpstreamProviderKey }>(`/admin/upstream-providers/${providerId}/keys`, input);
+export async function createUpstreamProviderKey(
+  providerId: string,
+  input: UpstreamProviderKeyInput & { key: string },
+) {
+  const response = await http.post<{ key: UpstreamProviderKey }>(
+    `/admin/upstream-providers/${providerId}/keys`,
+    input,
+  );
   return response.data.key;
 }
 
-export async function updateUpstreamProviderKey(id: string, input: Partial<UpstreamProviderKeyInput>) {
-  const response = await http.patch<{ key: UpstreamProviderKey }>(`/admin/upstream-provider-keys/${id}`, input);
+export async function updateUpstreamProviderKey(
+  id: string,
+  input: Partial<UpstreamProviderKeyInput>,
+) {
+  const response = await http.patch<{ key: UpstreamProviderKey }>(
+    `/admin/upstream-provider-keys/${id}`,
+    input,
+  );
   return response.data.key;
 }
 
 export async function deleteUpstreamProviderKey(id: string) {
-  const response = await http.delete<{ ok: true; key: UpstreamProviderKey }>(`/admin/upstream-provider-keys/${id}`);
+  const response = await http.delete<{ ok: true; key: UpstreamProviderKey }>(
+    `/admin/upstream-provider-keys/${id}`,
+  );
+  return response.data;
+}
+
+export async function deleteUpstreamProviderKeys(ids: string[]) {
+  const response = await http.delete<{
+    ok: true;
+    count: number;
+    keys: UpstreamProviderKey[];
+  }>("/admin/upstream-provider-keys", { data: { ids } });
   return response.data;
 }
 
@@ -183,13 +221,22 @@ export async function getModelPrices() {
 }
 
 export async function createModelPrice(input: ModelPriceInput) {
-  const response = await http.post<{ modelPrice: ModelPrice }>("/admin/model-prices", input);
+  const response = await http.post<{ modelPrice: ModelPrice }>(
+    "/admin/model-prices",
+    input,
+  );
 
   return response.data.modelPrice;
 }
 
-export async function updateModelPrice(id: string, input: Partial<ModelPriceInput>) {
-  const response = await http.put<{ modelPrice: ModelPrice }>(`/admin/model-prices/${id}`, input);
+export async function updateModelPrice(
+  id: string,
+  input: Partial<ModelPriceInput>,
+) {
+  const response = await http.put<{ modelPrice: ModelPrice }>(
+    `/admin/model-prices/${id}`,
+    input,
+  );
 
   return response.data.modelPrice;
 }

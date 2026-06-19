@@ -128,6 +128,7 @@ model User {
   allowedModels               String[]   @default([])
   rateLimitPerMinute          Int        @default(0)
   concurrencyLimit            Int        @default(0)
+  displayGroup                String     @default("普通用户组")
   charityEnabled              Boolean    @default(false)
   charityDisplayName          String?
   charityKey                  String?
@@ -153,6 +154,7 @@ model User {
 
   @@index([tierId])
   @@index([status])
+  @@index([displayGroup])
 }
 
 model SubscriptionPlan {

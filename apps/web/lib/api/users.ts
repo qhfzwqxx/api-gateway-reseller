@@ -91,6 +91,7 @@ export interface AdminUser {
   allowedModels: string[];
   rateLimitPerMinute: number;
   concurrencyLimit: number;
+  displayGroup: string;
   tierId: string | null;
   tier: AdminUserTier | null;
   charityEnabled: boolean;
@@ -132,6 +133,7 @@ export interface UpsertAdminUserInput {
   status: UserStatus;
   rateLimitPerMinute: number;
   concurrencyLimit: number;
+  displayGroup?: string;
   tierId?: string | null;
   initialBalance?: string;
   allowedModels?: string[];

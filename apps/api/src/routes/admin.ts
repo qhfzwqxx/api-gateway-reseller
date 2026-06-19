@@ -1713,10 +1713,7 @@ export async function adminRoutes(app: FastifyInstance) {
           include: subscriptionPlanInclude,
         });
 
-        if (
-          body.durationDays !== undefined ||
-          body.tierId !== undefined
-        ) {
+        if (body.durationDays !== undefined || body.tierId !== undefined) {
           await syncSubscriptionsForPlanUpdate(tx, {
             planId: updated.id,
             previousDurationDays: existing.durationDays,
@@ -2306,7 +2303,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const users = await prisma.user.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: 100,
+      take: 500,
       select: {
         id: true,
         email: true,
@@ -2316,6 +2313,7 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedModels: true,
         rateLimitPerMinute: true,
         concurrencyLimit: true,
+        displayGroup: true,
         tierId: true,
         tier: {
           select: {
@@ -2442,23 +2440,27 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!normalizedIp) {
         return;
       }
-      const current =
-        ipMap.get(normalizedIp) ??
-        {
-          ip: normalizedIp,
-          loginSuccessCount: 0,
-          loginFailureCount: 0,
-          apiRequestCount: 0,
-          firstSeenAt: null,
-          lastSeenAt: null,
-        };
+      const current = ipMap.get(normalizedIp) ?? {
+        ip: normalizedIp,
+        loginSuccessCount: 0,
+        loginFailureCount: 0,
+        apiRequestCount: 0,
+        firstSeenAt: null,
+        lastSeenAt: null,
+      };
       current.loginSuccessCount += counts.loginSuccessCount ?? 0;
       current.loginFailureCount += counts.loginFailureCount ?? 0;
       current.apiRequestCount += counts.apiRequestCount ?? 0;
-      if (firstSeenAt && (!current.firstSeenAt || firstSeenAt < current.firstSeenAt)) {
+      if (
+        firstSeenAt &&
+        (!current.firstSeenAt || firstSeenAt < current.firstSeenAt)
+      ) {
         current.firstSeenAt = firstSeenAt;
       }
-      if (lastSeenAt && (!current.lastSeenAt || lastSeenAt > current.lastSeenAt)) {
+      if (
+        lastSeenAt &&
+        (!current.lastSeenAt || lastSeenAt > current.lastSeenAt)
+      ) {
         current.lastSeenAt = lastSeenAt;
       }
       ipMap.set(normalizedIp, current);
@@ -2632,6 +2634,7 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedModels: z.array(z.string()).optional(),
         rateLimitPerMinute: userRuntimeLimitSchema.optional(),
         concurrencyLimit: userRuntimeLimitSchema.optional(),
+        displayGroup: z.string().trim().min(1).max(32).optional(),
         tierId: optionalTierIdSchema,
         charityEnabled: z.boolean().optional(),
         charityDisplayName: z.string().max(80).nullable().optional(),
@@ -2656,6 +2659,9 @@ export async function adminRoutes(app: FastifyInstance) {
         : {}),
       ...(body.concurrencyLimit !== undefined
         ? { concurrencyLimit: body.concurrencyLimit }
+        : {}),
+      ...(body.displayGroup !== undefined
+        ? { displayGroup: body.displayGroup }
         : {}),
       ...(body.tierId !== undefined ? { tierId: body.tierId } : {}),
       ...(body.charityEnabled !== undefined
@@ -2687,6 +2693,7 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedModels: true,
         rateLimitPerMinute: true,
         concurrencyLimit: true,
+        displayGroup: true,
         tierId: true,
         tier: {
           select: {
@@ -2777,6 +2784,7 @@ export async function adminRoutes(app: FastifyInstance) {
         allowedModels: z.array(z.string()).default([]),
         rateLimitPerMinute: userRuntimeLimitSchema.default(0),
         concurrencyLimit: userRuntimeLimitSchema.default(0),
+        displayGroup: z.string().trim().min(1).max(32).default("普通用户组"),
         tierId: optionalTierIdSchema,
         charityEnabled: z.boolean().default(false),
         charityDisplayName: z.string().max(80).nullable().optional(),
@@ -2799,6 +2807,7 @@ export async function adminRoutes(app: FastifyInstance) {
             allowedModels: body.allowedModels,
             rateLimitPerMinute: body.rateLimitPerMinute,
             concurrencyLimit: body.concurrencyLimit,
+            displayGroup: body.displayGroup,
             tierId: body.tierId ?? standardTier.id,
             charityEnabled: body.charityEnabled,
             charityDisplayName: normalizeNullableText(body.charityDisplayName),
@@ -5425,6 +5434,34 @@ export async function adminRoutes(app: FastifyInstance) {
     return { key: maskProviderPoolKey(key) };
   });
 
+  app.delete("/admin/upstream-provider-keys", async (request, reply) => {
+    const body = z
+      .object({
+        ids: z.array(z.string().min(1)).min(1).max(500),
+      })
+      .parse(request.body);
+    const ids = Array.from(new Set(body.ids));
+    const keys = await prisma.upstreamProviderKey.findMany({
+      where: { id: { in: ids } },
+    });
+
+    if (keys.length !== ids.length) {
+      return reply
+        .status(404)
+        .send({ message: "Some upstream keys were not found" });
+    }
+
+    await prisma.upstreamProviderKey.deleteMany({
+      where: { id: { in: ids } },
+    });
+
+    return {
+      ok: true,
+      count: keys.length,
+      keys: keys.map(maskProviderPoolKey),
+    };
+  });
+
   app.delete("/admin/upstream-provider-keys/:id", async (request, reply) => {
     const params = z.object({ id: z.string() }).parse(request.params);
     const key = await prisma.upstreamProviderKey.findUnique({
@@ -6046,7 +6083,9 @@ function buildModelPriceUpdateData(body: ModelPriceBody) {
     ...(body.upstreamEndpoint !== undefined
       ? { upstreamEndpoint: body.upstreamEndpoint }
       : {}),
-    ...(body.pricingMode !== undefined ? { pricingMode: body.pricingMode } : {}),
+    ...(body.pricingMode !== undefined
+      ? { pricingMode: body.pricingMode }
+      : {}),
     ...(body.currency !== undefined ? { currency: body.currency } : {}),
     ...(body.upstreamInputPer1MTok !== undefined
       ? { upstreamInputPer1MTok: String(body.upstreamInputPer1MTok) }

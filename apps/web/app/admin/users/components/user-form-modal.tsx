@@ -15,6 +15,7 @@ const userFormSchema = z.object({
   status: z.enum(["ACTIVE", "DISABLED", "SUSPENDED", "TRIAL", "RISK_REVIEW"]),
   rateLimitPerMinute: z.coerce.number().int("必须是整数").min(0, "不能小于 0"),
   concurrencyLimit: z.coerce.number().int("必须是整数").min(0, "不能小于 0"),
+  displayGroup: z.string().trim().min(1, "请填写用户分组").max(32, "不能超过 32 个字符"),
   tierId: z.string().trim().optional(),
   initialBalance: z.string().trim().optional(),
   allowedModelsText: z.string().trim().optional(),
@@ -66,6 +67,7 @@ export function UserFormModal({ open, user, loading = false, tiers = [], onClose
       status: values.status,
       rateLimitPerMinute: values.rateLimitPerMinute,
       concurrencyLimit: values.concurrencyLimit,
+      displayGroup: values.displayGroup,
       tierId: values.tierId || null,
       initialBalance: !isEdit && values.initialBalance ? values.initialBalance : undefined,
       allowedModels: splitModelList(values.allowedModelsText),
@@ -129,6 +131,14 @@ export function UserFormModal({ open, user, loading = false, tiers = [], onClose
                 <input type="number" min={0} className={inputClass} {...register("concurrencyLimit")} />
               </Field>
             </div>
+
+            <Field
+              label="用户分组"
+              error={errors.displayGroup?.message}
+              hint="仅用于用户管理页面展示和批量管理，不参与访问等级、路由或计费。"
+            >
+              <input className={inputClass} placeholder="普通用户组" {...register("displayGroup")} />
+            </Field>
 
             <Field
               label="访问等级"
@@ -223,6 +233,7 @@ function getDefaultValues(user?: AdminUser | null): UserFormValues {
     status: user?.status ?? "ACTIVE",
     rateLimitPerMinute: user?.rateLimitPerMinute ?? 0,
     concurrencyLimit: user?.concurrencyLimit ?? 0,
+    displayGroup: user?.displayGroup ?? defaultDisplayGroup(user),
     tierId: user?.tierId ?? "",
     initialBalance: "",
     allowedModelsText: (user?.allowedModels ?? []).join("\n"),
@@ -232,6 +243,15 @@ function getDefaultValues(user?: AdminUser | null): UserFormValues {
     charityIpRateLimitEnabled: user?.charityIpRateLimitEnabled ?? false,
     charityIpRateLimitPerMinute: user?.charityIpRateLimitPerMinute ?? 0,
   };
+}
+
+function defaultDisplayGroup(user?: AdminUser | null) {
+  if (!user) return "普通用户组";
+  if (user.role === "ADMIN") return "管理员组";
+  if (user.charityEnabled) return "公益组";
+  if (user.status === "RISK_REVIEW") return "风控组";
+  if (user.status === "DISABLED" || user.status === "SUSPENDED") return "受限组";
+  return "普通用户组";
 }
 
 function splitModelList(value?: string) {

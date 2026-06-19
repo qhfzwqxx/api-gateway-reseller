@@ -11,6 +11,7 @@ import {
   Network,
   Plus,
   Save,
+  Search,
   Trash2,
   Wallet,
 } from "lucide-react";
@@ -64,6 +65,7 @@ type ConfirmAction =
 
 const userGroupStorageKey = "admin-users-display-groups";
 const userGroupOverrideStorageKey = "admin-users-display-group-overrides";
+const userGroupMigrationStorageKey = "admin-users-display-groups-migrated";
 
 export default function AdminUsersPage() {
   const queryClient = useQueryClient();
@@ -80,6 +82,7 @@ export default function AdminUsersPage() {
   const [ipRulesOpen, setIpRulesOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [notice, setNotice] = useState<string>("");
+  const [userSearch, setUserSearch] = useState("");
   const [customGroups, setCustomGroups] = useState<string[]>([]);
   const [userGroupOverrides, setUserGroupOverrides] = useState<
     Record<string, string>
@@ -99,6 +102,8 @@ export default function AdminUsersPage() {
     queryFn: getAccessTiers,
     staleTime: 60_000,
   });
+  const users = usersQuery.data ?? [];
+  const tiers = tiersQuery.data ?? [];
 
   const createMutation = useMutation({
     mutationFn: createAdminUser,
@@ -243,20 +248,65 @@ export default function AdminUsersPage() {
   }, []);
 
   useEffect(() => {
-    if (!groupsLoaded) return;
-    window.localStorage.setItem(
-      userGroupStorageKey,
-      JSON.stringify(customGroups),
-    );
-  }, [customGroups, groupsLoaded]);
+    if (!groupsLoaded || usersQuery.isLoading || usersQuery.isError) {
+      return;
+    }
+    if (window.localStorage.getItem(userGroupMigrationStorageKey) === "true") {
+      return;
+    }
 
-  useEffect(() => {
-    if (!groupsLoaded) return;
-    window.localStorage.setItem(
-      userGroupOverrideStorageKey,
-      JSON.stringify(userGroupOverrides),
-    );
-  }, [groupsLoaded, userGroupOverrides]);
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    const updates = Object.entries(userGroupOverrides)
+      .map(([userId, groupName]) => {
+        const user = usersById.get(userId);
+        const displayGroup = normalizeGroupName(groupName);
+        return user && displayGroup && displayGroup !== user.displayGroup
+          ? { user, displayGroup }
+          : null;
+      })
+      .filter(Boolean) as Array<{ user: AdminUser; displayGroup: string }>;
+
+    if (updates.length === 0) {
+      window.localStorage.setItem(userGroupMigrationStorageKey, "true");
+      return;
+    }
+
+    void Promise.all(
+      updates.map(({ user, displayGroup }) =>
+        updateAdminUser(user.id, {
+          email: user.email,
+          role: user.role,
+          status: user.status,
+          rateLimitPerMinute: user.rateLimitPerMinute,
+          concurrencyLimit: user.concurrencyLimit,
+          displayGroup,
+          tierId: user.tierId,
+          allowedModels: user.allowedModels,
+          charityEnabled: user.charityEnabled,
+          charityDisplayName: user.charityDisplayName,
+          charityKey: user.charityKey,
+          charityIpRateLimitEnabled: user.charityIpRateLimitEnabled,
+          charityIpRateLimitPerMinute: user.charityIpRateLimitPerMinute,
+        }),
+      ),
+    )
+      .then(() => {
+        window.localStorage.setItem(userGroupMigrationStorageKey, "true");
+        setUserGroupOverrides({});
+        setNotice(`已迁移 ${updates.length} 个本地用户分组到数据库`);
+        void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      })
+      .catch((error) => {
+        setNotice(`用户分组迁移失败：${errorToText(error)}`);
+      });
+  }, [
+    groupsLoaded,
+    queryClient,
+    userGroupOverrides,
+    users,
+    usersQuery.isError,
+    usersQuery.isLoading,
+  ]);
 
   function handleCreateGroup() {
     const name = window.prompt("请输入新分组名称");
@@ -270,11 +320,28 @@ export default function AdminUsersPage() {
     setExpandedGroups((current) => ({ ...current, [normalizedName]: false }));
   }
 
-  function handleAssignUserGroup(userId: string, groupName: string) {
-    setUserGroupOverrides((current) => {
-      const next = { ...current };
-      next[userId] = groupName;
-      return next;
+  async function handleAssignUserGroup(user: AdminUser, groupName: string) {
+    const displayGroup = normalizeGroupName(groupName);
+    if (!displayGroup || displayGroup === user.displayGroup) {
+      return;
+    }
+    await updateMutation.mutateAsync({
+      id: user.id,
+      values: {
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        rateLimitPerMinute: user.rateLimitPerMinute,
+        concurrencyLimit: user.concurrencyLimit,
+        displayGroup,
+        tierId: user.tierId,
+        allowedModels: user.allowedModels,
+        charityEnabled: user.charityEnabled,
+        charityDisplayName: user.charityDisplayName,
+        charityKey: user.charityKey,
+        charityIpRateLimitEnabled: user.charityIpRateLimitEnabled,
+        charityIpRateLimitPerMinute: user.charityIpRateLimitPerMinute,
+      },
     });
   }
 
@@ -285,14 +352,13 @@ export default function AdminUsersPage() {
     }));
   }
 
-  const users = usersQuery.data ?? [];
-  const tiers = tiersQuery.data ?? [];
   const keyModalUser = keyUser
     ? (users.find((user) => user.id === keyUser.id) ?? keyUser)
     : null;
   const confirmLoading = logoutMutation.isPending || deleteMutation.isPending;
+  const filteredUsers = filterUsers(users, userSearch, userGroupOverrides);
   const groupedUsers = groupUsersForDisplay(
-    users,
+    filteredUsers,
     customGroups,
     userGroupOverrides,
   );
@@ -347,9 +413,28 @@ export default function AdminUsersPage() {
       ) : null}
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <h3 className="text-base font-semibold text-slate-950">用户列表</h3>
-          <span className="text-sm text-slate-500">共 {users.length} 条</span>
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-3">
+            <h3 className="text-base font-semibold text-slate-950">用户列表</h3>
+            <span className="text-sm text-slate-500">
+              {userSearch.trim()
+                ? `显示 ${filteredUsers.length} / 共 ${users.length} 条`
+                : `共 ${users.length} 条`}
+            </span>
+          </div>
+          <label className="relative w-full lg:max-w-md">
+            <span className="sr-only">搜索用户</span>
+            <Search
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              aria-hidden="true"
+            />
+            <input
+              value={userSearch}
+              onChange={(event) => setUserSearch(event.target.value)}
+              className="h-10 w-full rounded-md border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-950 outline-none transition-colors placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              placeholder="搜索邮箱、ID、分组、角色、状态、等级"
+            />
+          </label>
         </div>
 
         {usersQuery.isLoading ? (
@@ -444,7 +529,7 @@ export default function AdminUsersPage() {
                                   )}
                                   onChange={(event) =>
                                     handleAssignUserGroup(
-                                      user.id,
+                                      user,
                                       event.target.value,
                                     )
                                   }
@@ -2009,11 +2094,11 @@ function userGroupInfo(user: AdminUser): {
   if (user.status === "DISABLED" || user.status === "SUSPENDED") {
     return { label: "受限组", tone: "red" };
   }
-  return { label: "普通组", tone: "slate" };
+  return { label: "普通用户组", tone: "slate" };
 }
 
 function defaultGroupName(user: AdminUser) {
-  return userGroupInfo(user).label;
+  return user.displayGroup || userGroupInfo(user).label;
 }
 
 function normalizeGroupName(value: string | null) {
@@ -2029,7 +2114,7 @@ function groupUsersForDisplay(
   customGroups: string[],
   overrides: Record<string, string>,
 ) {
-  const baseGroupNames = ["管理员组", "公益组", "风控组", "受限组", "普通组"];
+  const baseGroupNames = ["管理员组", "公益组", "风控组", "受限组", "普通用户组"];
   const orderedNames = Array.from(
     new Set([...customGroups, ...baseGroupNames]),
   );
@@ -2048,6 +2133,41 @@ function groupUsersForDisplay(
         customGroups.includes(groupName) || groupUsers.length > 0,
     )
     .map(([name, groupUsers]) => ({ name, users: groupUsers }));
+}
+
+function filterUsers(
+  users: AdminUser[],
+  search: string,
+  overrides: Record<string, string>,
+) {
+  const keyword = search.trim().toLowerCase();
+  if (!keyword) {
+    return users;
+  }
+
+  return users.filter((user) =>
+    userSearchText(user, overrides).includes(keyword),
+  );
+}
+
+function userSearchText(user: AdminUser, overrides: Record<string, string>) {
+  return [
+    user.id,
+    user.email,
+    user.role,
+    user.status,
+    user.statusReason,
+    displayGroupName(user, overrides),
+    user.tier?.name,
+    user.tier?.code,
+    user.wallet?.balance,
+    user.charityDisplayName,
+    user.apiKeys?.map((apiKey) => `${apiKey.name} ${apiKey.keyPrefix}`).join(" "),
+    user.allowedModels.join(" "),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 function readStringList(key: string) {
