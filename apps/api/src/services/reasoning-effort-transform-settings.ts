@@ -1,6 +1,6 @@
 import { prisma } from "@gateway/db";
 
-export const reasoningEffortValues = ["low", "medium", "high", "xhigh"] as const;
+export const reasoningEffortValues = ["none", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffortValue = (typeof reasoningEffortValues)[number];
 
 export type ReasoningEffortTransformRule = {
@@ -11,10 +11,18 @@ export type ReasoningEffortTransformRule = {
 
 export type ReasoningEffortTransformSettings = {
   rules: ReasoningEffortTransformRule[];
+  gpt56Force: {
+    enabled: boolean;
+    effort: ReasoningEffortValue;
+  };
 };
 
 export const defaultReasoningEffortTransformSettings: ReasoningEffortTransformSettings = {
   rules: [],
+  gpt56Force: {
+    enabled: false,
+    effort: "medium",
+  },
 };
 
 const reasoningEffortTransformSettingsKey = "reasoning_effort_transform_settings";
@@ -57,13 +65,27 @@ export async function saveReasoningEffortTransformSettings(input: Partial<Reason
   return settings;
 }
 
-export async function applyReasoningEffortTransform<T extends Record<string, unknown>>(body: T): Promise<T> {
+export async function applyReasoningEffortTransform<T extends Record<string, unknown>>(
+  body: T,
+  context?: { endpoint?: string },
+): Promise<T> {
   const settings = await readReasoningEffortTransformSettings();
-  if (settings.rules.length === 0) {
-    return body;
+  const transformedBody = settings.rules.length > 0
+    ? transformReasoningEffort(body, settings.rules)
+    : body;
+
+  if (
+    settings.gpt56Force.enabled &&
+    context?.endpoint === "/v1/responses" &&
+    isGpt56Model(transformedBody.model)
+  ) {
+    return forceResponsesReasoningEffort(
+      transformedBody,
+      settings.gpt56Force.effort,
+    );
   }
 
-  return transformReasoningEffort(body, settings.rules);
+  return transformedBody;
 }
 
 export function getReasoningEffortFromBody(body: unknown) {
@@ -71,32 +93,59 @@ export function getReasoningEffortFromBody(body: unknown) {
     return null;
   }
 
-  const record = body as Record<string, unknown>;
-  const reasoningEffort = normalizeReasoningEffortText(record.reasoning_effort);
-  if (reasoningEffort) {
-    return reasoningEffort;
-  }
+  const visited = new Set<object>();
+  const visit = (value: unknown): string | null => {
+    if (!value || typeof value !== "object" || visited.has(value)) {
+      return null;
+    }
+    visited.add(value);
 
-  const modelReasoningEffort = normalizeReasoningEffortText(record.model_reasoning_effort);
-  if (modelReasoningEffort) {
-    return modelReasoningEffort;
-  }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const effort = visit(item);
+        if (effort) return effort;
+      }
+      return null;
+    }
 
-  const reasoning = record.reasoning;
-  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
-    const nested = reasoning as Record<string, unknown>;
-    return normalizeReasoningEffortText(nested.effort);
-  }
+    const record = value as Record<string, unknown>;
+    for (const key of ["reasoning_effort", "model_reasoning_effort"]) {
+      const effort = normalizeReasoningEffortText(record[key]);
+      if (effort) return effort;
+    }
 
-  return null;
+    const directEffort = normalizeReasoningEffortText(record.effort);
+    if (directEffort) return directEffort;
+
+    for (const [key, child] of Object.entries(record)) {
+      if (key === "reasoning" || key === "input" || key === "items") {
+        const effort = visit(child);
+        if (effort) return effort;
+      }
+    }
+
+    return null;
+  };
+
+  return visit(body);
 }
 
 export function normalizeReasoningEffortTransformSettings(input: {
   rules?: Array<Partial<ReasoningEffortTransformRule>>;
+  gpt56Force?: {
+    enabled?: boolean;
+    effort?: ReasoningEffortValue;
+  };
 }) {
   const rules = Array.isArray(input.rules) ? input.rules : [];
   return {
     rules: normalizeRules(rules),
+    gpt56Force: {
+      enabled: input.gpt56Force?.enabled === true,
+      effort:
+        normalizeReasoningEffortValue(input.gpt56Force?.effort) ??
+        defaultReasoningEffortTransformSettings.gpt56Force.effort,
+    },
   };
 }
 
@@ -169,6 +218,32 @@ function transformReasoningEffort<T extends Record<string, unknown>>(
   }
 
   return changed ? (next as T) : body;
+}
+
+function forceResponsesReasoningEffort<T extends Record<string, unknown>>(
+  body: T,
+  effort: ReasoningEffortValue,
+) {
+  const reasoning =
+    body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
+      ? (body.reasoning as Record<string, unknown>)
+      : {};
+
+  return {
+    ...body,
+    reasoning: {
+      ...reasoning,
+      effort,
+    },
+  } as T;
+}
+
+function isGpt56Model(value: unknown) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  return /(^|\/)gpt-5\.6(?:$|[-.])/.test(value.trim().toLowerCase());
 }
 
 function matchesReasoningEffort(value: unknown, expected: ReasoningEffortValue) {

@@ -33,7 +33,16 @@ import {
   savePendingAutoTerminateSettings,
 } from "../services/pending-auto-terminate-settings.js";
 import {
+  cleanupExpiredRequestBodies,
+  defaultRequestBodyRetentionSettings,
+  maxRequestBodyRetentionDays,
+  minRequestBodyRetentionDays,
+  readRequestBodyRetentionSettings,
+  saveRequestBodyRetentionSettings,
+} from "../services/request-body-retention-settings.js";
+import {
   reasoningEffortValues,
+  getReasoningEffortFromBody,
   readReasoningEffortTransformSettings,
   saveReasoningEffortTransformSettings,
   validateReasoningEffortTransformRules,
@@ -113,6 +122,17 @@ import {
   saveGlobalCircuitBreakerSettings,
 } from "../services/global-circuit-breaker-settings.js";
 import {
+  defaultBannedUserNoticeSettings,
+  readBannedUserNoticeSettings,
+  saveBannedUserNoticeSettings,
+} from "../services/banned-user-notice-settings.js";
+import {
+  defaultWhitelistFilterSettings,
+  readWhitelistFilterSettings,
+  rotateWhitelistFilterSecret,
+  saveWhitelistFilterSettings,
+} from "../services/whitelist-filter-settings.js";
+import {
   checkImageProxyService,
   defaultImageProxySettings,
   normalizeImageProxySettings,
@@ -187,6 +207,7 @@ const userStatusSchema = z.enum([
   "SUSPENDED",
   "TRIAL",
   "RISK_REVIEW",
+  "BANNED",
 ]);
 const moneyLimitSchema = z
   .union([z.string(), z.number(), z.null()])
@@ -365,6 +386,18 @@ const reasoningEffortTransformRuleSchema = z.object({
 });
 const reasoningEffortTransformRulesSchema = z.object({
   rules: z.array(reasoningEffortTransformRuleSchema).min(0).max(20),
+  gpt56Force: z.object({
+    enabled: z.boolean(),
+    effort: z.enum(reasoningEffortValues),
+  }).optional(),
+});
+const requestBodyRetentionSettingsSchema = z.object({
+  enabled: z.boolean(),
+  retentionDays: z
+    .number()
+    .int()
+    .min(minRequestBodyRetentionDays)
+    .max(maxRequestBodyRetentionDays),
 });
 const adminCreateApiKeySchema = z.object({
   name: z.string().min(1).max(80),
@@ -473,6 +506,18 @@ const globalCircuitBreakerSettingsSchema = z
     message: z.string().trim().min(1).max(1000),
   })
   .partial();
+const whitelistFilterSettingsSchema = z
+  .object({
+    enabled: z.boolean(),
+    noticeText: z.string().trim().min(1).max(8000),
+    applyToAdmins: z.boolean(),
+  })
+  .partial();
+const bannedUserNoticeSettingsSchema = z
+  .object({
+    noticeText: z.string().trim().min(1).max(8000),
+  })
+  .partial();
 const externalAlertSettingsSchema = z
   .object({
     enabled: z.boolean(),
@@ -530,6 +575,7 @@ const adminRequestsQuerySchema = z.object({
   maxFirstTokenLatencyMs: z.string().optional(),
   cursor: z.string().optional(),
   take: z.coerce.number().int().min(1).max(300).default(120),
+  summaryMode: z.enum(["full", "page"]).default("full"),
 });
 type AdminRequestsQuery = z.infer<typeof adminRequestsQuerySchema>;
 const adminAuditLogsQuerySchema = z.object({
@@ -711,41 +757,6 @@ function ordinaryErrorResultFilter(): Prisma.ApiRequestWhereInput {
   };
 }
 
-function getRequestReasoningEffortFromBody(body: unknown) {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return null;
-  }
-
-  const record = body as Record<string, unknown>;
-  const reasoningEffort =
-    typeof record.reasoning_effort === "string"
-      ? record.reasoning_effort.trim()
-      : "";
-  if (reasoningEffort) {
-    return reasoningEffort;
-  }
-
-  const modelReasoningEffort =
-    typeof record.model_reasoning_effort === "string"
-      ? record.model_reasoning_effort.trim()
-      : "";
-  if (modelReasoningEffort) {
-    return modelReasoningEffort;
-  }
-
-  const reasoning = record.reasoning;
-  if (reasoning && typeof reasoning === "object" && !Array.isArray(reasoning)) {
-    const nested = reasoning as Record<string, unknown>;
-    const nestedEffort =
-      typeof nested.effort === "string" ? nested.effort.trim() : "";
-    if (nestedEffort) {
-      return nestedEffort;
-    }
-  }
-
-  return null;
-}
-
 async function findGrossProfitRequestIds(range: FiniteRange) {
   const minClause =
     range.min !== undefined
@@ -835,42 +846,41 @@ async function buildAdminRequestsWhere(query: AdminRequestsQuery) {
     });
   }
 
-  if (q) {
+  if (q.length >= 2) {
+    const matchingUserIds = await findAdminRequestSearchUserIds(q);
+    const searchFilters: Prisma.ApiRequestWhereInput[] = [
+      {
+        traceCode: {
+          contains: q,
+          mode: "insensitive",
+        },
+      },
+      {
+        model: {
+          contains: q,
+          mode: "insensitive",
+        },
+      },
+      {
+        endpoint: {
+          contains: q,
+          mode: "insensitive",
+        },
+      },
+      {
+        clientIp: {
+          contains: q,
+          mode: "insensitive",
+        },
+      },
+    ];
+
+    if (matchingUserIds.length > 0) {
+      searchFilters.push({ userId: { in: matchingUserIds } });
+    }
+
     andFilters.push({
-      OR: [
-        {
-          traceCode: {
-            contains: q,
-            mode: "insensitive",
-          },
-        },
-        {
-          model: {
-            contains: q,
-            mode: "insensitive",
-          },
-        },
-        {
-          endpoint: {
-            contains: q,
-            mode: "insensitive",
-          },
-        },
-        {
-          clientIp: {
-            contains: q,
-            mode: "insensitive",
-          },
-        },
-        {
-          user: {
-            email: {
-              contains: q,
-              mode: "insensitive",
-            },
-          },
-        },
-      ],
+      OR: searchFilters,
     });
   }
 
@@ -978,6 +988,96 @@ async function buildAdminRequestsWhere(query: AdminRequestsQuery) {
   }
 
   return andFilters.length > 0 ? { AND: andFilters } : undefined;
+}
+
+async function findAdminRequestSearchUserIds(q: string) {
+  const users = await prisma.user.findMany({
+    where: {
+      email: {
+        contains: q,
+        mode: "insensitive",
+      },
+    },
+    select: { id: true },
+  });
+
+  return users.map((user) => user.id);
+}
+
+function summarizeAdminRequestPage(
+  rows: Array<{
+    status: "PENDING" | "SUCCESS" | "FAILED";
+    inputTokens: number;
+    cachedInputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    chargedAmountUsd: Decimal;
+    upstreamCostUsd: Decimal;
+    latencyMs: number | null;
+    upstreamFirstChunkLatencyMs: number | null;
+  }>,
+) {
+  const totals = rows.reduce(
+    (acc, row) => {
+      acc.inputTokens += row.inputTokens;
+      acc.cachedInputTokens += row.cachedInputTokens;
+      acc.outputTokens += row.outputTokens;
+      acc.totalTokens += row.totalTokens;
+      acc.chargedAmountUsd = acc.chargedAmountUsd.plus(row.chargedAmountUsd);
+      acc.upstreamCostUsd = acc.upstreamCostUsd.plus(row.upstreamCostUsd);
+      if (row.status === "PENDING") acc.pendingCount += 1;
+      if (row.status === "SUCCESS") acc.successCount += 1;
+      if (row.status === "FAILED") acc.failedCount += 1;
+      if (row.latencyMs !== null) {
+        acc.latencyTotal += row.latencyMs;
+        acc.latencyCount += 1;
+      }
+      if (row.upstreamFirstChunkLatencyMs !== null) {
+        acc.firstTokenLatencyTotal += row.upstreamFirstChunkLatencyMs;
+        acc.firstTokenLatencyCount += 1;
+      }
+      return acc;
+    },
+    {
+      pendingCount: 0,
+      successCount: 0,
+      failedCount: 0,
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      chargedAmountUsd: new Decimal(0),
+      upstreamCostUsd: new Decimal(0),
+      latencyTotal: 0,
+      latencyCount: 0,
+      firstTokenLatencyTotal: 0,
+      firstTokenLatencyCount: 0,
+    },
+  );
+  const totalCount = rows.length;
+
+  return {
+    totalCount,
+    successCount: totals.successCount,
+    failedCount: totals.failedCount,
+    pendingCount: totals.pendingCount,
+    failureRate: totalCount > 0 ? (totals.failedCount / totalCount) * 100 : 0,
+    inputTokens: totals.inputTokens,
+    cachedInputTokens: totals.cachedInputTokens,
+    outputTokens: totals.outputTokens,
+    totalTokens: totals.totalTokens,
+    chargedAmountUsd: totals.chargedAmountUsd.toFixed(8),
+    upstreamCostUsd: totals.upstreamCostUsd.toFixed(8),
+    grossProfitUsd: totals.chargedAmountUsd
+      .minus(totals.upstreamCostUsd)
+      .toFixed(8),
+    avgLatencyMs:
+      totals.latencyCount > 0 ? totals.latencyTotal / totals.latencyCount : null,
+    avgFirstTokenLatencyMs:
+      totals.firstTokenLatencyCount > 0
+        ? totals.firstTokenLatencyTotal / totals.firstTokenLatencyCount
+        : null,
+  };
 }
 
 async function getAdminRequestsSummary(
@@ -1944,6 +2044,9 @@ export async function adminRoutes(app: FastifyInstance) {
       gatewayNoticeSettings,
       redisFailurePolicySettings,
       globalCircuitBreakerSettings,
+      whitelistFilterSettings,
+      bannedUserNoticeSettings,
+      bannedUsers,
       externalAlertSettings,
       charityAnnouncementSettings,
       reasoningEffortTransformSettings,
@@ -1958,6 +2061,26 @@ export async function adminRoutes(app: FastifyInstance) {
       readGatewayNoticeSettings(),
       readRedisFailurePolicySettings(),
       readGlobalCircuitBreakerSettings(),
+      readWhitelistFilterSettings(),
+      readBannedUserNoticeSettings(),
+      prisma.user.findMany({
+        where: { status: "BANNED" },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true,
+          email: true,
+          statusReason: true,
+          displayGroup: true,
+          createdAt: true,
+          updatedAt: true,
+          _count: {
+            select: {
+              apiKeys: true,
+              apiRequests: true,
+            },
+          },
+        },
+      }),
       readExternalAlertSettings(),
       readCharityAnnouncementSettings(),
       readReasoningEffortTransformSettings(),
@@ -2004,6 +2127,9 @@ export async function adminRoutes(app: FastifyInstance) {
       gatewayNoticeSettings,
       redisFailurePolicySettings,
       globalCircuitBreakerSettings,
+      whitelistFilterSettings,
+      bannedUserNoticeSettings,
+      bannedUsers,
       externalAlertSettings,
       charityAnnouncementSettings: {
         ...charityAnnouncementSettings,
@@ -2174,6 +2300,48 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 
+  app.get("/admin/whitelist-filter-settings", async () => {
+    const settings = await readWhitelistFilterSettings();
+    return {
+      settings,
+      defaults: defaultWhitelistFilterSettings,
+    };
+  });
+
+  app.put("/admin/whitelist-filter-settings", async (request) => {
+    const body = whitelistFilterSettingsSchema.parse(request.body);
+    const settings = await saveWhitelistFilterSettings(body);
+    return {
+      settings,
+      defaults: defaultWhitelistFilterSettings,
+    };
+  });
+
+  app.post("/admin/whitelist-filter-settings/rotate-secret", async () => {
+    const settings = await rotateWhitelistFilterSecret();
+    return {
+      settings,
+      defaults: defaultWhitelistFilterSettings,
+    };
+  });
+
+  app.get("/admin/banned-user-notice-settings", async () => {
+    const settings = await readBannedUserNoticeSettings();
+    return {
+      settings,
+      defaults: defaultBannedUserNoticeSettings,
+    };
+  });
+
+  app.put("/admin/banned-user-notice-settings", async (request) => {
+    const body = bannedUserNoticeSettingsSchema.parse(request.body);
+    const settings = await saveBannedUserNoticeSettings(body);
+    return {
+      settings,
+      defaults: defaultBannedUserNoticeSettings,
+    };
+  });
+
   app.get("/admin/external-alert-settings", async () => {
     return {
       settings: await readExternalAlertSettings(),
@@ -2236,10 +2404,52 @@ export async function adminRoutes(app: FastifyInstance) {
 
       const settings = await saveReasoningEffortTransformSettings({
         rules: normalizedRules,
+        ...(body.gpt56Force ? { gpt56Force: body.gpt56Force } : {}),
       });
       return { settings, options: reasoningEffortValues };
     },
   );
+
+  app.get("/admin/request-body-retention-settings", async () => {
+    return {
+      settings: await readRequestBodyRetentionSettings(),
+      defaults: defaultRequestBodyRetentionSettings,
+      limits: {
+        minRetentionDays: minRequestBodyRetentionDays,
+        maxRetentionDays: maxRequestBodyRetentionDays,
+      },
+    };
+  });
+
+  app.put("/admin/request-body-retention-settings", async (request) => {
+    const body = requestBodyRetentionSettingsSchema.parse(request.body);
+    const settings = await saveRequestBodyRetentionSettings(body);
+
+    void cleanupExpiredRequestBodies()
+      .then((result) => {
+        if (!result.skipped && result.count > 0) {
+          app.log.info(
+            result,
+            "Expired API request bodies cleared after retention settings update",
+          );
+        }
+      })
+      .catch((error) => {
+        app.log.error(
+          error,
+          "Expired API request body cleanup after settings update failed",
+        );
+      });
+
+    return {
+      settings,
+      defaults: defaultRequestBodyRetentionSettings,
+      limits: {
+        minRetentionDays: minRequestBodyRetentionDays,
+        maxRetentionDays: maxRequestBodyRetentionDays,
+      },
+    };
+  });
 
   app.get("/admin/image-generation-tool-settings", async () => {
     return {
@@ -3430,7 +3640,6 @@ export async function adminRoutes(app: FastifyInstance) {
           firstTokenLatencyMs: true,
           upstreamFirstChunkLatencyMs: true,
           errorMessage: true,
-          responseUsage: true,
           createdAt: true,
           user: {
             select: {
@@ -3439,7 +3648,7 @@ export async function adminRoutes(app: FastifyInstance) {
           },
         },
       }),
-      getAdminRequestsSummary(where),
+      query.summaryMode === "page" ? Promise.resolve(null) : getAdminRequestsSummary(where),
       listIpBanRules(),
     ]);
     const hasMore = rows.length > query.take;
@@ -3447,14 +3656,14 @@ export async function adminRoutes(app: FastifyInstance) {
     const requests = visibleRows.map(({ reasoningEffort, ...row }) => {
       return {
         ...row,
-        reasoningEffort,
+        reasoningEffort: reasoningEffort ?? null,
       };
     });
 
     return {
       requests,
       hasMore,
-      summary,
+      summary: summary ?? summarizeAdminRequestPage(visibleRows),
       ipBanRules,
       nextCursor: hasMore ? (requests.at(-1)?.id ?? null) : null,
     };
@@ -3525,7 +3734,13 @@ export async function adminRoutes(app: FastifyInstance) {
       return reply.status(404).send({ message: "Request not found" });
     }
 
-    return { request: apiRequest };
+    return {
+      request: {
+        ...apiRequest,
+        reasoningEffort:
+          apiRequest.reasoningEffort ?? getReasoningEffortFromBody(apiRequest.requestBody),
+      },
+    };
   });
 
   app.get("/admin/audit-logs", async (request) => {

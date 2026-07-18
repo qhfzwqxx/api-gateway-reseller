@@ -18,6 +18,7 @@ enum UserStatus {
   SUSPENDED
   TRIAL
   RISK_REVIEW
+  BANNED
 }
 
 enum ApiKeyStatus {
@@ -91,6 +92,22 @@ enum UserSubscriptionStatus {
   DISABLED
 }
 
+enum ReferralProfileStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ReferralInviteStatus {
+  REWARDED
+  SKIPPED
+}
+
+enum ReferralRewardType {
+  NONE
+  BALANCE
+  SUBSCRIPTION
+}
+
 model AccessTier {
   id          String           @id @default(cuid())
   code        String           @unique
@@ -151,6 +168,9 @@ model User {
   createdModelPrices ModelPrice[]
   loginLogs          LoginLog[]
   modelMappings      UserModelMapping[]
+  referralProfile    ReferralProfile?
+  sentReferralInvites ReferralInvite[] @relation("ReferralInviter")
+  receivedReferralInvite ReferralInvite? @relation("ReferralInvitee")
 
   @@index([tierId])
   @@index([status])
@@ -246,6 +266,50 @@ model UserModelMapping {
 
   @@unique([userId, fromModel])
   @@index([userId])
+}
+
+model ReferralProfile {
+  id                 String                @id @default(cuid())
+  userId             String                @unique
+  code               String                @unique
+  status             ReferralProfileStatus @default(ACTIVE)
+  successfulInvites  Int                   @default(0)
+  rewardedInvites    Int                   @default(0)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invites ReferralInvite[]
+
+  @@index([status])
+}
+
+model ReferralInvite {
+  id                  String               @id @default(cuid())
+  referralProfileId   String
+  inviterUserId       String
+  inviteeUserId       String               @unique
+  code                String
+  status              ReferralInviteStatus @default(REWARDED)
+  inviterRewardType   ReferralRewardType   @default(NONE)
+  inviterRewardAmount Decimal              @default(0) @db.Decimal(18, 8)
+  inviterRewardPlanId String?
+  inviteeRewardType   ReferralRewardType   @default(NONE)
+  inviteeRewardAmount Decimal              @default(0) @db.Decimal(18, 8)
+  inviteeRewardPlanId String?
+  inviterRewardedAt   DateTime?
+  inviteeRewardedAt   DateTime?
+  rewardSnapshot      Json?
+  createdAt           DateTime             @default(now())
+
+  referralProfile ReferralProfile  @relation(fields: [referralProfileId], references: [id], onDelete: Cascade)
+  inviter         User             @relation("ReferralInviter", fields: [inviterUserId], references: [id], onDelete: Cascade)
+  invitee         User             @relation("ReferralInvitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
+
+  @@index([referralProfileId, createdAt])
+  @@index([inviterUserId, createdAt])
+  @@index([code])
+  @@index([status, createdAt])
 }
 
 model ApiKey {

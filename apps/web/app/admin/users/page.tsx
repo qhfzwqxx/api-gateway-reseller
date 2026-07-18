@@ -2074,7 +2074,7 @@ function Badge({
 function statusTone(status: AdminUser["status"]) {
   if (status === "ACTIVE") return "green";
   if (status === "TRIAL" || status === "RISK_REVIEW") return "amber";
-  if (status === "DISABLED" || status === "SUSPENDED") return "red";
+  if (status === "DISABLED" || status === "SUSPENDED" || status === "BANNED") return "red";
   return "slate";
 }
 
@@ -2091,7 +2091,7 @@ function userGroupInfo(user: AdminUser): {
   if (user.status === "RISK_REVIEW") {
     return { label: "风控组", tone: "amber" };
   }
-  if (user.status === "DISABLED" || user.status === "SUSPENDED") {
+  if (user.status === "DISABLED" || user.status === "SUSPENDED" || user.status === "BANNED") {
     return { label: "受限组", tone: "red" };
   }
   return { label: "普通用户组", tone: "slate" };

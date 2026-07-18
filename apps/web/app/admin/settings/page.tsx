@@ -13,12 +13,14 @@ import {
   getAuthSettings,
   getImageGenerationToolSettings,
   getImageProxySettings,
+  getRequestBodyRetentionSettings,
   getReasoningEffortTransformSettings,
   checkImageProxySettings,
   testAuthEmail,
   updateAuthSettings,
   updateImageGenerationToolSettings,
   updateImageProxySettings,
+  updateRequestBodyRetentionSettings,
   updateReasoningEffortTransformSettings,
   type AuthSettingsInput,
   type ImageProxyHealthCheck,
@@ -26,6 +28,7 @@ import {
   type ImageGenerationToolSettings,
   type ReasoningEffortTransformRule,
   type ReasoningEffortTransformSettings,
+  type RequestBodyRetentionSettings,
 } from "../../../lib/api/settings";
 
 const authSchema = z.object({
@@ -45,9 +48,17 @@ const authSchema = z.object({
 const reasoningSchema = z.object({
   rules: z.array(z.object({
     enabled: z.boolean(),
-    from: z.enum(["low", "medium", "high", "xhigh"]),
-    to: z.enum(["low", "medium", "high", "xhigh"]),
+    from: z.enum(["none", "low", "medium", "high", "xhigh", "max"]),
+    to: z.enum(["none", "low", "medium", "high", "xhigh", "max"]),
   })),
+  gpt56Force: z.object({
+    enabled: z.boolean(),
+    effort: z.enum(["none", "low", "medium", "high", "xhigh", "max"]),
+  }),
+});
+const requestBodyRetentionSchema = z.object({
+  enabled: z.boolean(),
+  retentionDays: z.coerce.number().int().min(1).max(3650),
 });
 const imageGenerationToolSchema = z.object({
   routingModel: z.string().trim().min(1, "请输入转接模型"),
@@ -60,6 +71,8 @@ const imageProxySchema = z.object({
 type AuthInput = z.input<typeof authSchema>;
 type AuthValues = z.output<typeof authSchema>;
 type ReasoningValues = z.output<typeof reasoningSchema>;
+type RequestBodyRetentionInput = z.input<typeof requestBodyRetentionSchema>;
+type RequestBodyRetentionValues = z.output<typeof requestBodyRetentionSchema>;
 type ImageGenerationToolValues = z.output<typeof imageGenerationToolSchema>;
 type ImageProxyValues = z.output<typeof imageProxySchema>;
 
@@ -68,11 +81,26 @@ export default function AdminSettingsPage() {
   const [notice, setNotice] = useState("");
   const authQuery = useQuery({ queryKey: ["admin", "auth-settings"], queryFn: getAuthSettings });
   const reasoningQuery = useQuery({ queryKey: ["admin", "reasoning-effort-transform-settings"], queryFn: getReasoningEffortTransformSettings });
+  const requestBodyRetentionQuery = useQuery({ queryKey: ["admin", "request-body-retention-settings"], queryFn: getRequestBodyRetentionSettings });
   const imageGenerationToolQuery = useQuery({ queryKey: ["admin", "image-generation-tool-settings"], queryFn: getImageGenerationToolSettings });
   const imageProxyQuery = useQuery({ queryKey: ["admin", "image-proxy-settings"], queryFn: getImageProxySettings });
 
   const authForm = useForm<AuthInput, unknown, AuthValues>({ resolver: zodResolver(authSchema) });
-  const reasoningForm = useForm<ReasoningValues>({ resolver: zodResolver(reasoningSchema), defaultValues: { rules: [] } });
+  const reasoningForm = useForm<ReasoningValues>({
+    resolver: zodResolver(reasoningSchema),
+    defaultValues: {
+      rules: [],
+      gpt56Force: { enabled: false, effort: "medium" },
+    },
+  });
+  const requestBodyRetentionForm = useForm<
+    RequestBodyRetentionInput,
+    unknown,
+    RequestBodyRetentionValues
+  >({
+    resolver: zodResolver(requestBodyRetentionSchema),
+    defaultValues: { enabled: true, retentionDays: 300 },
+  });
   const imageGenerationToolForm = useForm<ImageGenerationToolValues>({
     resolver: zodResolver(imageGenerationToolSchema),
     defaultValues: { routingModel: "gpt-image-2" },
@@ -90,7 +118,16 @@ export default function AdminSettingsPage() {
     if (!authQuery.data) return;
     authForm.reset({ ...authQuery.data, smtpPassword: "", testEmail: authQuery.data.smtpUser || "" });
   }, [authForm, authQuery.data]);
-  useEffect(() => { if (reasoningQuery.data) reasoningForm.reset({ rules: reasoningQuery.data.settings.rules }); }, [reasoningForm, reasoningQuery.data]);
+  useEffect(() => {
+    if (reasoningQuery.data) {
+      reasoningForm.reset(reasoningQuery.data.settings);
+    }
+  }, [reasoningForm, reasoningQuery.data]);
+  useEffect(() => {
+    if (requestBodyRetentionQuery.data) {
+      requestBodyRetentionForm.reset(requestBodyRetentionQuery.data.settings);
+    }
+  }, [requestBodyRetentionForm, requestBodyRetentionQuery.data]);
   useEffect(() => {
     if (imageGenerationToolQuery.data) {
       imageGenerationToolForm.reset(imageGenerationToolQuery.data.settings);
@@ -104,6 +141,14 @@ export default function AdminSettingsPage() {
   const authMutation = useMutation({ mutationFn: updateAuthSettings, onSuccess: () => { setNotice("Auth & SMTP 设置已保存"); void queryClient.invalidateQueries({ queryKey: ["admin", "auth-settings"] }); }, onError: (error) => setNotice(errorToText(error)) });
   const testMutation = useMutation({ mutationFn: testAuthEmail, onSuccess: () => setNotice("测试邮件已发送"), onError: (error) => setNotice(errorToText(error)) });
   const reasoningMutation = useMutation({ mutationFn: updateReasoningEffortTransformSettings, onSuccess: () => { setNotice("推理强度转换规则已保存"); void queryClient.invalidateQueries({ queryKey: ["admin", "reasoning-effort-transform-settings"] }); }, onError: (error) => setNotice(errorToText(error)) });
+  const requestBodyRetentionMutation = useMutation({
+    mutationFn: updateRequestBodyRetentionSettings,
+    onSuccess: () => {
+      setNotice("Request Body 保留策略已保存，过期正文将在后台分批清理");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "request-body-retention-settings"] });
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
   const imageGenerationToolMutation = useMutation({
     mutationFn: (values: ImageGenerationToolValues) =>
       updateImageGenerationToolSettings(toImageGenerationToolSettings(values)),
@@ -154,7 +199,7 @@ export default function AdminSettingsPage() {
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-sm font-medium text-blue-700">System Settings</p>
         <h2 className="mt-1 text-2xl font-semibold text-slate-950">系统设置</h2>
-        <p className="mt-2 text-sm text-slate-500">登录、SMTP 与推理强度转换配置。公益设置已拆分为独立页面。</p>
+        <p className="mt-2 text-sm text-slate-500">登录、SMTP、推理强度与调用记录保留策略。公益设置已拆分为独立页面。</p>
       </section>
       {notice ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">{notice}</div> : null}
       <section className="grid gap-5 xl:grid-cols-2">
@@ -187,6 +232,36 @@ export default function AdminSettingsPage() {
           <TextInput label="测试邮箱" register={authForm.register("testEmail")} />
         </SettingCard>
 
+        <SettingCard<RequestBodyRetentionInput, RequestBodyRetentionValues>
+          title="Request Body 保留策略"
+          description="按请求创建时间自动清空过期调用记录的 requestBody，降低 PostgreSQL 大字段空间增长。"
+          form={requestBodyRetentionForm}
+          loading={requestBodyRetentionMutation.isPending}
+          onSubmit={(values) => requestBodyRetentionMutation.mutate(values)}
+        >
+          <Toggle
+            label="启用 Request Body 自动清理"
+            register={requestBodyRetentionForm.register("enabled")}
+          />
+          <label className="grid gap-2 sm:max-w-sm">
+            <span className={labelClass}>Request Body 保留天数</span>
+            <input
+              type="number"
+              min={requestBodyRetentionQuery.data?.limits.minRetentionDays ?? 1}
+              max={requestBodyRetentionQuery.data?.limits.maxRetentionDays ?? 3650}
+              className={inputClass}
+              aria-describedby="request-body-retention-help"
+              {...requestBodyRetentionForm.register("retentionDays")}
+            />
+          </label>
+          <p id="request-body-retention-help" className="text-xs leading-5 text-slate-500">
+            例如填写 300，表示请求创建超过 300 天后，后台清理器会把该记录的 requestBody 设置为空。关闭自动清理时仍可预先保存保留天数。
+          </p>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+            此操作不可恢复，且只清空 requestBody。请求 ID、用户、模型、推理强度、状态、Token、费用、耗时、错误信息、responseUsage 与时间字段都会永久保留。清理器每小时最多分批处理 5,000 条，避免一次性更新大量记录。清理后的空间会由 PostgreSQL 优先复用，系统磁盘剩余空间不会立即增加。
+          </div>
+        </SettingCard>
+
         <SettingCard
           title="推理强度转换配置"
           description="用选项配置 from/to 转换规则，保存前会由后端校验重复来源和自转换。"
@@ -199,9 +274,35 @@ export default function AdminSettingsPage() {
             </button>
           }
         >
+          <div className="grid gap-4 rounded-lg border border-blue-200 bg-blue-50/60 p-4">
+            <label className="flex min-h-11 items-center gap-3 text-sm font-semibold text-slate-900">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                {...reasoningForm.register("gpt56Force.enabled")}
+              />
+              强制 GPT-5.6 系列使用指定推理强度
+            </label>
+            <div className="grid gap-2 sm:max-w-sm">
+              <label htmlFor="gpt56-force-effort" className={labelClass}>强制等级</label>
+              <select
+                id="gpt56-force-effort"
+                className={inputClass}
+                aria-describedby="gpt56-force-help"
+                {...reasoningForm.register("gpt56Force.effort")}
+              >
+                {(reasoningQuery.data?.options ?? ["none", "low", "medium", "high", "xhigh", "max"]).map((option) => (
+                  <option key={option} value={option}>{effortLabel(option)}</option>
+                ))}
+              </select>
+            </div>
+            <p id="gpt56-force-help" className="text-xs leading-5 text-slate-600">
+              开启后，仅对 Responses API 的 GPT-5.6 系列模型生效。无论客户端是否传入 reasoning.effort，网关都会在转发前覆盖为所选等级；关闭时仍可预先选择下次启用的等级。
+            </p>
+          </div>
           <ReasoningRulesEditor
             rules={reasoningForm.watch("rules")}
-            options={reasoningQuery.data?.options ?? ["low", "medium", "high", "xhigh"]}
+            options={reasoningQuery.data?.options ?? ["none", "low", "medium", "high", "xhigh", "max"]}
             onChange={(rules) => reasoningForm.setValue("rules", rules, { shouldDirty: true })}
           />
         </SettingCard>
@@ -404,7 +505,14 @@ function updateReasoningRule(rules: ReasoningEffortTransformRule[], index: numbe
   onChange(rules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule));
 }
 function effortLabel(value: ReasoningEffortTransformRule["from"]) {
-  const labels = { low: "low 低", medium: "medium 中", high: "high 高", xhigh: "xhigh 极高" };
+  const labels = {
+    none: "none 无推理",
+    low: "low 低",
+    medium: "medium 中",
+    high: "high 高",
+    xhigh: "xhigh 极高",
+    max: "max 最高",
+  };
   return labels[value];
 }
 function errorToText(error: unknown) { return error instanceof Error ? error.message : "操作失败，请稍后重试。"; }

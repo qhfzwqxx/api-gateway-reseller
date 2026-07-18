@@ -3,7 +3,6 @@ import {
   resolveAccessRoutePolicy,
   type AccessRoutePolicy,
 } from "./access-routing.js";
-import { ensureStandardAccessTier } from "./access-routing.js";
 import { routeUpstreamRequest } from "./routing/router.js";
 import { canRouteModelPoolChannel } from "./routing/channel-state.js";
 
@@ -106,16 +105,10 @@ export async function explainModelRoute(
     selectedUpstreamProviderKeyId?: string;
   },
 ) {
-  const standardTier = await ensureStandardAccessTier();
   const requestedPool = policy.tierId
     ? await readPoolExplanation(model, policy.tierId)
     : null;
-  const effectivePool =
-    requestedPool?.pool && requestedPool.pool.status === "ACTIVE"
-      ? requestedPool
-      : policy.tierId !== standardTier.id
-        ? await readPoolExplanation(model, standardTier.id)
-        : requestedPool;
+  const effectivePool = requestedPool;
 
   const routeCandidates =
     effectivePool?.channels.filter(
@@ -124,9 +117,7 @@ export async function explainModelRoute(
 
   return {
     requestedPool,
-    fallbackToStandard:
-      Boolean(requestedPool) &&
-      requestedPool?.pool?.tierId !== effectivePool?.pool?.tierId,
+    fallbackToStandard: false,
     effectivePool,
     routeCandidates,
     selectedCandidate:
@@ -176,7 +167,9 @@ async function readPoolExplanation(model: string, tierId: string) {
 
   const [providers, prices] = await Promise.all([
     prisma.upstreamProvider.findMany({
-      where: { name: { in: pool.channels.map((channel) => channel.upstreamProvider) } },
+      where: {
+        name: { in: pool.channels.map((channel) => channel.upstreamProvider) },
+      },
       include: {
         keys: {
           where: { status: "ACTIVE" },
@@ -194,7 +187,9 @@ async function readPoolExplanation(model: string, tierId: string) {
       },
     }),
   ]);
-  const providerMap = new Map(providers.map((provider) => [provider.name, provider]));
+  const providerMap = new Map(
+    providers.map((provider) => [provider.name, provider]),
+  );
   const priceMap = new Map(
     prices.map((price) => [`${price.upstreamProvider}:${price.model}`, price]),
   );
@@ -258,7 +253,8 @@ async function readPoolExplanation(model: string, tierId: string) {
     tier: pool.tier,
     channels,
     summary: {
-      ready: channels.filter((channel) => channel.effectiveStatus === "READY").length,
+      ready: channels.filter((channel) => channel.effectiveStatus === "READY")
+        .length,
       unavailable: channels.filter(
         (channel) => channel.effectiveStatus === "UNAVAILABLE",
       ).length,
@@ -287,7 +283,9 @@ function explainChannelUnavailable(params: {
   }
   if (params.providerStatus !== "ACTIVE") {
     reasons.push(
-      params.providerStatus ? `上游状态为 ${params.providerStatus}` : "上游不存在",
+      params.providerStatus
+        ? `上游状态为 ${params.providerStatus}`
+        : "上游不存在",
     );
   }
   if (params.activeKeyCount <= 0) {
@@ -309,15 +307,14 @@ function buildRouteUnavailableReasons(
   const reasons: string[] = [];
   if (!requestedPool?.pool) {
     reasons.push("目标等级没有该模型池");
-  }
-  if (!effectivePool?.pool) {
-    reasons.push("standard 等级也没有该模型池");
-  }
-  if (effectivePool?.pool?.status && effectivePool.pool.status !== "ACTIVE") {
-    reasons.push("最终模型池未启用");
+  } else if (
+    effectivePool?.pool?.status &&
+    effectivePool.pool.status !== "ACTIVE"
+  ) {
+    reasons.push("目标等级模型池未启用");
   }
   if (effectivePool?.channels.length === 0) {
-    reasons.push("最终模型池没有渠道");
+    reasons.push("目标等级模型池没有渠道");
   }
   return reasons.length > 0 ? reasons : ["没有可用渠道"];
 }
@@ -335,11 +332,9 @@ function buildRouteSimulationSteps(params: {
     `API Key 状态：${params.apiKey.status}`,
     `来源 IP：${params.clientIp?.trim() || "未提供"}`,
     `请求模型：${params.model}`,
-    "按来源 IP 等级、Key 等级、用户等级、standard 顺序解析",
+    "按来源 IP 等级、Key 等级、用户等级、默认 standard 解析访问等级",
     `最终访问等级：${params.policy.tierCode}`,
-    params.route.fallbackToStandard
-      ? "目标等级模型池不可用，已回落 standard 模型池"
-      : "使用目标等级模型池",
+    "仅使用最终访问等级对应的模型池",
     params.route.selectedCandidate
       ? `模拟首选渠道：${params.route.selectedCandidate.upstreamProvider}，客户输入/输出价 ${params.route.selectedCandidate.price?.customerInputPer1MTok ?? "-"} / ${params.route.selectedCandidate.price?.customerOutputPer1MTok ?? "-"} 每 1M tokens`
       : `无可用渠道：${params.route.unavailableReasons.join("；")}`,

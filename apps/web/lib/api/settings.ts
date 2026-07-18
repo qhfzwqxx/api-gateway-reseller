@@ -27,6 +27,18 @@ export interface GlobalCircuitBreakerSettings {
   message: string;
 }
 
+export interface WhitelistFilterSettings {
+  enabled: boolean;
+  secret: string;
+  secretVersion: string;
+  noticeText: string;
+  applyToAdmins: boolean;
+}
+
+export interface BannedUserNoticeSettings {
+  noticeText: string;
+}
+
 export interface TemporaryIpNoticeBanSettings {
   enabled: boolean;
   threshold: number;
@@ -63,12 +75,21 @@ export interface CharityAnnouncementSettings {
 
 export interface ReasoningEffortTransformRule {
   enabled: boolean;
-  from: "low" | "medium" | "high" | "xhigh";
-  to: "low" | "medium" | "high" | "xhigh";
+  from: "none" | "low" | "medium" | "high" | "xhigh" | "max";
+  to: "none" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export interface ReasoningEffortTransformSettings {
   rules: ReasoningEffortTransformRule[];
+  gpt56Force: {
+    enabled: boolean;
+    effort: ReasoningEffortTransformRule["to"];
+  };
+}
+
+export interface RequestBodyRetentionSettings {
+  enabled: boolean;
+  retentionDays: number;
 }
 
 export interface ImageGenerationToolSettings {
@@ -129,6 +150,19 @@ export interface IpBanRuleInput {
   reason?: string | null;
 }
 
+export interface BannedUserSummary {
+  id: string;
+  email: string;
+  statusReason: string | null;
+  displayGroup: string;
+  createdAt: string;
+  updatedAt: string;
+  _count: {
+    apiKeys: number;
+    apiRequests: number;
+  };
+}
+
 export interface RiskCenterData {
   ipBanRules: IpBanRule[];
   temporaryIpNoticeBans: Array<{ ip: string; message: string; ttlSeconds: number }>;
@@ -137,6 +171,9 @@ export interface RiskCenterData {
   gatewayNoticeSettings: GatewayNoticeSettings;
   redisFailurePolicySettings: RedisFailurePolicySettings;
   globalCircuitBreakerSettings: GlobalCircuitBreakerSettings;
+  whitelistFilterSettings: WhitelistFilterSettings;
+  bannedUserNoticeSettings: BannedUserNoticeSettings;
+  bannedUsers: BannedUserSummary[];
   charityAnnouncementSettings: CharityAnnouncementSettings;
   reasoningEffortTransformSettings: ReasoningEffortTransformSettings;
   counters: {
@@ -244,6 +281,21 @@ export async function updateGlobalCircuitBreakerSettings(input: Partial<GlobalCi
   return response.data.settings;
 }
 
+export async function updateWhitelistFilterSettings(input: Partial<WhitelistFilterSettings>) {
+  const response = await http.put<{ settings: WhitelistFilterSettings }>("/admin/whitelist-filter-settings", input);
+  return response.data.settings;
+}
+
+export async function rotateWhitelistFilterSecret() {
+  const response = await http.post<{ settings: WhitelistFilterSettings }>("/admin/whitelist-filter-settings/rotate-secret");
+  return response.data.settings;
+}
+
+export async function updateBannedUserNoticeSettings(input: Partial<BannedUserNoticeSettings>) {
+  const response = await http.put<{ settings: BannedUserNoticeSettings }>("/admin/banned-user-notice-settings", input);
+  return response.data.settings;
+}
+
 export async function getAuthSettings() {
   const response = await http.get<{ settings: AuthSettings }>("/admin/auth-settings");
   return response.data.settings;
@@ -276,6 +328,32 @@ export async function getReasoningEffortTransformSettings() {
 
 export async function updateReasoningEffortTransformSettings(input: ReasoningEffortTransformSettings) {
   const response = await http.put<{ settings: ReasoningEffortTransformSettings }>("/admin/reasoning-effort-transform-settings", input);
+  return response.data.settings;
+}
+
+export async function getRequestBodyRetentionSettings() {
+  const response = await http.get<{
+    settings: RequestBodyRetentionSettings;
+    defaults: RequestBodyRetentionSettings;
+    limits: {
+      minRetentionDays: number;
+      maxRetentionDays: number;
+    };
+  }>("/admin/request-body-retention-settings");
+  return response.data;
+}
+
+export async function updateRequestBodyRetentionSettings(
+  input: RequestBodyRetentionSettings,
+) {
+  const response = await http.put<{
+    settings: RequestBodyRetentionSettings;
+    defaults: RequestBodyRetentionSettings;
+    limits: {
+      minRetentionDays: number;
+      maxRetentionDays: number;
+    };
+  }>("/admin/request-body-retention-settings", input);
   return response.data.settings;
 }
 

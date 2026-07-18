@@ -1,6 +1,12 @@
 export type UserRole = "USER" | "ADMIN";
 
-export type UserStatus = "ACTIVE" | "DISABLED" | "SUSPENDED" | "TRIAL" | "RISK_REVIEW";
+export type UserStatus =
+  | "ACTIVE"
+  | "DISABLED"
+  | "SUSPENDED"
+  | "TRIAL"
+  | "RISK_REVIEW"
+  | "BANNED";
 
 export interface AdminUser {
   id: string;

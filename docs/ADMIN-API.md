@@ -1100,9 +1100,52 @@ PUT /admin/reasoning-effort-transform-settings
       "from": "high",
       "to": "medium"
     }
-  ]
+  ],
+  "gpt56Force": {
+    "enabled": true,
+    "effort": "max"
+  }
 }
 ```
+
+`gpt56Force` 仅强制改写 Responses API 中 `gpt-5.6` 及 `gpt-5.6-*` 模型的 `reasoning.effort`。可选值为 `none`、`low`、`medium`、`high`、`xhigh`、`max`。
+
+### 9.3 Request Body 保留策略
+
+```http
+GET /admin/request-body-retention-settings
+PUT /admin/request-body-retention-settings
+```
+
+保存请求：
+
+```json
+{
+  "enabled": true,
+  "retentionDays": 300
+}
+```
+
+响应：
+
+```json
+{
+  "settings": {
+    "enabled": true,
+    "retentionDays": 300
+  },
+  "defaults": {
+    "enabled": true,
+    "retentionDays": 300
+  },
+  "limits": {
+    "minRetentionDays": 1,
+    "maxRetentionDays": 3650
+  }
+}
+```
+
+清理器只将过期记录的 `requestBody` 设置为 SQL `NULL`，其余调用记录字段和 `responseUsage` 均保留。
 
 规则：
 
@@ -1795,6 +1838,7 @@ GET /models
 GET /usage/summary
 GET /usage/requests
 GET /wallet
+GET /me/referral
 POST /redeem-codes/redeem
 GET /api-keys
 POST /api-keys
@@ -1804,7 +1848,76 @@ DELETE /api-keys/:id
 
 后台设计一般不用直接管理这些页面，但如果要设计“用户视角预览”，可参考。
 
-## 16. UI 设计重点与交互约束
+## 16. 邀请奖励
+
+### 16.1 用户侧邀请信息
+
+```http
+GET /me/referral
+```
+
+返回当前用户专属邀请码、邀请链接、双方奖励摘要和最近 20 条邀请记录。用户首次访问时会自动创建 `ReferralProfile`。
+
+### 16.2 邀请链接注册
+
+```http
+POST /auth/email-code/login
+```
+
+请求体新增可选字段：
+
+```json
+{
+  "email": "new-user@example.com",
+  "code": "123456",
+  "referralCode": "abc123"
+}
+```
+
+仅当邮箱不存在且本次自动创建新用户时，`referralCode` 才会生效。已有用户登录、邀请码无效、邀请码停用或邀请功能关闭时，不创建邀请记录，也不发放邀请奖励。
+
+### 16.3 后台邀请配置
+
+```http
+GET /admin/referral-settings
+PUT /admin/referral-settings
+```
+
+配置字段：
+
+```json
+{
+  "enabled": true,
+  "inviteBaseUrl": "",
+  "inviterReward": {
+    "type": "BALANCE",
+    "amountUsd": "1.00000000",
+    "subscriptionPlanId": null
+  },
+  "inviteeReward": {
+    "type": "NONE",
+    "amountUsd": "0.00000000",
+    "subscriptionPlanId": null
+  }
+}
+```
+
+`type` 可选 `NONE`、`BALANCE`、`SUBSCRIPTION`。余额奖励写入钱包流水，`source` 为 `REFERRAL`；订阅奖励复用订阅发放逻辑，`source` 为 `REFERRAL`。双方奖励互相独立，均可为空。
+
+### 16.4 后台邀请记录
+
+```http
+GET /admin/referrals
+```
+
+查询参数：
+
+- `q`：搜索邀请码、邀请人邮箱、被邀请人邮箱。
+- `status`：`REWARDED` / `SKIPPED`。
+
+返回最近 200 条邀请记录，包括邀请人、被邀请新用户、双方奖励快照和发奖时间。
+
+## 17. UI 设计重点与交互约束
 
 ### 16.1 高优先级页面
 
@@ -1865,4 +1978,3 @@ DELETE /api-keys/:id
 - 多数设置接口返回完整 settings，可按返回值刷新表单。
 - 导入接口支持 dry run，UI 应提供“预览 -> 确认导入”的两步流程。
 - 明文 API Key 和兑换码只在创建响应出现一次，UI 必须提供一次性复制提示。
-

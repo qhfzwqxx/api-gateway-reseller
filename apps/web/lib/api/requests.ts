@@ -60,7 +60,7 @@ export interface ApiRequestRecord {
   firstTokenLatencyMs: number | null;
   upstreamFirstChunkLatencyMs: number | null;
   errorMessage: string | null;
-  responseUsage: unknown;
+  responseUsage?: unknown;
   requestBody?: unknown;
   createdAt: string;
   updatedAt?: string;
@@ -120,6 +120,7 @@ export interface GetRequestsParams {
   maxFirstTokenLatencyMs?: string;
   cursor?: string;
   take?: number;
+  summaryMode?: "full" | "page";
 }
 
 export interface GetRequestsResponse {

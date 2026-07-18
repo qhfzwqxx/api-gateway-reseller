@@ -1476,6 +1476,21 @@ GET /admin/login-logs
 
 ## 17. 前端实现建议
 
+### 17.0 邀请奖励页面
+
+新增前台页面“邀请奖励”：
+
+- 调用 `GET /me/referral` 展示专属邀请链接、邀请码、累计成功邀请数、奖励记录数和最近邀请记录。
+- 公开路由 `/invite/[code]` 使用现有前台邮箱验证码登录界面，登录时向 `/auth/email-code/login` 传入 `referralCode`。
+- 已有用户通过邀请页登录不展示奖励到账承诺，只按普通登录处理。
+
+新增后台页面“邀请奖励”：
+
+- 位于“用户与商业”工作区。
+- 调用 `GET /admin/referral-settings` / `PUT /admin/referral-settings` 配置开关、邀请链接基础地址、邀请人奖励、被邀请人奖励。
+- 双方奖励类型均支持 `NONE`、`BALANCE`、`SUBSCRIPTION`；余额需要金额，订阅需要选择有效套餐。
+- 调用 `GET /admin/referrals` 展示最近 200 条邀请注册记录，包括双方邮箱、邀请码、双方奖励、状态和创建时间。
+
 ### 17.1 请求封装
 
 建议统一封装：
@@ -1521,4 +1536,3 @@ GET /admin/login-logs
 - 管理后台只有 ADMIN 角色，没有细粒度权限。
 - CORS 当前后端源码中存在硬编码白名单，虽然 `.env` 有 `CORS_ORIGINS`，前端部署时需要确认后端是否已修正。
 - 没有 OpenAPI schema，前端应按本文档和源码类型对接。
-

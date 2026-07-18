@@ -12,8 +12,10 @@ import {
 } from "../services/auth-settings.js";
 import { hashPassword, requireUser, verifyPassword } from "../services/auth.js";
 import { syncUserSubscriptionState } from "../services/subscriptions.js";
+import { applyReferralForNewUser } from "../services/referrals.js";
 import { sendEmailLoginCode } from "../services/mailer.js";
 import { getClientIp } from "../services/proxy-request-utils.js";
+import { unlockWhitelistFilterUser } from "../services/whitelist-filter-settings.js";
 
 const emailCodeSchema = z.object({
   email: z
@@ -28,11 +30,15 @@ const emailCodeLoginSchema = emailCodeSchema.extend({
     .string()
     .trim()
     .regex(/^\d{6}$/),
+  referralCode: z.string().trim().min(1).max(80).optional(),
 });
 
 const adminLoginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
+});
+const whitelistFilterUnlockSchema = z.object({
+  secret: z.string().trim().min(1).max(256),
 });
 
 const adminLoginMaxFailures = 5;
@@ -200,11 +206,16 @@ export async function authRoutes(app: FastifyInstance) {
 
       try {
         user = await prisma.$transaction(async (tx) => {
-          return createPublicUser(tx, {
+          const created = await createPublicUser(tx, {
             email: body.email,
             passwordHash,
             newUserBonus,
           });
+          await applyReferralForNewUser(tx, {
+            inviteeUserId: created.id,
+            referralCode: body.referralCode,
+          });
+          return created;
         });
       } catch (error) {
         if (isUniqueConstraintError(error)) {
@@ -341,6 +352,26 @@ export async function authRoutes(app: FastifyInstance) {
 
     return { user };
   });
+
+  app.post(
+    "/auth/whitelist-filter/unlock",
+    { preHandler: requireUser },
+    async (request, reply) => {
+      const body = whitelistFilterUnlockSchema.parse(request.body);
+      const jwtUser = request.user as { sub: string };
+      const result = await unlockWhitelistFilterUser(app, jwtUser.sub, body.secret);
+
+      if (result.ok) {
+        return { ok: true };
+      }
+
+      if (result.reason === "disabled") {
+        return reply.status(409).send({ message: "白名单过滤功能未开启。" });
+      }
+
+      return reply.status(400).send({ message: "密钥不正确或已失效。" });
+    },
+  );
 }
 
 async function recordAdminLoginFailure(

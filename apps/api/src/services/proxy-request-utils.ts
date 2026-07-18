@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { sanitizeJsonForPostgres } from "../lib/db-sanitize.js";
 import type { FastifyRequest } from "fastify";
 
@@ -9,6 +10,29 @@ export type ProxyBody = {
   };
   [key: string]: unknown;
 };
+
+type ToolSpecKind = "function" | "custom" | "namespace" | "tool_search";
+
+export type ChatToolSpec = {
+  kind: ToolSpecKind;
+  name: string;
+  chatName: string;
+  namespace?: string;
+};
+
+export type ToolConversionContext = {
+  chatTools: unknown[];
+  specsByChatName: Map<string, ChatToolSpec>;
+  namespaceNameToChatName: Map<string, string>;
+};
+
+export type ProxyTransformContext = {
+  toolContext: ToolConversionContext;
+};
+
+const customToolInputField = "input";
+const toolSearchProxyName = "tool_search";
+const chatToolNameMaxLength = 64;
 
 export const proxiedEndpoints = new Set([
   "/v1/chat/completions",
@@ -148,7 +172,8 @@ function readMultipartTextField(
   contentType: string | undefined,
   fieldName: string,
 ) {
-  const boundary = contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[1] ??
+  const boundary =
+    contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[1] ??
     contentType?.match(/boundary=(?:"([^"]+)"|([^;]+))/i)?.[2];
   if (!boundary) {
     return null;
@@ -271,7 +296,9 @@ function redactLogValue(value: unknown, depth = 0): unknown {
     return String(value);
   }
 
-  const entries = Object.entries(value).filter(([, item]) => item !== undefined);
+  const entries = Object.entries(value).filter(
+    ([, item]) => item !== undefined,
+  );
   const visibleEntries = entries.slice(0, maxLoggedObjectKeys);
   const redacted = Object.fromEntries(
     visibleEntries.map(([key, item]) => [
@@ -348,6 +375,7 @@ export function buildUpstreamBody(
   body: ProxyBody,
   provider: { name: string; baseUrl: string },
   upstreamEndpoint = endpoint,
+  transformContext?: ProxyTransformContext,
 ) {
   let upstreamBody = body;
 
@@ -355,7 +383,9 @@ export function buildUpstreamBody(
     endpoint === "/v1/responses" &&
     upstreamEndpoint === "/v1/chat/completions"
   ) {
-    return buildResponsesToChatCompletionsBody(upstreamBody);
+    return withChatStreamUsageOptions(
+      buildResponsesToChatCompletionsBody(upstreamBody, transformContext),
+    );
   }
 
   if (
@@ -395,6 +425,20 @@ export function buildUpstreamBody(
   };
 }
 
+function withChatStreamUsageOptions(body: ProxyBody): ProxyBody {
+  if (!body.stream) {
+    return body;
+  }
+
+  return {
+    ...body,
+    stream_options: {
+      ...(isPlainObject(body.stream_options) ? body.stream_options : {}),
+      include_usage: true,
+    },
+  };
+}
+
 export function resolveUpstreamRequestUrl(
   endpoint: string,
   upstreamRequestUrl: string,
@@ -427,12 +471,16 @@ export function transformProxyResponseBody(
   endpoint: string,
   upstreamEndpoint: string,
   responseBody: unknown,
+  transformContext?: ProxyTransformContext,
 ) {
   if (
     endpoint === "/v1/responses" &&
     upstreamEndpoint === "/v1/chat/completions"
   ) {
-    return chatCompletionsResponseToResponses(responseBody);
+    return chatCompletionsResponseToResponses(
+      responseBody,
+      transformContext?.toolContext,
+    );
   }
 
   if (
@@ -443,6 +491,23 @@ export function transformProxyResponseBody(
   }
 
   return responseBody;
+}
+
+export function createProxyTransformContext(
+  endpoint: string,
+  body: ProxyBody,
+  upstreamEndpoint: string,
+): ProxyTransformContext | undefined {
+  if (
+    endpoint === "/v1/responses" &&
+    upstreamEndpoint === "/v1/chat/completions"
+  ) {
+    return {
+      toolContext: buildToolConversionContext(body),
+    };
+  }
+
+  return undefined;
 }
 
 function normalizeResponsesCreateBody(body: ProxyBody): ProxyBody {
@@ -503,44 +568,191 @@ function normalizeUpstreamEndpointSetting(value: string | null | undefined) {
   return "responses";
 }
 
-function buildResponsesToChatCompletionsBody(body: ProxyBody): ProxyBody {
-  const {
-    input,
-    instructions,
-    max_output_tokens,
-    output,
-    ...rest
-  } = body as ProxyBody & {
-    input?: unknown;
-    instructions?: unknown;
-    max_output_tokens?: unknown;
-    output?: unknown;
+function buildToolConversionContext(body: ProxyBody): ToolConversionContext {
+  const context: ToolConversionContext = {
+    chatTools: [],
+    specsByChatName: new Map(),
+    namespaceNameToChatName: new Map(),
   };
+
+  const addChatTool = (
+    chatName: string,
+    spec: Omit<ChatToolSpec, "chatName">,
+    chatTool: unknown,
+  ) => {
+    const uniqueChatName = ensureUniqueChatToolName(chatName, context);
+    const resolvedSpec = { ...spec, chatName: uniqueChatName };
+    const resolvedTool = rewriteChatToolName(chatTool, uniqueChatName);
+    context.chatTools.push(resolvedTool);
+    context.specsByChatName.set(uniqueChatName, resolvedSpec);
+    if (resolvedSpec.namespace) {
+      context.namespaceNameToChatName.set(
+        namespaceToolKey(resolvedSpec.namespace, resolvedSpec.name),
+        uniqueChatName,
+      );
+    }
+  };
+
+  const addResponseTool = (tool: unknown, namespace?: string) => {
+    if (typeof tool === "string") {
+      addCustomTool({ type: "custom", name: tool });
+      return;
+    }
+
+    if (!isPlainObject(tool)) {
+      return;
+    }
+
+    if (tool.type === "function") {
+      const name = readResponsesToolName(tool);
+      if (!name) {
+        return;
+      }
+      const chatName = namespace
+        ? flattenNamespaceToolName(namespace, name)
+        : sanitizeChatToolName(name);
+      const chatTool = convertResponsesFunctionToolToChatTool(tool, chatName);
+      if (!chatTool) {
+        return;
+      }
+      addChatTool(
+        chatName,
+        {
+          kind: namespace ? "namespace" : "function",
+          name,
+          ...(namespace ? { namespace } : {}),
+        },
+        chatTool,
+      );
+      return;
+    }
+
+    if (tool.type === "custom") {
+      addCustomTool(tool);
+      return;
+    }
+
+    if (tool.type === "tool_search") {
+      addToolSearchTool();
+      return;
+    }
+
+    if (tool.type === "namespace") {
+      const namespaceName = typeof tool.name === "string" ? tool.name : "";
+      const children = Array.isArray(tool.tools)
+        ? tool.tools
+        : Array.isArray(tool.children)
+          ? tool.children
+          : [];
+      if (!namespaceName || children.length === 0) {
+        return;
+      }
+      for (const child of children) {
+        addResponseTool(child, namespaceName);
+      }
+    }
+  };
+
+  const addCustomTool = (tool: Record<string, unknown>) => {
+    const name = readResponsesToolName(tool);
+    if (!name) {
+      return;
+    }
+    const chatName = sanitizeChatToolName(name);
+    addChatTool(
+      chatName,
+      {
+        kind: "custom",
+        name,
+      },
+      convertCustomToolToChatFunction(tool, chatName),
+    );
+  };
+
+  const addToolSearchTool = () => {
+    addChatTool(
+      toolSearchProxyName,
+      {
+        kind: "tool_search",
+        name: toolSearchProxyName,
+      },
+      {
+        type: "function",
+        function: {
+          name: toolSearchProxyName,
+          description:
+            "Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "Search query for tools or connectors to load.",
+              },
+              limit: {
+                type: "integer",
+                description: "Maximum number of tool groups to return.",
+              },
+            },
+            required: ["query"],
+          },
+        },
+      },
+    );
+  };
+
+  if (Array.isArray(body.tools)) {
+    for (const tool of body.tools) {
+      addResponseTool(tool);
+    }
+  }
+
+  collectToolSearchOutputTools(body.input, addResponseTool);
+
+  return context;
+}
+
+function buildResponsesToChatCompletionsBody(
+  body: ProxyBody,
+  transformContext?: ProxyTransformContext,
+): ProxyBody {
+  const { input, instructions, max_output_tokens, output, ...rest } =
+    body as ProxyBody & {
+      input?: unknown;
+      instructions?: unknown;
+      max_output_tokens?: unknown;
+      output?: unknown;
+    };
   const chatBody: ProxyBody = { ...rest };
+  const toolContext =
+    transformContext?.toolContext ?? buildToolConversionContext(body);
 
   if (max_output_tokens !== undefined && chatBody.max_tokens === undefined) {
     chatBody.max_tokens = max_output_tokens;
   }
 
-  if (Array.isArray(chatBody.tools)) {
-    chatBody.tools = chatBody.tools
-      .map(convertResponsesToolToChatTool)
-      .filter((tool) => tool !== null);
+  if (Array.isArray(chatBody.tools) || toolContext.chatTools.length > 0) {
+    chatBody.tools = toolContext.chatTools;
   }
 
-  if (
-    isPlainObject(chatBody.tool_choice) &&
-    typeof chatBody.tool_choice.name === "string"
-  ) {
-    chatBody.tool_choice = {
-      type: "function",
-      function: { name: chatBody.tool_choice.name },
-    };
+  if (chatBody.tool_choice !== undefined) {
+    chatBody.tool_choice = convertResponsesToolChoiceToChatToolChoice(
+      chatBody.tool_choice,
+      toolContext,
+    );
   }
 
-  const messages = buildChatMessages(input, instructions);
+  const messages = collapseSystemMessagesToHead(
+    buildChatMessages(input, instructions, toolContext),
+  );
   if (messages.length > 0) {
     chatBody.messages = messages;
+  }
+
+  if (!Array.isArray(chatBody.tools) || chatBody.tools.length === 0) {
+    delete chatBody.tools;
+    delete chatBody.tool_choice;
+    delete chatBody.parallel_tool_calls;
   }
 
   return chatBody;
@@ -571,7 +783,7 @@ function convertResponsesToolToChatTool(tool: unknown) {
   return {
     type,
     function: {
-      name,
+      name: sanitizeChatToolName(name),
       ...(typeof description === "string" ? { description } : {}),
       ...(parameters !== undefined ? { parameters } : {}),
       ...(strict !== undefined ? { strict } : {}),
@@ -579,7 +791,44 @@ function convertResponsesToolToChatTool(tool: unknown) {
   };
 }
 
-function convertCustomToolToChatFunction(tool: Record<string, unknown>) {
+function convertResponsesFunctionToolToChatTool(
+  tool: Record<string, unknown>,
+  chatName: string,
+) {
+  if (tool.type !== "function") {
+    return null;
+  }
+
+  if (isPlainObject(tool.function)) {
+    return {
+      type: "function",
+      function: {
+        ...tool.function,
+        name: chatName,
+        ...(tool.strict !== undefined && tool.function.strict === undefined
+          ? { strict: tool.strict }
+          : {}),
+      },
+    };
+  }
+
+  return {
+    type: "function",
+    function: {
+      name: chatName,
+      ...(typeof tool.description === "string"
+        ? { description: tool.description }
+        : {}),
+      ...(tool.parameters !== undefined ? { parameters: tool.parameters } : {}),
+      ...(tool.strict !== undefined ? { strict: tool.strict } : {}),
+    },
+  };
+}
+
+function convertCustomToolToChatFunction(
+  tool: Record<string, unknown>,
+  chatName?: string,
+) {
   const { name, description } = tool;
   if (typeof name !== "string" || !name.trim()) {
     return null;
@@ -588,37 +837,234 @@ function convertCustomToolToChatFunction(tool: Record<string, unknown>) {
   return {
     type: "function",
     function: {
-      name,
+      name: chatName ?? sanitizeChatToolName(name),
       description:
         typeof description === "string"
-          ? `${description}\n\nThis tool originally accepted a raw custom-tool input. Put the complete raw input in the string field named input.`
-          : "Custom tool compatibility wrapper. Put the complete raw input in the string field named input.",
+          ? `${description}\n\nOriginal tool definition:\n${safeJsonStringify(tool)}\n\nThis tool originally accepted a raw custom-tool input. Put the complete raw input in the string field named input. Preserve formatting exactly.`
+          : `Original tool definition:\n${safeJsonStringify(tool)}\n\nCustom tool compatibility wrapper. Put the complete raw input in the string field named input. Preserve formatting exactly.`,
       parameters: {
         type: "object",
         properties: {
-          input: {
+          [customToolInputField]: {
             type: "string",
             description: "Raw input for the custom tool.",
           },
         },
-        required: ["input"],
+        required: [customToolInputField],
         additionalProperties: false,
       },
     },
   };
 }
 
-function buildChatCompletionsToResponsesBody(body: ProxyBody): ProxyBody {
-  const {
-    messages,
-    max_tokens,
-    max_completion_tokens,
-    ...rest
-  } = body as ProxyBody & {
-    messages?: unknown;
-    max_tokens?: unknown;
-    max_completion_tokens?: unknown;
+function convertResponsesToolChoiceToChatToolChoice(
+  toolChoice: unknown,
+  toolContext: ToolConversionContext,
+) {
+  if (!isPlainObject(toolChoice)) {
+    return toolChoice;
+  }
+
+  if (toolChoice.type === "tool_search") {
+    return {
+      type: "function",
+      function: { name: toolSearchProxyName },
+    };
+  }
+
+  if (toolChoice.type !== "function" && toolChoice.type !== "custom") {
+    return toolChoice;
+  }
+
+  const name = typeof toolChoice.name === "string" ? toolChoice.name : "";
+  if (!name) {
+    return toolChoice;
+  }
+
+  const chatName =
+    toolChoice.type === "function"
+      ? chatNameForResponsesFunction(
+          name,
+          typeof toolChoice.namespace === "string"
+            ? toolChoice.namespace
+            : undefined,
+          toolContext,
+        )
+      : chatNameForCustomTool(name, toolContext);
+
+  return {
+    type: "function",
+    function: { name: chatName },
   };
+}
+
+function readResponsesToolName(tool: Record<string, unknown>) {
+  if (typeof tool.name === "string" && tool.name.trim()) {
+    return tool.name.trim();
+  }
+
+  const fn = isPlainObject(tool.function) ? tool.function : null;
+  if (typeof fn?.name === "string" && fn.name.trim()) {
+    return fn.name.trim();
+  }
+
+  return "";
+}
+
+function rewriteChatToolName(tool: unknown, chatName: string) {
+  if (!isPlainObject(tool)) {
+    return tool;
+  }
+
+  const fn = isPlainObject(tool.function) ? tool.function : null;
+  if (!fn) {
+    return tool;
+  }
+
+  return {
+    ...tool,
+    function: {
+      ...fn,
+      name: chatName,
+    },
+  };
+}
+
+function collectToolSearchOutputTools(
+  value: unknown,
+  addResponseTool: (tool: unknown) => void,
+) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectToolSearchOutputTools(item, addResponseTool);
+    }
+    return;
+  }
+
+  if (!isPlainObject(value)) {
+    return;
+  }
+
+  if (value.type === "tool_search_output" && Array.isArray(value.tools)) {
+    for (const tool of value.tools) {
+      addResponseTool(tool);
+    }
+  }
+
+  for (const item of Object.values(value)) {
+    collectToolSearchOutputTools(item, addResponseTool);
+  }
+}
+
+function namespaceToolKey(namespace: string, name: string) {
+  return `${namespace}\u0000${name}`;
+}
+
+function chatNameForResponsesFunction(
+  name: string,
+  namespace: string | undefined,
+  toolContext: ToolConversionContext,
+) {
+  if (namespace) {
+    return (
+      toolContext.namespaceNameToChatName.get(
+        namespaceToolKey(namespace, name),
+      ) ?? flattenNamespaceToolName(namespace, name)
+    );
+  }
+
+  return chatNameForCustomTool(name, toolContext);
+}
+
+function chatNameForCustomTool(
+  name: string,
+  toolContext: ToolConversionContext,
+) {
+  for (const spec of toolContext.specsByChatName.values()) {
+    if (!spec.namespace && spec.name === name) {
+      return spec.chatName;
+    }
+  }
+
+  return sanitizeChatToolName(name);
+}
+
+function ensureUniqueChatToolName(
+  requestedName: string,
+  toolContext: ToolConversionContext,
+) {
+  const baseName = truncateChatToolName(sanitizeChatToolName(requestedName));
+  if (!toolContext.specsByChatName.has(baseName)) {
+    return baseName;
+  }
+
+  for (let index = 2; index < 1000; index += 1) {
+    const suffix = `_${index}`;
+    const candidate = `${baseName.slice(0, chatToolNameMaxLength - suffix.length)}${suffix}`;
+    if (!toolContext.specsByChatName.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return truncateChatToolName(
+    `${baseName}_${shortHash(`${baseName}:${Date.now()}`)}`,
+  );
+}
+
+function flattenNamespaceToolName(namespace: string, name: string) {
+  return truncateChatToolName(
+    sanitizeChatToolName(`${namespace}__${name}`),
+    `${namespace}__${name}`,
+  );
+}
+
+function sanitizeChatToolName(name: string) {
+  const sanitized = name.trim().replace(/[^A-Za-z0-9_-]/g, "_");
+  return sanitized || "tool";
+}
+
+function truncateChatToolName(name: string, hashSource = name) {
+  if (name.length <= chatToolNameMaxLength) {
+    return name;
+  }
+
+  const suffix = `__${shortHash(hashSource)}`;
+  return `${name.slice(0, chatToolNameMaxLength - suffix.length)}${suffix}`;
+}
+
+function shortHash(value: string) {
+  return createHash("sha256").update(value).digest("hex").slice(0, 10);
+}
+
+function collapseSystemMessagesToHead(
+  messages: Array<Record<string, unknown>>,
+) {
+  const systemChunks: string[] = [];
+  const rest: Array<Record<string, unknown>> = [];
+
+  for (const message of messages) {
+    if (message.role === "system" && typeof message.content === "string") {
+      const trimmed = message.content.trim();
+      if (trimmed) {
+        systemChunks.push(message.content);
+      }
+      continue;
+    }
+    rest.push(message);
+  }
+
+  return systemChunks.length > 0
+    ? [{ role: "system", content: systemChunks.join("\n\n") }, ...rest]
+    : rest;
+}
+
+function buildChatCompletionsToResponsesBody(body: ProxyBody): ProxyBody {
+  const { messages, max_tokens, max_completion_tokens, ...rest } =
+    body as ProxyBody & {
+      messages?: unknown;
+      max_tokens?: unknown;
+      max_completion_tokens?: unknown;
+    };
   const responsesBody: ProxyBody = { ...rest };
 
   if (responsesBody.input === undefined) {
@@ -633,11 +1079,90 @@ function buildChatCompletionsToResponsesBody(body: ProxyBody): ProxyBody {
     responsesBody.max_output_tokens = outputTokenLimit;
   }
 
+  if (Array.isArray(responsesBody.tools)) {
+    responsesBody.tools = responsesBody.tools
+      .map(convertChatToolToResponsesTool)
+      .filter((tool) => tool !== null);
+  }
+
+  responsesBody.tool_choice = convertChatToolChoiceToResponsesToolChoice(
+    responsesBody.tool_choice,
+  );
+
   return responsesBody;
 }
 
-function buildChatMessages(input: unknown, instructions: unknown) {
+function convertChatToolToResponsesTool(tool: unknown) {
+  if (!isPlainObject(tool)) {
+    return null;
+  }
+
+  if (tool.type !== "function") {
+    return tool;
+  }
+
+  if (typeof tool.name === "string") {
+    return tool;
+  }
+
+  const fn = isPlainObject(tool.function) ? tool.function : null;
+  if (!fn || typeof fn.name !== "string" || !fn.name) {
+    return null;
+  }
+
+  return {
+    type: "function",
+    name: fn.name,
+    ...(typeof fn.description === "string"
+      ? { description: fn.description }
+      : {}),
+    ...(fn.parameters !== undefined ? { parameters: fn.parameters } : {}),
+    ...(fn.strict !== undefined ? { strict: fn.strict } : {}),
+  };
+}
+
+function convertChatToolChoiceToResponsesToolChoice(toolChoice: unknown) {
+  if (!isPlainObject(toolChoice)) {
+    return toolChoice;
+  }
+
+  if (toolChoice.type !== "function") {
+    return toolChoice;
+  }
+
+  const fn = isPlainObject(toolChoice.function) ? toolChoice.function : null;
+  const name = typeof fn?.name === "string" ? fn.name : null;
+  if (!name) {
+    return toolChoice;
+  }
+
+  return {
+    type: "function",
+    name,
+  };
+}
+
+function buildChatMessages(
+  input: unknown,
+  instructions: unknown,
+  toolContext: ToolConversionContext,
+) {
   const messages: Array<Record<string, unknown>> = [];
+  let pendingToolCalls: Array<Record<string, unknown>> = [];
+
+  const flushPendingToolCalls = () => {
+    if (pendingToolCalls.length === 0) {
+      return;
+    }
+
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: pendingToolCalls,
+    });
+    pendingToolCalls = [];
+  };
+
   if (typeof instructions === "string" && instructions.trim()) {
     messages.push({ role: "system", content: instructions });
   }
@@ -649,12 +1174,25 @@ function buildChatMessages(input: unknown, instructions: unknown) {
 
   if (Array.isArray(input)) {
     for (const item of input) {
+      const toolCall = convertResponsesToolCallInputToChatToolCall(
+        item,
+        toolContext,
+      );
+      if (toolCall) {
+        pendingToolCalls.push(toolCall);
+        continue;
+      }
+
+      flushPendingToolCalls();
+
       const message = convertResponsesInputItemToChatMessage(item);
       if (message) {
         messages.push(message);
       }
     }
   }
+
+  flushPendingToolCalls();
 
   return messages;
 }
@@ -664,17 +1202,49 @@ function convertResponsesInputItemToChatMessage(item: unknown) {
     return null;
   }
 
+  const toolOutputMessage = convertResponsesToolOutputToChatMessage(item);
+  if (toolOutputMessage) {
+    return toolOutputMessage;
+  }
+
+  if (
+    item.type === "input_text" ||
+    item.type === "output_text" ||
+    item.type === "input_image" ||
+    item.type === "input_file" ||
+    item.type === "input_audio"
+  ) {
+    const role = normalizeChatMessageRole(item.role);
+    return {
+      role,
+      content: convertResponsesContentToChatContent([item]),
+    };
+  }
+
   const role = normalizeChatMessageRole(item.role);
   const content = convertResponsesContentToChatContent(item.content);
   if (content === undefined) {
     return null;
   }
 
+  if (role === "tool") {
+    const toolCallId = readToolCallId(item);
+    if (!toolCallId) {
+      return null;
+    }
+
+    return {
+      role,
+      tool_call_id: toolCallId,
+      content: stringifyChatToolContent(content),
+    };
+  }
+
   return { role, content };
 }
 
 function normalizeChatMessageRole(role: unknown) {
-  if (role === "developer") {
+  if (role === "developer" || role === "latest_reminder") {
     return "system";
   }
 
@@ -682,8 +1252,7 @@ function normalizeChatMessageRole(role: unknown) {
     role === "system" ||
     role === "user" ||
     role === "assistant" ||
-    role === "tool" ||
-    role === "latest_reminder"
+    role === "tool"
   ) {
     return role;
   }
@@ -706,15 +1275,201 @@ function convertResponsesContentToChatContent(content: unknown) {
         return part;
       }
 
-      if (part.type === "input_text") {
-        return { ...part, type: "text" };
+      if (part.type === "input_text" || part.type === "output_text") {
+        return {
+          type: "text",
+          text: typeof part.text === "string" ? part.text : "",
+        };
       }
 
-      return part;
+      if (part.type === "text") {
+        return {
+          type: "text",
+          text: typeof part.text === "string" ? part.text : "",
+        };
+      }
+
+      return {
+        type: "text",
+        text: describeOmittedResponsesContentPart(part.type),
+      };
     })
     .filter((part) => part !== undefined);
 
   return converted.length > 0 ? converted : undefined;
+}
+
+function describeOmittedResponsesContentPart(type: unknown) {
+  if (type === "input_image") {
+    return "[Image input omitted: this chat-completions upstream accepts text content only.]";
+  }
+
+  if (type === "input_file") {
+    return "[File input omitted: this chat-completions upstream accepts text content only.]";
+  }
+
+  const label = typeof type === "string" && type ? type : "unknown";
+  return `[${label} content omitted: this chat-completions upstream accepts text content only.]`;
+}
+
+function convertResponsesToolCallInputToChatToolCall(
+  item: unknown,
+  toolContext: ToolConversionContext,
+) {
+  if (!isPlainObject(item)) {
+    return null;
+  }
+
+  if (
+    item.type !== "function_call" &&
+    item.type !== "custom_tool_call" &&
+    item.type !== "tool_search_call"
+  ) {
+    return null;
+  }
+
+  const name =
+    item.type === "tool_search_call"
+      ? toolSearchProxyName
+      : typeof item.name === "string"
+        ? item.name
+        : null;
+  if (!name) {
+    return null;
+  }
+
+  const id = readToolCallId(item) ?? `call_${Date.now()}`;
+  const rawArguments =
+    item.type === "custom_tool_call"
+      ? stringifyChatToolArguments({
+          [customToolInputField]:
+            typeof item.input === "string"
+              ? item.input
+              : stringifyChatToolContent(item.input),
+        })
+      : stringifyChatToolArguments(item.arguments);
+  const chatName =
+    item.type === "function_call"
+      ? chatNameForResponsesFunction(
+          name,
+          typeof item.namespace === "string" ? item.namespace : undefined,
+          toolContext,
+        )
+      : item.type === "custom_tool_call"
+        ? chatNameForCustomTool(name, toolContext)
+        : toolSearchProxyName;
+
+  return {
+    id,
+    type: "function",
+    function: {
+      name: chatName,
+      arguments: rawArguments,
+    },
+  };
+}
+
+function convertResponsesToolOutputToChatMessage(
+  item: Record<string, unknown>,
+) {
+  const isToolOutput =
+    item.type === "function_call_output" ||
+    item.type === "custom_tool_call_output" ||
+    item.type === "tool_search_output" ||
+    item.type === "tool_call_output" ||
+    item.type === "tool_result" ||
+    item.role === "tool";
+  if (!isToolOutput) {
+    return null;
+  }
+
+  const toolCallId = readToolCallId(item);
+  if (!toolCallId) {
+    return null;
+  }
+
+  return {
+    role: "tool",
+    tool_call_id: toolCallId,
+    content: stringifyChatToolContent(
+      item.output ?? item.content ?? item.result ?? "",
+    ),
+  };
+}
+
+function readToolCallId(item: Record<string, unknown>) {
+  if (typeof item.call_id === "string" && item.call_id) {
+    return item.call_id;
+  }
+
+  if (typeof item.tool_call_id === "string" && item.tool_call_id) {
+    return item.tool_call_id;
+  }
+
+  if (typeof item.id === "string" && item.id) {
+    return item.id;
+  }
+
+  return null;
+}
+
+function stringifyChatToolArguments(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value === undefined) {
+    return "{}";
+  }
+
+  return safeJsonStringify(value ?? {});
+}
+
+function stringifyChatToolContent(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  if (Array.isArray(value)) {
+    const text = value
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+
+        if (isPlainObject(part) && typeof part.text === "string") {
+          return part.text;
+        }
+
+        return "";
+      })
+      .join("");
+    if (text) {
+      return text;
+    }
+  }
+
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+
+  return safeJsonStringify(value);
+}
+
+function safeJsonStringify(value: unknown) {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return String(value);
+  }
 }
 
 function buildResponsesInputFromChatMessages(messages: unknown) {
@@ -722,24 +1477,52 @@ function buildResponsesInputFromChatMessages(messages: unknown) {
     return messages;
   }
 
-  return messages
-    .map((message) => {
-      if (!isPlainObject(message)) {
-        return null;
-      }
+  return messages.flatMap((message) =>
+    convertChatMessageToResponsesInputItems(message),
+  );
+}
 
-      const role = typeof message.role === "string" ? message.role : "user";
-      const content = convertChatContentToResponsesContent(message.content);
-      if (content === undefined) {
-        return null;
-      }
+function convertChatMessageToResponsesInputItems(message: unknown) {
+  if (!isPlainObject(message)) {
+    return [];
+  }
 
-      return { role, content };
-    })
-    .filter((message) => message !== null);
+  const role = typeof message.role === "string" ? message.role : "user";
+  if (role === "tool" || typeof message.tool_call_id === "string") {
+    const toolCallId = readToolCallId(message);
+    if (!toolCallId) {
+      return [];
+    }
+
+    return [
+      {
+        type: "function_call_output",
+        call_id: toolCallId,
+        output: stringifyChatToolContent(message.content),
+      },
+    ];
+  }
+
+  const inputItems: Array<Record<string, unknown>> = [];
+  const content = convertChatContentToResponsesContent(message.content);
+  if (content !== undefined) {
+    inputItems.push({ role, content });
+  }
+
+  if (Array.isArray(message.tool_calls)) {
+    inputItems.push(
+      ...convertChatToolCallsToResponsesOutput(message.tool_calls),
+    );
+  }
+
+  return inputItems;
 }
 
 function convertChatContentToResponsesContent(content: unknown) {
+  if (content === null || content === undefined) {
+    return undefined;
+  }
+
   if (typeof content === "string") {
     return content;
   }
@@ -765,7 +1548,10 @@ function convertChatContentToResponsesContent(content: unknown) {
   return converted.length > 0 ? converted : undefined;
 }
 
-function chatCompletionsResponseToResponses(responseBody: unknown) {
+function chatCompletionsResponseToResponses(
+  responseBody: unknown,
+  toolContext?: ToolConversionContext,
+) {
   if (!isPlainObject(responseBody)) {
     return responseBody;
   }
@@ -775,9 +1561,20 @@ function chatCompletionsResponseToResponses(responseBody: unknown) {
     : undefined;
   const message = isPlainObject(choice?.message) ? choice.message : {};
   const content = extractChatMessageText(message.content);
-  const toolCalls = convertChatToolCallsToResponsesOutput(message.tool_calls);
+  const toolCalls = convertChatToolCallsToResponsesOutput(
+    message.tool_calls,
+    toolContext,
+  );
+  const finishReason =
+    typeof choice?.finish_reason === "string" ? choice.finish_reason : null;
+  const status =
+    finishReason === "length" || finishReason === "content_filter"
+      ? "incomplete"
+      : "completed";
   const id =
-    typeof responseBody.id === "string" ? responseBody.id : `resp_${Date.now()}`;
+    typeof responseBody.id === "string"
+      ? responseBody.id
+      : `resp_${Date.now()}`;
   const model =
     typeof responseBody.model === "string" ? responseBody.model : undefined;
   const createdAt =
@@ -789,7 +1586,17 @@ function chatCompletionsResponseToResponses(responseBody: unknown) {
     id,
     object: "response",
     created_at: createdAt,
-    status: "completed",
+    status,
+    ...(status === "incomplete"
+      ? {
+          incomplete_details: {
+            reason:
+              finishReason === "content_filter"
+                ? "content_filter"
+                : "max_output_tokens",
+          },
+        }
+      : {}),
     model,
     output: [
       ...(content
@@ -817,45 +1624,129 @@ function chatCompletionsResponseToResponses(responseBody: unknown) {
   };
 }
 
-function convertChatToolCallsToResponsesOutput(toolCalls: unknown) {
+export function convertChatToolCallToResponsesOutput(
+  toolCall: unknown,
+  index: number,
+  toolContext?: ToolConversionContext,
+) {
+  if (!isPlainObject(toolCall)) {
+    return null;
+  }
+
+  const fn = isPlainObject(toolCall.function) ? toolCall.function : null;
+  const chatName = typeof fn?.name === "string" ? fn.name : null;
+  if (!chatName) {
+    return null;
+  }
+
+  const rawArguments = typeof fn?.arguments === "string" ? fn.arguments : "{}";
+  const callId =
+    typeof toolCall.id === "string"
+      ? toolCall.id
+      : `call_${Date.now()}_${index}`;
+  const spec = toolContext?.specsByChatName.get(chatName);
+  const itemId = responseToolCallItemId(callId, spec);
+
+  if (spec?.kind === "tool_search") {
+    return {
+      type: "tool_search_call",
+      call_id: callId,
+      status: "completed",
+      execution: "client",
+      arguments: parseToolArgumentsObject(rawArguments),
+    };
+  }
+
+  if (spec?.kind === "custom") {
+    return {
+      id: itemId,
+      type: "custom_tool_call",
+      call_id: callId,
+      name: spec.name,
+      status: "completed",
+      input: customToolInputFromChatArguments(rawArguments),
+    };
+  }
+
+  if (spec) {
+    return {
+      id: itemId,
+      type: "function_call",
+      call_id: callId,
+      name: spec.name,
+      status: "completed",
+      ...(spec.namespace ? { namespace: spec.namespace } : {}),
+      arguments: rawArguments,
+    };
+  }
+
+  const customInput = extractCustomToolInput(rawArguments);
+  return {
+    id: callId,
+    type: customInput === null ? "function_call" : "custom_tool_call",
+    call_id: callId,
+    name: chatName,
+    status: "completed",
+    ...(customInput === null
+      ? { arguments: rawArguments }
+      : { input: customInput }),
+  };
+}
+
+function convertChatToolCallsToResponsesOutput(
+  toolCalls: unknown,
+  toolContext?: ToolConversionContext,
+) {
   if (!Array.isArray(toolCalls)) {
     return [];
   }
 
   return toolCalls
-    .map((toolCall, index) => {
-      if (!isPlainObject(toolCall)) {
-        return null;
-      }
-
-      const fn = isPlainObject(toolCall.function) ? toolCall.function : null;
-      const name = typeof fn?.name === "string" ? fn.name : null;
-      if (!name) {
-        return null;
-      }
-
-      const rawArguments =
-        typeof fn?.arguments === "string" ? fn.arguments : "{}";
-      const customInput = extractCustomToolInput(rawArguments);
-
-      return {
-        id:
-          typeof toolCall.id === "string"
-            ? toolCall.id
-            : `call_${Date.now()}_${index}`,
-        type: customInput === null ? "function_call" : "custom_tool_call",
-        call_id:
-          typeof toolCall.id === "string"
-            ? toolCall.id
-            : `call_${Date.now()}_${index}`,
-        name,
-        status: "completed",
-        ...(customInput === null
-          ? { arguments: rawArguments }
-          : { input: customInput }),
-      };
-    })
+    .map((toolCall, index) =>
+      convertChatToolCallToResponsesOutput(toolCall, index, toolContext),
+    )
     .filter((item) => item !== null);
+}
+
+export function responseToolCallItemId(callId: string, spec?: ChatToolSpec) {
+  return spec?.kind === "custom" ? `ctc_${callId}` : `fc_${callId}`;
+}
+
+export function customToolInputFromChatArguments(rawArguments: string) {
+  if (!rawArguments.trim()) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(rawArguments) as unknown;
+    if (
+      isPlainObject(parsed) &&
+      typeof parsed[customToolInputField] === "string"
+    ) {
+      return parsed[customToolInputField];
+    }
+  } catch {
+    return rawArguments;
+  }
+
+  return rawArguments;
+}
+
+function parseToolArgumentsObject(rawArguments: string) {
+  if (!rawArguments.trim()) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawArguments) as unknown;
+    if (isPlainObject(parsed)) {
+      return parsed;
+    }
+  } catch {
+    return { query: rawArguments };
+  }
+
+  return { query: rawArguments };
 }
 
 function extractCustomToolInput(rawArguments: string) {
@@ -885,6 +1776,7 @@ function responsesResponseToChatCompletions(responseBody: unknown) {
       ? responseBody.id
       : `chatcmpl_${Date.now()}`;
   const outputText = extractResponsesOutputText(responseBody);
+  const toolCalls = convertResponsesOutputToChatToolCalls(responseBody.output);
   const model =
     typeof responseBody.model === "string" ? responseBody.model : undefined;
   const created =
@@ -902,14 +1794,66 @@ function responsesResponseToChatCompletions(responseBody: unknown) {
         index: 0,
         message: {
           role: "assistant",
-          content: outputText,
+          content: toolCalls.length > 0 && !outputText ? null : outputText,
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         },
         finish_reason:
-          responseBody.status === "incomplete" ? "length" : "stop",
+          responseBody.status === "incomplete"
+            ? "length"
+            : toolCalls.length > 0
+              ? "tool_calls"
+              : "stop",
       },
     ],
     usage: responsesUsageToChatUsage(responseBody.usage),
   };
+}
+
+function convertResponsesOutputToChatToolCalls(output: unknown) {
+  if (!Array.isArray(output)) {
+    return [];
+  }
+
+  return output
+    .map((item, index) => {
+      if (!isPlainObject(item)) {
+        return null;
+      }
+
+      if (item.type !== "function_call" && item.type !== "custom_tool_call") {
+        return null;
+      }
+
+      const name = typeof item.name === "string" ? item.name : null;
+      if (!name) {
+        return null;
+      }
+
+      const id =
+        typeof item.call_id === "string"
+          ? item.call_id
+          : typeof item.id === "string"
+            ? item.id
+            : `call_${Date.now()}_${index}`;
+      const rawArguments =
+        item.type === "custom_tool_call"
+          ? JSON.stringify({
+              input: typeof item.input === "string" ? item.input : "",
+            })
+          : typeof item.arguments === "string"
+            ? item.arguments
+            : "{}";
+
+      return {
+        id,
+        type: "function",
+        function: {
+          name,
+          arguments: rawArguments,
+        },
+      };
+    })
+    .filter((item) => item !== null);
 }
 
 function extractChatMessageText(content: unknown) {

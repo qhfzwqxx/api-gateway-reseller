@@ -2,7 +2,7 @@
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, Search, ShieldAlert, SlidersHorizontal, Square } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
 import { useUrlFilters } from "../../../hooks/use-url-filters";
@@ -72,6 +72,7 @@ const advancedFilterKeys = [
 export default function AdminRequestsPage() {
   const queryClient = useQueryClient();
   const { filters, setFilters, resetFilters } = useUrlFilters(defaultFilters);
+  const [searchDraft, setSearchDraft] = useState(filters.q);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [terminatingRequest, setTerminatingRequest] = useState<ApiRequestRecord | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -82,6 +83,7 @@ export default function AdminRequestsPage() {
     staleTime: 60_000,
   });
 
+  const hasActiveFilters = useMemo(() => hasActiveRequestFilters(filters), [filters]);
   const requestParams = useMemo<GetRequestsParams>(
     () => ({
       q: filters.q,
@@ -110,16 +112,31 @@ export default function AdminRequestsPage() {
       minFirstTokenLatencyMs: filters.minFirstTokenLatencyMs,
       maxFirstTokenLatencyMs: filters.maxFirstTokenLatencyMs,
       take: filters.take,
+      summaryMode: hasActiveFilters ? "page" : "full",
     }),
-    [filters],
+    [filters, hasActiveFilters],
   );
+
+  useEffect(() => {
+    setSearchDraft(filters.q);
+  }, [filters.q]);
+
+  useEffect(() => {
+    const normalizedSearch = normalizeRequestSearch(searchDraft);
+    if (normalizedSearch === filters.q) return;
+    const timer = window.setTimeout(() => {
+      setFilters({ q: normalizedSearch });
+    }, 450);
+
+    return () => window.clearTimeout(timer);
+  }, [filters.q, searchDraft, setFilters]);
 
   const requestsQuery = useInfiniteQuery({
     queryKey: ["admin", "requests", requestParams],
     queryFn: ({ pageParam }) => getRequests({ ...requestParams, cursor: pageParam || undefined }),
     initialPageParam: "",
     getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextCursor : undefined),
-    refetchInterval: 15_000,
+    refetchInterval: hasActiveFilters ? false : 15_000,
     refetchIntervalInBackground: false,
     staleTime: 0,
   });
@@ -151,7 +168,7 @@ export default function AdminRequestsPage() {
             <p className="mt-2 text-sm text-slate-500">联合筛选、游标分页与敏感报文审计。</p>
           </div>
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6">
-            <Summary label="总数" value={firstPage?.summary.totalCount ?? 0} />
+            <Summary label={hasActiveFilters ? "已加载" : "总数"} value={hasActiveFilters ? rows.length : (firstPage?.summary.totalCount ?? 0)} />
             <Summary label="成功" value={firstPage?.summary.successCount ?? 0} />
             <Summary label="失败" value={firstPage?.summary.failedCount ?? 0} />
             <Summary label="Token" value={firstPage?.summary.totalTokens ?? 0} />
@@ -169,8 +186,8 @@ export default function AdminRequestsPage() {
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
-                  value={filters.q}
-                  onChange={(event) => setFilters({ q: event.target.value })}
+                  value={searchDraft}
+                  onChange={(event) => setSearchDraft(event.target.value)}
                   placeholder="Trace / 模型 / 端点 / IP / 邮箱"
                   className={inputClassName("pl-9")}
                 />
@@ -655,8 +672,8 @@ function formatReasoningEffortCell(
   actualValue?: string | null,
 ) {
   const original = formatReasoningEffort(value);
-  if (!original) return "-";
   const actual = formatReasoningEffort(actualValue);
+  if (!original) return actual || "-";
   return actual && actual !== original ? `${original} -> ${actual}` : original;
 }
 
@@ -664,11 +681,13 @@ function formatReasoningEffort(value?: string | null) {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return "";
   const labels: Record<string, string> = {
+    none: "none",
     minimal: "minimal",
     low: "low",
     medium: "medium",
     high: "high",
     xhigh: "xhigh",
+    max: "max",
   };
   return labels[normalized] ?? value?.trim() ?? "";
 }
@@ -685,6 +704,18 @@ function formatDate(value: string) {
 
 function countActiveAdvancedFilters(filters: typeof defaultFilters) {
   return advancedFilterKeys.filter((key) => String(filters[key] ?? "").trim()).length;
+}
+
+function hasActiveRequestFilters(filters: typeof defaultFilters) {
+  return Object.entries(filters).some(([key, value]) => {
+    if (key === "take") return false;
+    return String(value ?? "").trim() !== "";
+  });
+}
+
+function normalizeRequestSearch(value: string) {
+  const text = value.trim();
+  return text.length >= 2 ? text : "";
 }
 
 function inputClassName(extraClassName = "") {

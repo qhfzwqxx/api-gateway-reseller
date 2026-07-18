@@ -752,7 +752,7 @@ GET 响应：
 
 ### 13.1 功能定位
 
-在代理请求前自动改写请求体中的推理强度字段，用于把用户提交的 `high/xhigh` 等降级为更低成本选项，或执行统一策略。
+在代理请求前自动改写请求体中的推理强度字段，用于执行通用 from/to 转换规则，或强制 GPT-5.6 系列模型使用统一强度。
 
 支持识别的字段：
 
@@ -772,11 +772,47 @@ GET 响应：
 ```json
 {
   "settings": {
-    "rules": []
+    "rules": [],
+    "gpt56Force": {
+      "enabled": false,
+      "effort": "medium"
+    }
   },
-  "options": ["low", "medium", "high", "xhigh"]
+  "options": ["none", "low", "medium", "high", "xhigh", "max"]
 }
 ```
+
+`gpt56Force` 开启后仅作用于 `/v1/responses`，匹配 `gpt-5.6` 及 `gpt-5.6-*` 系列模型。网关会覆盖已有的 `reasoning.effort`，客户端未传该字段时也会自动补充。
+
+## 14. Request Body 保留策略
+
+### 14.1 功能定位
+
+按照调用记录的 `createdAt` 自动清空超过保留天数的 `requestBody`。清理只更新 `requestBody = NULL`，不会修改或删除请求 ID、用户、API Key、模型、推理强度、状态、Token、费用、耗时、错误信息、`responseUsage`、`createdAt` 或 `updatedAt`。
+
+默认启用，默认保留 300 天。后台清理器在服务启动后执行一次，之后每小时运行；单次最多分 10 批、每批 500 条进行处理。
+
+### 14.2 接口
+
+```http
+GET /admin/request-body-retention-settings
+PUT /admin/request-body-retention-settings
+```
+
+保存请求：
+
+```json
+{
+  "enabled": true,
+  "retentionDays": 300
+}
+```
+
+允许范围为 1–3650 天。保存设置后会异步触发一次分批清理，不阻塞管理员接口响应。
+
+### 14.3 空间说明
+
+普通清理和 `VACUUM` 会让 PostgreSQL 内部复用被释放的 TOAST 页面，但操作系统看到的数据库文件大小通常不会立即下降。当前磁盘空间不足时不要执行 `VACUUM FULL`。
 
 保存请求：
 
@@ -1231,4 +1267,3 @@ IP 等级规则字段：
 - 上游 Key 设置：`POST /admin/upstream-providers/:id/keys`、`PATCH /admin/upstream-provider-keys/:id`。
 - 模型池与渠道：`POST/PATCH /admin/model-pools`、`POST/PATCH /admin/model-pool-channels`、批量 Provider 渠道操作。
 - 访问等级、IP 等级、专线：`/admin/access-tiers`、`/admin/ip-access-tiers`、`/admin/dedicated-route-rules`。
-

@@ -14,7 +14,6 @@ import {
   reserveProviderKey,
   type UpstreamKeyReservation,
 } from "./routing/key-selector.js";
-import { ensureStandardAccessTier } from "./access-routing.js";
 import { callableChannelStatuses } from "./routing/channel-state.js";
 import {
   createRoutingDecisionTrace,
@@ -102,7 +101,9 @@ export async function getProviderForModel(
   const modelPool = await findModelPoolForTier(model, options.tierId);
 
   if (!modelPool || modelPool.channels.length === 0) {
-    decisionTrace.unavailableReasons.push("没有可用模型池或模型池没有可路由渠道");
+    decisionTrace.unavailableReasons.push(
+      "没有可用模型池或模型池没有可路由渠道",
+    );
     return null;
   }
 
@@ -112,9 +113,10 @@ export async function getProviderForModel(
   );
   const excludedChannelIds = new Set(options.excludeChannelIds ?? []);
   const dispatchSettings = await readDispatchSettings();
-  const stickyRouteState = options.bypassSticky || !dispatchSettings.stickyEnabled
-    ? null
-    : await getStickyModelPoolRoute(scopedCallerIdentity, model);
+  const stickyRouteState =
+    options.bypassSticky || !dispatchSettings.stickyEnabled
+      ? null
+      : await getStickyModelPoolRoute(scopedCallerIdentity, model);
   decisionTrace.stickyTried = Boolean(stickyRouteState);
   if (!options.bypassSticky && !dispatchSettings.stickyEnabled) {
     await clearStickyModelPoolChannel(scopedCallerIdentity, model).catch(
@@ -167,7 +169,9 @@ export async function getProviderForModel(
     available: true,
   }));
   if (routeCandidates.length === 0) {
-    decisionTrace.unavailableReasons.push("没有通过价格、上游和 Key 检查的渠道");
+    decisionTrace.unavailableReasons.push(
+      "没有通过价格、上游和 Key 检查的渠道",
+    );
     return null;
   }
 
@@ -191,7 +195,9 @@ export async function getProviderForModel(
     );
     if (preparedRoute) {
       preparedRoute.decisionTrace = decisionTrace;
-      decisionTrace.selectedBy = balancedRoute.release ? "balanced" : "fallback";
+      decisionTrace.selectedBy = balancedRoute.release
+        ? "balanced"
+        : "fallback";
       decisionTrace.selectedChannelId = preparedRoute.channelId;
       decisionTrace.selectedProvider = preparedRoute.provider.name;
       decisionTrace.selectedUpstreamProviderKeyId =
@@ -215,20 +221,7 @@ export async function getProviderForModel(
 }
 
 async function findModelPoolForTier(model: string, tierId?: string | null) {
-  const requestedPool = tierId
-    ? await findActiveModelPool(model, tierId)
-    : null;
-
-  if (requestedPool) {
-    return requestedPool;
-  }
-
-  const standardTier = await ensureStandardAccessTier();
-  if (standardTier.id === tierId) {
-    return null;
-  }
-
-  return findActiveModelPool(model, standardTier.id);
+  return tierId ? findActiveModelPool(model, tierId) : null;
 }
 
 function findActiveModelPool(model: string, tierId: string) {

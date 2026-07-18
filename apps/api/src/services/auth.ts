@@ -63,6 +63,7 @@ export async function requireApiKey(
   app: FastifyInstance,
   request: ApiRequestWithUser,
   reply: FastifyReply,
+  options: { allowBannedUser?: boolean } = {},
 ) {
   const authorization = request.headers.authorization;
   const token = authorization?.startsWith("Bearer ")
@@ -96,11 +97,19 @@ export async function requireApiKey(
     },
   });
 
-  if (
-    !apiKey ||
-    apiKey.status !== "ACTIVE" ||
-    !["ACTIVE", "TRIAL"].includes(apiKey.user.status)
-  ) {
+  if (!apiKey || apiKey.status !== "ACTIVE") {
+    return sendApiError(reply, 401, "Invalid API key", "authentication_error");
+  }
+
+  if (!["ACTIVE", "TRIAL"].includes(apiKey.user.status)) {
+    if (options.allowBannedUser && apiKey.user.status === "BANNED") {
+      request.apiAuth = {
+        apiKey,
+        user: apiKey.user,
+      };
+      return;
+    }
+
     return sendApiError(reply, 401, "Invalid API key", "authentication_error");
   }
 

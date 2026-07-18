@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CircleStop, FileText, Flame, RadioTower, Save, Search, ShieldAlert, Trash2 } from "lucide-react";
+import { Ban, CircleStop, FileText, Flame, KeyRound, RadioTower, Save, Search, ShieldAlert, Trash2, UserX } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -19,10 +19,15 @@ import {
   updatePendingAutoTerminateSettings,
   updateRedisFailurePolicySettings,
   updateTemporaryIpNoticeBanSettings,
+  updateWhitelistFilterSettings,
+  updateBannedUserNoticeSettings,
+  rotateWhitelistFilterSecret,
+  type BannedUserNoticeSettings,
   type GatewayNoticeSettings,
   type GlobalCircuitBreakerSettings,
   type IpBanRule,
   type RedisFailurePolicySettings,
+  type WhitelistFilterSettings,
 } from "../../../lib/api/settings";
 
 const autoTerminateSchema = z.object({
@@ -48,6 +53,14 @@ const circuitSchema = z.object({
   allowedUserIdsText: z.string(),
   message: z.string().trim().min(1),
 });
+const whitelistSchema = z.object({
+  enabled: z.boolean(),
+  applyToAdmins: z.boolean(),
+  noticeText: z.string().trim().min(1),
+});
+const bannedUserNoticeSchema = z.object({
+  noticeText: z.string().trim().min(1),
+});
 const ipBanRuleSchema = z.object({
   ip: z.string().trim().min(1, "请输入 IP"),
   mode: z.enum(["notice", "error"]),
@@ -62,6 +75,10 @@ type RedisInput = z.input<typeof redisSchema>;
 type RedisValues = z.infer<typeof redisSchema>;
 type CircuitInput = z.input<typeof circuitSchema>;
 type CircuitValues = z.infer<typeof circuitSchema>;
+type WhitelistInput = z.input<typeof whitelistSchema>;
+type WhitelistValues = z.infer<typeof whitelistSchema>;
+type BannedUserNoticeInput = z.input<typeof bannedUserNoticeSchema>;
+type BannedUserNoticeValues = z.infer<typeof bannedUserNoticeSchema>;
 type IpBanRuleInput = z.input<typeof ipBanRuleSchema>;
 type IpBanRuleValues = z.output<typeof ipBanRuleSchema>;
 
@@ -132,15 +149,18 @@ export default function AdminRiskControlPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState("");
   const [confirmAction, setConfirmAction] = useState<null | "redis" | "circuit">(null);
-  const [activeModal, setActiveModal] = useState<null | "auto" | "gateway" | "redis" | "circuit" | "ip-ban">(null);
+  const [activeModal, setActiveModal] = useState<null | "auto" | "gateway" | "redis" | "circuit" | "ip-ban" | "whitelist" | "banned-users">(null);
   const [editingIpRule, setEditingIpRule] = useState<IpBanRule | null>(null);
   const [ipBanSearch, setIpBanSearch] = useState("");
+  const [bannedUserSearch, setBannedUserSearch] = useState("");
   const riskQuery = useQuery({ queryKey: ["admin", "risk-center"], queryFn: getRiskCenter });
 
   const autoTerminateForm = useForm<AutoTerminateInput, unknown, AutoTerminateValues>({ resolver: zodResolver(autoTerminateSchema) });
   const gatewayForm = useForm<GatewayValues>();
   const redisForm = useForm<RedisInput, unknown, RedisValues>({ resolver: zodResolver(redisSchema) });
   const circuitForm = useForm<CircuitInput, unknown, CircuitValues>({ resolver: zodResolver(circuitSchema) });
+  const whitelistForm = useForm<WhitelistInput, unknown, WhitelistValues>({ resolver: zodResolver(whitelistSchema) });
+  const bannedUserNoticeForm = useForm<BannedUserNoticeInput, unknown, BannedUserNoticeValues>({ resolver: zodResolver(bannedUserNoticeSchema) });
   const ipBanForm = useForm<IpBanRuleInput, unknown, IpBanRuleValues>({
     resolver: zodResolver(ipBanRuleSchema),
     defaultValues: { ip: "", mode: "notice", message: "当前 IP 已被网关封禁，请联系管理员。", reason: "" },
@@ -168,7 +188,13 @@ export default function AdminRiskControlPage() {
       ...data.globalCircuitBreakerSettings,
       allowedUserIdsText: data.globalCircuitBreakerSettings.allowedUserIds.join("\n"),
     });
-  }, [autoTerminateForm, circuitForm, gatewayForm, redisForm, riskQuery.data]);
+    whitelistForm.reset({
+      enabled: data.whitelistFilterSettings.enabled,
+      applyToAdmins: data.whitelistFilterSettings.applyToAdmins,
+      noticeText: data.whitelistFilterSettings.noticeText,
+    });
+    bannedUserNoticeForm.reset(data.bannedUserNoticeSettings);
+  }, [autoTerminateForm, bannedUserNoticeForm, circuitForm, gatewayForm, redisForm, whitelistForm, riskQuery.data]);
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["admin", "risk-center"] });
   const autoTerminateMutation = useMutation({
@@ -194,6 +220,21 @@ export default function AdminRiskControlPage() {
   const gatewayMutation = useMutation({ mutationFn: updateGatewayNoticeSettings, onSuccess: () => { setActiveModal(null); setNotice("网关提示文案已保存"); refresh(); }, onError: (error) => setNotice(errorToText(error)) });
   const redisMutation = useMutation({ mutationFn: updateRedisFailurePolicySettings, onSuccess: () => { setConfirmAction(null); setNotice("Redis 失败策略已保存"); refresh(); }, onError: (error) => setNotice(errorToText(error)) });
   const circuitMutation = useMutation({ mutationFn: updateGlobalCircuitBreakerSettings, onSuccess: () => { setConfirmAction(null); setNotice("全局熔断配置已保存"); refresh(); }, onError: (error) => setNotice(errorToText(error)) });
+  const whitelistMutation = useMutation({
+    mutationFn: updateWhitelistFilterSettings,
+    onSuccess: () => { setActiveModal(null); setNotice("白名单过滤设置已保存"); refresh(); },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+  const rotateWhitelistMutation = useMutation({
+    mutationFn: rotateWhitelistFilterSecret,
+    onSuccess: () => { setNotice("白名单密钥已切换，所有用户需要重新验证"); refresh(); },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+  const bannedUserNoticeMutation = useMutation({
+    mutationFn: updateBannedUserNoticeSettings,
+    onSuccess: () => { setNotice("封禁用户返回文案已保存"); refresh(); },
+    onError: (error) => setNotice(errorToText(error)),
+  });
   const ipBanMutation = useMutation({
     mutationFn: async (values: IpBanRuleValues) => {
       const payload = { mode: values.mode, message: values.message || null, reason: values.reason || null };
@@ -221,6 +262,20 @@ export default function AdminRiskControlPage() {
   const pendingSettings = riskQuery.data?.pendingAutoTerminateSettings;
   const redisSettings = riskQuery.data?.redisFailurePolicySettings;
   const circuitSettings = riskQuery.data?.globalCircuitBreakerSettings;
+  const whitelistSettings = riskQuery.data?.whitelistFilterSettings;
+  const bannedUserNoticeSettings = riskQuery.data?.bannedUserNoticeSettings;
+  const bannedUsers = riskQuery.data?.bannedUsers ?? [];
+  const filteredBannedUsers = bannedUsers.filter((user) => {
+    const keyword = bannedUserSearch.trim().toLowerCase();
+    if (!keyword) return true;
+    return [
+      user.email,
+      user.displayGroup,
+      user.statusReason ?? "",
+      String(user._count.apiKeys),
+      String(user._count.apiRequests),
+    ].some((value) => value.toLowerCase().includes(keyword));
+  });
   const ipBanRules = riskQuery.data?.ipBanRules ?? [];
   const filteredIpBanRules = ipBanRules.filter((rule) => {
     const keyword = ipBanSearch.trim().toLowerCase();
@@ -254,9 +309,11 @@ export default function AdminRiskControlPage() {
             onClick={() => setActiveModal("auto")}
           />
           <RiskActionCard icon={Ban} title="手动 IP 封禁" description="指定 IP 命中后直接返回公告或 403 错误，不再转发上游。" status={`${ipBanRules.length} 条规则`} danger={ipBanRules.length > 0} onClick={() => setActiveModal("ip-ban")} />
+          <RiskActionCard icon={UserX} title="封禁用户" description="查看当前被封禁的账号，封禁账号请求会收到公告返回。" status={`${bannedUsers.length} 个账号`} danger={bannedUsers.length > 0} onClick={() => setActiveModal("banned-users")} />
           <RiskActionCard icon={FileText} title="网关公告提示" description="限流、并发、模型不可用等返回文案。" status={`${gatewayNoticeFields.length} 个模板`} onClick={() => setActiveModal("gateway")} />
           <RiskActionCard icon={ShieldAlert} title="Redis 失败策略" description="控制 Redis 异常时网关放行、拒绝或降级。" status={redisSettings?.policy ?? "未加载"} onClick={() => setActiveModal("redis")} />
           <RiskActionCard icon={Flame} title="全局熔断" description="紧急维护或故障隔离时阻断普通 API 调用。" status={circuitSettings?.enabled ? "已开启" : "未开启"} danger={Boolean(circuitSettings?.enabled)} onClick={() => setActiveModal("circuit")} />
+          <RiskActionCard icon={KeyRound} title="白名单过滤" description="开启后所有账号先公告封禁，输入当前密钥后自动解封。" status={whitelistSettings?.enabled ? "已开启" : "未开启"} danger={Boolean(whitelistSettings?.enabled)} onClick={() => setActiveModal("whitelist")} />
         </section>
       )}
 
@@ -346,6 +403,60 @@ export default function AdminRiskControlPage() {
         </Modal>
       ) : null}
 
+      {activeModal === "banned-users" ? (
+        <Modal title="封禁用户" description="这些账号状态为封禁，调用代理接口时会收到封禁公告，不会继续请求上游。" onClose={() => { setActiveModal(null); setBannedUserSearch(""); }} wide showHeaderSave={false}>
+          <div className="grid gap-4">
+          <SettingCard formId="risk-banned-notice-form" title="自定义返回文案" description="被封禁账号调用代理接口时，会按公告格式返回这段内容。" form={bannedUserNoticeForm} loading={bannedUserNoticeMutation.isPending} onSubmit={(values) => bannedUserNoticeMutation.mutate(values)}>
+            <TextArea label="封禁公告返回内容" register={bannedUserNoticeForm.register("noticeText")} />
+            {bannedUserNoticeSettings?.noticeText ? <p className="text-xs text-slate-500">当前生效：{bannedUserNoticeSettings.noticeText}</p> : null}
+          </SettingCard>
+          <section className="risk-ip-ban-list-pane risk-banned-users-pane">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-950">被封禁账号</h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">如需解封，请到用户管理里编辑账号状态。</p>
+                </div>
+                <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700">{filteredBannedUsers.length}/{bannedUsers.length} 个</span>
+              </div>
+              <label className="risk-ip-ban-search">
+                <Search className="h-4 w-4" aria-hidden="true" />
+                <input
+                  type="search"
+                  value={bannedUserSearch}
+                  onChange={(event) => setBannedUserSearch(event.target.value)}
+                  placeholder="搜索邮箱、分组、原因或请求数"
+                  aria-label="搜索被封禁账号"
+                />
+              </label>
+            </div>
+            <div className="risk-ip-ban-list-scroll divide-y divide-slate-200">
+              {filteredBannedUsers.length ? filteredBannedUsers.map((user) => (
+                <article key={user.id} className="grid gap-3 px-5 py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-950">{user.email}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {user.displayGroup} · 创建于 {formatDateTime(user.createdAt)} · 封禁更新 {formatDateTime(user.updatedAt)}
+                      </div>
+                    </div>
+                    <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700">封禁</span>
+                  </div>
+                  {user.statusReason ? (
+                    <p className="rounded-md bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600">原因：{user.statusReason}</p>
+                  ) : null}
+                  <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-600">
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1">API Key：{user._count.apiKeys}</span>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1">历史请求：{user._count.apiRequests.toLocaleString("en-US")}</span>
+                  </div>
+                </article>
+              )) : <div className="px-5 py-10 text-center text-sm text-slate-500">{bannedUsers.length ? "没有匹配的封禁用户" : "暂无封禁用户"}</div>}
+            </div>
+          </section>
+          </div>
+        </Modal>
+      ) : null}
+
       {activeModal === "gateway" ? (
         <Modal title="网关公告提示" description="每一项都说明什么时候触发，以及命中后返回给用户的文案内容。" onClose={() => setActiveModal(null)} formId="risk-gateway-form" loading={gatewayMutation.isPending} wide>
           <SettingCard formId="risk-gateway-form" hideActions title="网关公告提示" description="集中维护网关直接返回给用户的文案。" form={gatewayForm} loading={gatewayMutation.isPending} onSubmit={(values) => gatewayMutation.mutate(values)}>
@@ -380,6 +491,47 @@ export default function AdminRiskControlPage() {
             <Toggle label="允许管理员调用" register={circuitForm.register("allowAdmins")} />
             <TextArea label="允许用户 ID，每行一个" register={circuitForm.register("allowedUserIdsText")} />
             <TextArea label="熔断提示" register={circuitForm.register("message")} />
+          </SettingCard>
+        </Modal>
+      ) : null}
+
+      {activeModal === "whitelist" ? (
+        <Modal title="白名单过滤" description="开启后未验证账号会收到公告封禁；切换密钥会让已验证用户全部重新验证。" onClose={() => setActiveModal(null)} formId="risk-whitelist-form" loading={whitelistMutation.isPending}>
+          <SettingCard formId="risk-whitelist-form" hideActions title="白名单过滤设置" description="密钥只在这里展示，用户需要在 /access 页面登录后填写。" form={whitelistForm} loading={whitelistMutation.isPending} onSubmit={(values) => whitelistMutation.mutate(values)}>
+            <section className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-950">当前密钥</h4>
+                  <p className="mt-1 text-sm text-slate-500">复制给需要放行的账号；切换后旧密钥立即失效。</p>
+                </div>
+                <button
+                  className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  type="button"
+                  disabled={!whitelistSettings?.secret}
+                  onClick={() => {
+                    if (whitelistSettings?.secret) {
+                      void navigator.clipboard.writeText(whitelistSettings.secret);
+                      setNotice("白名单密钥已复制");
+                    }
+                  }}
+                >
+                  复制密钥
+                </button>
+              </div>
+              <code className="block min-h-10 break-all rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-800">{whitelistSettings?.secret || "开启并保存后自动生成密钥"}</code>
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60"
+                type="button"
+                disabled={rotateWhitelistMutation.isPending}
+                onClick={() => rotateWhitelistMutation.mutate()}
+              >
+                <KeyRound className="h-4 w-4" aria-hidden="true" />
+                {rotateWhitelistMutation.isPending ? "切换中" : "随机切换密钥"}
+              </button>
+            </section>
+            <Toggle label="开启白名单过滤" register={whitelistForm.register("enabled")} />
+            <Toggle label="对管理员账号也生效" register={whitelistForm.register("applyToAdmins")} />
+            <TextArea label="公告封禁返回内容" register={whitelistForm.register("noticeText")} />
           </SettingCard>
         </Modal>
       ) : null}

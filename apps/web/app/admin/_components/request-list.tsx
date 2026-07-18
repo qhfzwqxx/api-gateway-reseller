@@ -772,7 +772,7 @@ function RequestDetailModal({
             <RequestDetailField label="模型">
               {request.model}
             </RequestDetailField>
-            {showInternalFields && reasoningEffort ? (
+            {showInternalFields && (reasoningEffort || request.reasoningEffortActual) ? (
               <RequestDetailField label="推理强度">
                 {formatReasoningEffortCell(
                   reasoningEffort,
@@ -1069,11 +1069,13 @@ function getRequestReasoningEffort(
 function formatReasoningEffort(value: string) {
   const normalized = value.trim().toLowerCase();
   const labels: Record<string, string> = {
+    none: "none",
     minimal: "minimal",
     low: "low",
     medium: "medium",
     high: "high",
     xhigh: "xhigh",
+    max: "max",
   };
 
   return labels[normalized] ?? value.trim();
@@ -1102,11 +1104,11 @@ function formatReasoningEffortCell(
   actualValue?: string | null,
 ) {
   const trimmed = value?.trim();
+  const actual = actualValue?.trim();
   if (!trimmed) {
-    return "-";
+    return actual ? formatReasoningEffort(actual) : "-";
   }
 
-  const actual = actualValue?.trim();
   const originalLabel = formatReasoningEffort(trimmed);
   if (actual && actual.toLowerCase() !== trimmed.toLowerCase()) {
     return `${originalLabel} -> ${formatReasoningEffort(actual)}`;

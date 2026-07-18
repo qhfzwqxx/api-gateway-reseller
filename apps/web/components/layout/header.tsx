@@ -10,6 +10,7 @@ const pageTitles: Record<string, string> = {
   "/admin": "运营总览",
   "/admin/overview": "运营总览",
   "/admin/users": "用户与钱包",
+  "/admin/referrals": "邀请奖励",
   "/admin/redeem-codes": "兑换码",
   "/admin/subscriptions": "订阅管理",
   "/admin/upstreams": "上游管理",

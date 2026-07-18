@@ -5258,6 +5258,25 @@ tbody tr:hover td {
   overflow-wrap: anywhere;
 }
 
+.referral-full-link {
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 70%);
+  padding: 12px;
+}
+
+.referral-full-link code {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: #111827;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .inline-form {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
@@ -11057,6 +11076,11 @@ td .button-row.compact {
   box-shadow: 0 10px 28px rgb(15 23 42 / 6%);
 }
 
+.risk-banned-users-pane {
+  height: min(520px, calc(100dvh - 340px));
+  min-height: 320px;
+}
+
 .risk-ip-ban-search {
   display: flex;
   align-items: center;
@@ -11145,6 +11169,11 @@ td .button-row.compact {
 
   .risk-ip-ban-list-pane {
     max-height: 520px;
+  }
+
+  .risk-banned-users-pane {
+    height: min(520px, calc(100dvh - 300px));
+    min-height: 300px;
   }
 }
 

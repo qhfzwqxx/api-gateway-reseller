@@ -21,13 +21,19 @@ export async function ensureWalletCanStart(userId: string) {
   });
 
   if (!wallet) {
-    return { ok: false as const, reason: "Wallet not found" };
+    return {
+      ok: false as const,
+      reason: "你的 APIshare 钱包余额不足，请充值后继续使用。",
+    };
   }
 
   const balance = new Decimal(wallet.balance.toString());
 
   if (balance.lte(0)) {
-    return { ok: false as const, reason: "Insufficient balance" };
+    return {
+      ok: false as const,
+      reason: "你的 APIshare 钱包余额不足，请充值后继续使用。",
+    };
   }
 
   return { ok: true as const, balance };
@@ -142,7 +148,6 @@ export async function chargeForRequest(params: {
   price: ModelPrice;
   usage: Usage;
   accessTierId?: string | null;
-  walletChargeAllowed?: boolean;
   startedAt?: number;
 }) {
   const {
@@ -151,7 +156,6 @@ export async function chargeForRequest(params: {
     price,
     usage,
     accessTierId,
-    walletChargeAllowed = true,
     startedAt,
   } = params;
   const chargePrice = await applyUnifiedCustomerPricing(price);
@@ -218,9 +222,7 @@ export async function chargeForRequest(params: {
           amountUsd: chargedAmountUsd,
         })).subscriptionAmount
       : new Decimal(0);
-    const walletCharge = walletChargeAllowed
-      ? chargedAmountUsd.minus(subscriptionCharge)
-      : new Decimal(0);
+    const walletCharge = chargedAmountUsd.minus(subscriptionCharge);
     const finalChargedAmountUsd = subscriptionCharge.plus(walletCharge);
 
     let balanceBefore = new Decimal(0);
@@ -267,7 +269,6 @@ export async function chargeForRequest(params: {
             calculatedChargedAmountUsd: chargedAmountUsd.toFixed(8),
             subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
             walletChargedAmountUsd: walletCharge.toFixed(8),
-            walletChargeAllowed,
           },
         },
       });
@@ -293,7 +294,6 @@ export async function chargeForRequest(params: {
             calculatedChargedAmountUsd: chargedAmountUsd.toFixed(8),
             subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
             walletChargedAmountUsd: "0",
-            walletChargeAllowed,
           },
         },
       });

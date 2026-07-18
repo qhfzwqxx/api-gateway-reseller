@@ -10,6 +10,7 @@ import { apiKeyRoutes } from "./routes/api-keys.js";
 import { walletRoutes } from "./routes/wallet.js";
 import { usageRoutes } from "./routes/usage.js";
 import { redeemCodeRoutes } from "./routes/redeem-codes.js";
+import { referralRoutes } from "./routes/referrals.js";
 import { subscriptionRoutes } from "./routes/subscriptions.js";
 import { proxyRoutes } from "./routes/proxy.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -20,6 +21,7 @@ import {
   startPendingRequestCleanupScheduler,
 } from "./services/pending-request-cleanup.js";
 import { startExternalAlertScheduler } from "./services/operational-alerts.js";
+import { startRequestBodyRetentionScheduler } from "./services/request-body-retention-settings.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -62,6 +64,7 @@ app.addContentTypeParser(
 let stopModelPoolHealthScheduler: (() => void) | undefined;
 let stopPendingRequestCleanupScheduler: (() => void) | undefined;
 let stopExternalAlertScheduler: (() => void) | undefined;
+let stopRequestBodyRetentionScheduler: (() => void) | undefined;
 
 app.decorate("redis", redis);
 
@@ -132,6 +135,7 @@ await app.register(apiKeyRoutes);
 await app.register(walletRoutes);
 await app.register(usageRoutes);
 await app.register(redeemCodeRoutes);
+await app.register(referralRoutes);
 await app.register(subscriptionRoutes);
 await app.register(proxyRoutes);
 await app.register(adminRoutes);
@@ -141,6 +145,7 @@ app.addHook("onClose", async () => {
   stopModelPoolHealthScheduler?.();
   stopPendingRequestCleanupScheduler?.();
   stopExternalAlertScheduler?.();
+  stopRequestBodyRetentionScheduler?.();
 });
 
 async function start() {
@@ -167,6 +172,9 @@ async function start() {
     );
     stopModelPoolHealthScheduler = startModelPoolHealthScheduler(app.log);
     stopExternalAlertScheduler = startExternalAlertScheduler(app, app.log);
+    stopRequestBodyRetentionScheduler = startRequestBodyRetentionScheduler(
+      app.log,
+    );
   } catch (error) {
     app.log.error(error);
     process.exit(1);

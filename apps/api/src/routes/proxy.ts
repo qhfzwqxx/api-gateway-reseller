@@ -64,8 +64,14 @@ import {
   canBypassGlobalCircuitBreaker,
   readGlobalCircuitBreakerSettings,
 } from "../services/global-circuit-breaker-settings.js";
+import { readBannedUserNoticeSettings } from "../services/banned-user-notice-settings.js";
+import {
+  isWhitelistFilterUnlocked,
+  readWhitelistFilterSettings,
+} from "../services/whitelist-filter-settings.js";
 import {
   buildUpstreamBody,
+  createProxyTransformContext,
   getClientIp,
   getUpstreamResponseMaxBytes,
   inferModelFromEndpoint,
@@ -87,6 +93,7 @@ import {
   shouldStreamResponse,
   transformProxyResponseBody,
   type ProxyBody,
+  type ProxyTransformContext,
 } from "../services/proxy-request-utils.js";
 import {
   buildNoticeStream,
@@ -132,6 +139,7 @@ import {
   getGatewaySessionIdentity,
 } from "../services/proxy-auth-context.js";
 import { createSafeStreamController } from "../services/proxy-stream-controller.js";
+import { createProxyStreamTransformer } from "../services/proxy-stream-transform.js";
 import {
   collectEncryptedContents,
   createCompactChannelFingerprint,
@@ -331,7 +339,9 @@ function callId() {
 async function imageUrlToBase64(url: string) {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Failed to fetch generated image URL: HTTP ${response.status}`);
+    throw new Error(
+      `Failed to fetch generated image URL: HTTP ${response.status}`,
+    );
   }
   const arrayBuffer = await response.arrayBuffer();
   return Buffer.from(arrayBuffer).toString("base64");
@@ -356,7 +366,9 @@ async function buildImageToolBridgeResponse(params: {
         ? await imageUrlToBase64(first.url)
         : "";
   const revisedPrompt =
-    typeof first?.revised_prompt === "string" ? first.revised_prompt : undefined;
+    typeof first?.revised_prompt === "string"
+      ? first.revised_prompt
+      : undefined;
   const createdAt = Math.floor(Date.now() / 1000);
 
   return {
@@ -440,11 +452,6 @@ export async function proxyRoutes(app: FastifyInstance) {
         );
       }
 
-      await requireApiKey(app, request, reply);
-      if (reply.sent || !request.apiAuth) {
-        return;
-      }
-
       const requestContentType = request.headers["content-type"];
       const multipartRawBody =
         endpoint === "/v1/images/edits" && Buffer.isBuffer(request.body)
@@ -458,7 +465,25 @@ export async function proxyRoutes(app: FastifyInstance) {
               : requestContentType,
           )
         : ((request.body ?? {}) as ProxyBody);
+
+      await requireApiKey(app, request, reply, { allowBannedUser: true });
+      if (reply.sent || !request.apiAuth) {
+        return;
+      }
+
       const { apiKey, user } = request.apiAuth;
+      if (user.status === "BANNED") {
+        const bannedUserNoticeSettings = await readBannedUserNoticeSettings();
+        return sendApiKeyNotice(
+          reply,
+          endpoint,
+          body,
+          upstreamRequestUrl,
+          bannedUserNoticeSettings.noticeText,
+          request.headers.accept,
+        );
+      }
+
       await prisma.$transaction((tx) => syncUserSubscriptionState(tx, user.id));
       const activeSubscription = await prisma.$transaction((tx) =>
         getActiveSubscriptionWithPlan(tx, user.id),
@@ -477,6 +502,52 @@ export async function proxyRoutes(app: FastifyInstance) {
         clientIp,
       });
       const gatewayNoticeSettings = await readGatewayNoticeSettings();
+      const whitelistFilterSettings = await readWhitelistFilterSettings();
+      if (
+        whitelistFilterSettings.enabled &&
+        (whitelistFilterSettings.applyToAdmins || user.role !== "ADMIN") &&
+        !(await isWhitelistFilterUnlocked(app, user.id, whitelistFilterSettings))
+      ) {
+        const noticeReturned = shouldReturnApiKeyNotice(endpoint, request.method);
+        await createGatewayRejectedRequest({
+          body,
+          endpoint,
+          method: request.method,
+          userId: user.id,
+          apiKeyId: apiKey.id,
+          clientIp,
+          userAgent: request.headers["user-agent"],
+          httpStatus: noticeReturned ? 200 : 403,
+          resultType: noticeReturned ? "GATEWAY_NOTICE" : "GATEWAY_ERROR",
+          errorMessage: "Whitelist filter locked account",
+          responseUsage: {
+            source: "gateway_whitelist_filter",
+            returnedToUser: noticeReturned,
+            reason: "whitelist_filter",
+            secretVersion: whitelistFilterSettings.secretVersion,
+            noticeText: whitelistFilterSettings.noticeText,
+          },
+          accessTierId: accessRoutePolicy.tierId,
+        });
+
+        if (noticeReturned) {
+          return sendApiKeyNotice(
+            reply,
+            endpoint,
+            body,
+            upstreamRequestUrl,
+            whitelistFilterSettings.noticeText,
+            request.headers.accept,
+          );
+        }
+
+        return sendApiError(
+          reply,
+          403,
+          whitelistFilterSettings.noticeText,
+          "access_denied",
+        );
+      }
       const globalCircuitBreakerSettings =
         await readGlobalCircuitBreakerSettings();
       if (
@@ -666,11 +737,11 @@ export async function proxyRoutes(app: FastifyInstance) {
 
       if (billable) {
         const subscriptionCanStart =
-          activeSubscription && hasAvailableSubscriptionQuota(activeSubscription);
-        const walletCheck =
-          subscriptionCanStart
-            ? { ok: true as const, balance: new Decimal(0) }
-            : await ensureWalletCanStart(user.id);
+          activeSubscription &&
+          hasAvailableSubscriptionQuota(activeSubscription);
+        const walletCheck = subscriptionCanStart
+          ? { ok: true as const, balance: new Decimal(0) }
+          : await ensureWalletCanStart(user.id);
         if (!walletCheck.ok) {
           await createGatewayRejectedRequest({
             body,
@@ -801,6 +872,7 @@ export async function proxyRoutes(app: FastifyInstance) {
           apiKeyId: apiKey.id,
           method: request.method,
           userAgent: request.headers["user-agent"],
+          accessTierId: accessRoutePolicy.tierId,
           acceptHeader: request.headers.accept,
           noticeText: gatewayNoticeSettings.modelUnavailableMessage,
         });
@@ -868,7 +940,6 @@ export async function proxyRoutes(app: FastifyInstance) {
           model,
           billableModel,
           accessTierId: accessRoutePolicy.tierId,
-          walletChargeAllowed: accessRoutePolicy.walletRequired,
           startedAt: start,
           attempt,
           compactFallbackContext,
@@ -1520,7 +1591,6 @@ async function runUpstreamAttempt(params: {
   model?: string;
   billableModel?: string;
   accessTierId?: string | null;
-  walletChargeAllowed: boolean;
   startedAt: number;
   attempt: number;
   compactFallbackContext: CompactFallbackContext;
@@ -1544,7 +1614,6 @@ async function runUpstreamAttempt(params: {
     model,
     billableModel,
     accessTierId,
-    walletChargeAllowed,
     startedAt,
     compactFallbackContext,
     invalidCompactRetryAttempted,
@@ -1557,7 +1626,9 @@ async function runUpstreamAttempt(params: {
     ? await readImageGenerationToolSettings()
     : null;
   const upstreamProviderKeyId = getLoggedUpstreamProviderKeyId(route);
-  const effectiveEndpoint = imageToolBridge ? "/v1/images/generations" : endpoint;
+  const effectiveEndpoint = imageToolBridge
+    ? "/v1/images/generations"
+    : endpoint;
   const effectiveUpstreamRequestUrl = imageToolBridge
     ? "/v1/images/generations"
     : upstreamRequestUrl;
@@ -1581,6 +1652,13 @@ async function runUpstreamAttempt(params: {
     model,
     compactFallbackContext,
   });
+  const transformContext = imageToolBridge
+    ? undefined
+    : createProxyTransformContext(
+        endpoint,
+        fallbackBody,
+        resolvedUpstreamEndpoint,
+      );
   const upstreamBody = imageToolBridge
     ? buildImageToolBridgeBody(
         fallbackBody,
@@ -1595,9 +1673,11 @@ async function runUpstreamAttempt(params: {
               fallbackBody,
               provider,
               resolvedUpstreamEndpoint,
+              transformContext,
             ),
             request.apiAuth?.apiKey.forceFastMode === true,
           ),
+          { endpoint },
         );
   const actualReasoningEffort = getReasoningEffortFromBody(upstreamBody);
   if (actualReasoningEffort) {
@@ -1608,12 +1688,16 @@ async function runUpstreamAttempt(params: {
   }
   let activeController: AbortController | undefined;
   let activeControllerHandedOff = false;
+  let gatewayAbortReason: string | null = null;
 
   try {
     const controller = new AbortController();
     activeController = controller;
     registerActiveApiRequest(apiRequestId, controller);
-    const timeout = setTimeout(() => controller.abort(), provider.timeoutMs);
+    const timeout = setTimeout(() => {
+      gatewayAbortReason = "upstream_headers_timeout";
+      controller.abort();
+    }, provider.timeoutMs);
 
     const upstreamRequestStartedAt = performance.now();
     const useTencentImageProxy = await shouldUseTencentImageProxy({
@@ -1812,6 +1896,8 @@ async function runUpstreamAttempt(params: {
         activeController: controller,
         apiRequestId,
         endpoint,
+        upstreamEndpoint: resolvedUpstreamEndpoint,
+        transformContext,
         requestBody: upstreamBody,
         userId,
         callerIdentity,
@@ -1822,7 +1908,6 @@ async function runUpstreamAttempt(params: {
         channelId,
         upstreamProviderKeyId,
         startedAt,
-        walletChargeAllowed,
         upstreamRequestStartedAt,
         logger: app.log,
         compactFallbackTrace: compactFallbackContext.trace,
@@ -1832,6 +1917,7 @@ async function runUpstreamAttempt(params: {
           endpoint === "/v1/responses/compact"
             ? getCompactChannelFingerprint(route)
             : undefined,
+        gatewayAbortReason,
       });
       return { kind: "sent" };
     }
@@ -1843,6 +1929,9 @@ async function runUpstreamAttempt(params: {
         upstreamResponse,
         activeController: controller,
         apiRequestId,
+        endpoint,
+        upstreamEndpoint: resolvedUpstreamEndpoint,
+        transformContext,
         startedAt,
         upstreamRequestStartedAt,
       });
@@ -1883,6 +1972,7 @@ async function runUpstreamAttempt(params: {
           endpoint,
           resolvedUpstreamEndpoint,
           upstreamResponseBody,
+          transformContext,
         );
     let normalCompactUsageMetadata:
       | ReturnType<typeof createNormalCompactResponseUsage>
@@ -1960,7 +2050,6 @@ async function runUpstreamAttempt(params: {
         price,
         usage,
         accessTierId,
-        walletChargeAllowed,
         startedAt,
       });
     } catch (error) {
@@ -1998,6 +2087,7 @@ async function runUpstreamAttempt(params: {
     return { kind: "sent" };
   } catch (error) {
     const manualTerminated = isManualTerminateError(error);
+    const gatewayAborted = activeController?.signal.aborted === true;
     const message = manualTerminated
       ? manualTerminateMessage
       : error instanceof Error
@@ -2046,6 +2136,15 @@ async function runUpstreamAttempt(params: {
         manualTerminated,
         compactFallbackTrace: compactFallbackContext.trace,
         reason: "proxy_catch",
+        diagnostics:
+          manualTerminated || !gatewayAborted
+            ? undefined
+            : createUpstreamFailureDiagnostics({
+                phase: "upstream_fetch",
+                error,
+                gatewayAborted,
+                gatewayAbortReason,
+              }),
       }),
       manualTerminated ? "MANUAL_TERMINATED" : "UPSTREAM_ERROR",
     );
@@ -2236,20 +2335,80 @@ function createFailureResponseUsage(params: {
   manualTerminated: boolean;
   compactFallbackTrace?: CompactFallbackTrace;
   reason: string;
+  diagnostics?: unknown;
 }) {
   const manualUsage = params.manualTerminated
     ? createManualTerminateUsage(true)
     : undefined;
-  if (!params.compactFallbackTrace) {
+  if (!params.compactFallbackTrace && !params.diagnostics) {
     return manualUsage;
   }
 
   return {
     ...(isPlainObject(manualUsage)
       ? manualUsage
-      : { source: "gateway_compact_fallback" }),
+      : {
+          source: params.diagnostics
+            ? "gateway_upstream_failure_diagnostics"
+            : "gateway_compact_fallback",
+        }),
     reason: params.reason,
+    ...(params.diagnostics && isPlainObject(params.diagnostics)
+      ? { diagnostics: params.diagnostics }
+      : {}),
     ...compactFallbackUsageFields(params.compactFallbackTrace),
+  };
+}
+
+function createUpstreamFailureDiagnostics(params: {
+  phase: string;
+  error: unknown;
+  gatewayAborted?: boolean;
+  gatewayAbortReason?: string | null;
+  stream?: {
+    chunksRead: number;
+    bytesRead: number;
+    lastChunkAgeMs: number | null;
+    hasForwardedStream: boolean;
+    upstreamFirstChunkLatencyMs: number | null;
+    firstTokenLatencyMs: number | null;
+  };
+}) {
+  const error = normalizeErrorDiagnostics(params.error);
+  return sanitizeJsonForPostgres({
+    source: "gateway_upstream_failure_diagnostics",
+    reason: params.phase,
+    phase: params.phase,
+    gatewayAborted: params.gatewayAborted === true,
+    gatewayAbortReason: params.gatewayAbortReason ?? null,
+    error,
+    stream: params.stream,
+  });
+}
+
+function normalizeErrorDiagnostics(error: unknown) {
+  if (!(error instanceof Error)) {
+    return {
+      type: typeof error,
+      message: String(error),
+    };
+  }
+
+  const cause = error.cause;
+  return {
+    name: error.name,
+    message: error.message,
+    stack: error.stack?.split("\n").slice(0, 8).join("\n"),
+    cause:
+      cause instanceof Error
+        ? {
+            name: cause.name,
+            message: cause.message,
+            stack: cause.stack?.split("\n").slice(0, 6).join("\n"),
+          }
+        : cause
+          ? String(cause)
+          : null,
   };
 }
 
@@ -2368,6 +2527,8 @@ async function proxyStream(params: {
   activeController?: AbortController;
   apiRequestId: string;
   endpoint: string;
+  upstreamEndpoint: string;
+  transformContext?: ProxyTransformContext;
   requestBody: ProxyBody;
   userId: string;
   callerIdentity: string;
@@ -2377,7 +2538,6 @@ async function proxyStream(params: {
   upstreamProviderKeyId?: string | null;
   priceId: string;
   accessTierId?: string | null;
-  walletChargeAllowed: boolean;
   startedAt: number;
   upstreamRequestStartedAt: number;
   logger?: {
@@ -2387,6 +2547,7 @@ async function proxyStream(params: {
   compactFallbackTrace?: CompactFallbackTrace;
   compactCacheRequestBody?: ProxyBody;
   compactCacheSourceFingerprint?: string;
+  gatewayAbortReason?: string | null;
 }) {
   const {
     reply,
@@ -2394,6 +2555,8 @@ async function proxyStream(params: {
     activeController,
     apiRequestId,
     endpoint,
+    upstreamEndpoint,
+    transformContext,
     requestBody,
     userId,
     callerIdentity,
@@ -2403,13 +2566,13 @@ async function proxyStream(params: {
     upstreamProviderKeyId,
     priceId,
     accessTierId,
-    walletChargeAllowed,
     startedAt,
     upstreamRequestStartedAt,
     logger,
     compactFallbackTrace,
     compactCacheRequestBody,
     compactCacheSourceFingerprint,
+    gatewayAbortReason,
   } = params;
   const price = await prisma.modelPrice.findUniqueOrThrow({
     where: { id: priceId },
@@ -2417,10 +2580,18 @@ async function proxyStream(params: {
   let streamUsage: Usage | null = null;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  const streamTransformer = createProxyStreamTransformer(
+    endpoint,
+    upstreamEndpoint,
+    transformContext,
+  );
   let pending = "";
   let rawStreamText = "";
   let firstTokenLatencyMs: number | null = null;
   let upstreamFirstChunkLatencyMs: number | null = null;
+  let chunksRead = 0;
+  let bytesRead = 0;
+  let lastChunkAt: number | null = null;
   const bufferedStreamChunks: string[] = [];
   let hasForwardedStream = false;
   const stream = new ReadableStream<Uint8Array>({
@@ -2474,15 +2645,20 @@ async function proxyStream(params: {
         bufferedStreamChunks.length = 0;
       };
       const forwardStreamText = (text: string) => {
+        const outputText = streamTransformer.transformText(text);
+        if (!outputText) {
+          return;
+        }
+
         if (hasForwardedStream || firstTokenLatencyMs !== null) {
           flushBufferedStreamChunks();
-          if (!safeController.enqueue(encoder.encode(text))) {
+          if (!safeController.enqueue(encoder.encode(outputText))) {
             throw createClientStreamClosedError();
           }
           return;
         }
 
-        bufferedStreamChunks.push(text);
+        bufferedStreamChunks.push(outputText);
       };
 
       try {
@@ -2493,6 +2669,9 @@ async function proxyStream(params: {
           }
 
           if (value) {
+            chunksRead += 1;
+            bytesRead += value.byteLength;
+            lastChunkAt = performance.now();
             if (upstreamFirstChunkLatencyMs === null) {
               upstreamFirstChunkLatencyMs = Math.round(
                 performance.now() - upstreamRequestStartedAt,
@@ -2528,6 +2707,17 @@ async function proxyStream(params: {
           }
           streamUsage = parseUsageFromSseBuffer(pending) ?? streamUsage;
           forwardStreamText(trailing);
+        }
+        const transformedTrailing = streamTransformer.flush();
+        if (transformedTrailing) {
+          if (hasForwardedStream || firstTokenLatencyMs !== null) {
+            flushBufferedStreamChunks();
+            if (!safeController.enqueue(encoder.encode(transformedTrailing))) {
+              throw createClientStreamClosedError();
+            }
+          } else {
+            bufferedStreamChunks.push(transformedTrailing);
+          }
         }
 
         if (!streamUsage) {
@@ -2594,7 +2784,6 @@ async function proxyStream(params: {
             price,
             usage: streamUsage,
             accessTierId,
-            walletChargeAllowed,
             startedAt,
           });
         } catch (error) {
@@ -2669,8 +2858,51 @@ async function proxyStream(params: {
             manualTerminated,
             compactFallbackTrace,
             reason: "stream_recovery_notice",
+            diagnostics: createUpstreamFailureDiagnostics({
+              phase: "upstream_stream_read",
+              error,
+              gatewayAborted: activeController?.signal.aborted === true,
+              gatewayAbortReason,
+              stream: {
+                chunksRead,
+                bytesRead,
+                lastChunkAgeMs:
+                  lastChunkAt === null
+                    ? null
+                    : Math.round(performance.now() - lastChunkAt),
+                hasForwardedStream,
+                upstreamFirstChunkLatencyMs,
+                firstTokenLatencyMs,
+              },
+            }),
           }),
           manualTerminated ? "MANUAL_TERMINATED" : "UPSTREAM_ERROR",
+        );
+        logger?.warn(
+          {
+            apiRequestId,
+            model,
+            channelId,
+            upstreamProviderKeyId,
+            diagnostics: createUpstreamFailureDiagnostics({
+              phase: "upstream_stream_read",
+              error,
+              gatewayAborted: activeController?.signal.aborted === true,
+              gatewayAbortReason,
+              stream: {
+                chunksRead,
+                bytesRead,
+                lastChunkAgeMs:
+                  lastChunkAt === null
+                    ? null
+                    : Math.round(performance.now() - lastChunkAt),
+                hasForwardedStream,
+                upstreamFirstChunkLatencyMs,
+                firstTokenLatencyMs,
+              },
+            }),
+          },
+          "Upstream stream read failed",
         );
         if (recoveryNotice && isNoticeStreamEndpoint(endpoint)) {
           await markRecoveryNoticeReturned(
@@ -2717,7 +2949,9 @@ async function proxyStream(params: {
   reply.status(upstreamResponse.status);
   reply.header(
     "content-type",
-    upstreamResponse.headers.get("content-type") ?? "text/event-stream",
+    streamTransformer.transforms
+      ? "text/event-stream"
+      : (upstreamResponse.headers.get("content-type") ?? "text/event-stream"),
   );
   reply.header("cache-control", "no-cache");
   return reply.send(
@@ -2727,12 +2961,14 @@ async function proxyStream(params: {
   );
 }
 
-
 async function proxyPassthroughStream(params: {
   reply: FastifyReply;
   upstreamResponse: Response;
   activeController?: AbortController;
   apiRequestId: string;
+  endpoint: string;
+  upstreamEndpoint: string;
+  transformContext?: ProxyTransformContext;
   startedAt: number;
   upstreamRequestStartedAt: number;
 }) {
@@ -2741,6 +2977,9 @@ async function proxyPassthroughStream(params: {
     upstreamResponse,
     activeController,
     apiRequestId,
+    endpoint,
+    upstreamEndpoint,
+    transformContext,
     startedAt,
     upstreamRequestStartedAt,
   } = params;
@@ -2748,6 +2987,11 @@ async function proxyPassthroughStream(params: {
   let upstreamFirstChunkLatencyMs: number | null = null;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  const streamTransformer = createProxyStreamTransformer(
+    endpoint,
+    upstreamEndpoint,
+    transformContext,
+  );
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const safeController = createSafeStreamController(controller, reply);
@@ -2784,13 +3028,23 @@ async function proxyPassthroughStream(params: {
               firstTokenLatencyMs = Math.round(performance.now() - startedAt);
             }
             const text = decoder.decode(value, { stream: true });
-            if (!safeController.enqueue(encoder.encode(text))) {
+            const outputText = streamTransformer.transformText(text);
+            if (
+              outputText &&
+              !safeController.enqueue(encoder.encode(outputText))
+            ) {
               throw createClientStreamClosedError();
             }
           }
         }
         const trailing = decoder.decode();
-        if (trailing && !safeController.enqueue(encoder.encode(trailing))) {
+        const transformedTrailing =
+          (trailing ? streamTransformer.transformText(trailing) : "") +
+          streamTransformer.flush();
+        if (
+          transformedTrailing &&
+          !safeController.enqueue(encoder.encode(transformedTrailing))
+        ) {
           throw createClientStreamClosedError();
         }
 
@@ -2848,7 +3102,9 @@ async function proxyPassthroughStream(params: {
   reply.status(upstreamResponse.status);
   reply.header(
     "content-type",
-    upstreamResponse.headers.get("content-type") ?? "text/event-stream",
+    streamTransformer.transforms
+      ? "text/event-stream"
+      : (upstreamResponse.headers.get("content-type") ?? "text/event-stream"),
   );
   reply.header("cache-control", "no-cache");
   return reply.send(

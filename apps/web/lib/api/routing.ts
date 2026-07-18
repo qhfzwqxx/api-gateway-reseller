@@ -166,12 +166,12 @@ export async function getAccessTiers() {
   return response.data.tiers;
 }
 
-export async function createAccessTier(input: Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "walletRequired"> & { description?: string | null }) {
+export async function createAccessTier(input: Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier"> & { description?: string | null }) {
   const response = await http.post<{ tier: AccessTier }>("/admin/access-tiers", input);
   return response.data.tier;
 }
 
-export async function updateAccessTier(id: string, input: Partial<Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "walletRequired" | "description">>) {
+export async function updateAccessTier(id: string, input: Partial<Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "description">>) {
   const response = await http.patch<{ tier: AccessTier }>(`/admin/access-tiers/${id}`, input);
   return response.data.tier;
 }

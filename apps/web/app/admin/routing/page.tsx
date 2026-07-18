@@ -139,9 +139,9 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
       {tiersQuery.isLoading ? <SkeletonRows /> : (
         <div className="min-h-0 flex-1 overflow-x-auto">
           <div className="h-full overflow-y-auto">
-            <table className="min-w-[1040px] w-full text-left">
+            <table className="min-w-[920px] w-full text-left">
             <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-              <tr><th className="px-5 py-3">Code / 名称</th><th className="px-5 py-3">状态</th><th className="px-5 py-3">排序</th><th className="px-5 py-3">扣费倍率</th><th className="px-5 py-3">钱包门槛</th><th className="px-5 py-3">关联数量</th><th className="px-5 py-3 text-right">操作</th></tr>
+              <tr><th className="px-5 py-3">Code / 名称</th><th className="px-5 py-3">状态</th><th className="px-5 py-3">排序</th><th className="px-5 py-3">扣费倍率</th><th className="px-5 py-3">关联数量</th><th className="px-5 py-3 text-right">操作</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
               {(tiersQuery.data ?? []).map((tier) => {
@@ -152,7 +152,6 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
                     <td className="px-5 py-4"><Badge active={tier.status === "ACTIVE"}>{tier.status}</Badge></td>
                     <td className="px-5 py-4 text-sm text-slate-600">{tier.sortOrder}</td>
                     <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-700">× {formatMultiplier(tier.billingMultiplier)}</td>
-                    <td className="px-5 py-4"><Badge active={tier.walletRequired}>{tier.walletRequired ? "需要余额" : "不要求余额"}</Badge></td>
                     <td className="px-5 py-4 text-sm text-slate-600">用户 {tier._count?.users ?? 0} · Key {tier._count?.apiKeys ?? 0} · 池 {tier._count?.modelPools ?? 0}</td>
                     <td className="px-5 py-4 text-right">
                       <div className="flex justify-end gap-2">
@@ -184,7 +183,7 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
   );
 }
 
-type AccessTierFormValues = Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "walletRequired"> & { description?: string | null };
+type AccessTierFormValues = Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier"> & { description?: string | null };
 
 function AccessTierModal({
   open,
@@ -206,7 +205,6 @@ function AccessTierModal({
   const [status, setStatus] = useState<AccessTier["status"]>("ACTIVE");
   const [sortOrder, setSortOrder] = useState("100");
   const [billingMultiplier, setBillingMultiplier] = useState("1");
-  const [walletRequired, setWalletRequired] = useState(true);
   const [description, setDescription] = useState("");
 
   useEffect(() => {
@@ -216,7 +214,6 @@ function AccessTierModal({
     setStatus(tier?.status ?? "ACTIVE");
     setSortOrder(String(tier?.sortOrder ?? 100));
     setBillingMultiplier(tier?.billingMultiplier ?? "1");
-    setWalletRequired(tier?.walletRequired ?? true);
     setDescription(tier?.description ?? "");
   }, [open, tier]);
 
@@ -230,7 +227,6 @@ function AccessTierModal({
       status,
       sortOrder: Number(sortOrder),
       billingMultiplier,
-      walletRequired,
       description: description.trim() || null,
     });
   }
@@ -269,13 +265,6 @@ function AccessTierModal({
             <input required inputMode="decimal" value={billingMultiplier} onChange={(event) => setBillingMultiplier(event.target.value)} className={inputClass} placeholder="1" />
             <span className="text-xs leading-5 text-slate-500">最终扣费 = 现有计费结果 × 此倍率。1 为不调整，0.8 为八折，1.2 为加价 20%。</span>
           </label>
-          <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-            <input type="checkbox" checked={walletRequired} onChange={(event) => setWalletRequired(event.target.checked)} className="mt-1 h-4 w-4 rounded border-slate-300" />
-            <span>
-              <span className="block text-sm font-medium text-slate-700">要求钱包余额门槛</span>
-              <span className="mt-1 block text-xs leading-5 text-slate-500">关闭后，该等级只使用订阅额度；不会检查或扣减钱包余额。</span>
-            </span>
-          </label>
           <label className="grid gap-2">
             <span className="text-sm font-medium text-slate-700">描述</span>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} className="min-h-24 w-full resize-y rounded-md border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
@@ -308,7 +297,8 @@ function DispatchSettingsPanel({ onNotice }: { onNotice: (message: string) => vo
 
   return (
     <form className="flex h-full min-h-0 flex-col gap-4" onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-3">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <SettingsCard title="粘性与解绑规则">
         <Toggle
           label="粘性规则开关"
@@ -387,6 +377,7 @@ function DispatchSettingsPanel({ onNotice }: { onNotice: (message: string) => vo
           hint="基于 10 号规则测出的首Token平均时间排名，排名越后叠加的熵增值越大。"
         />
       </SettingsCard>
+        </div>
       </div>
       <div className="shrink-0 flex justify-end"><button type="submit" disabled={mutation.isPending} className={primaryButton}><Save className="h-4 w-4" />保存调度参数</button></div>
     </form>

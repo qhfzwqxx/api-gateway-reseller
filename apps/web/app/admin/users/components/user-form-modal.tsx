@@ -12,7 +12,7 @@ import type { AccessTierSummary } from "../../../../lib/api/routing";
 const userFormSchema = z.object({
   email: z.string().trim().email("请输入有效邮箱"),
   role: z.enum(["USER", "ADMIN"]),
-  status: z.enum(["ACTIVE", "DISABLED", "SUSPENDED", "TRIAL", "RISK_REVIEW"]),
+  status: z.enum(["ACTIVE", "DISABLED", "SUSPENDED", "TRIAL", "RISK_REVIEW", "BANNED"]),
   rateLimitPerMinute: z.coerce.number().int("必须是整数").min(0, "不能小于 0"),
   concurrencyLimit: z.coerce.number().int("必须是整数").min(0, "不能小于 0"),
   displayGroup: z.string().trim().min(1, "请填写用户分组").max(32, "不能超过 32 个字符"),
@@ -118,6 +118,7 @@ export function UserFormModal({ open, user, loading = false, tiers = [], onClose
                   <option value="SUSPENDED">SUSPENDED</option>
                   <option value="TRIAL">TRIAL</option>
                   <option value="RISK_REVIEW">RISK_REVIEW</option>
+                  <option value="BANNED">封禁</option>
                 </select>
               </Field>
             </div>
@@ -250,7 +251,7 @@ function defaultDisplayGroup(user?: AdminUser | null) {
   if (user.role === "ADMIN") return "管理员组";
   if (user.charityEnabled) return "公益组";
   if (user.status === "RISK_REVIEW") return "风控组";
-  if (user.status === "DISABLED" || user.status === "SUSPENDED") return "受限组";
+  if (user.status === "DISABLED" || user.status === "SUSPENDED" || user.status === "BANNED") return "受限组";
   return "普通用户组";
 }
 

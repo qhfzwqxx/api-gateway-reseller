@@ -60,7 +60,7 @@ export default async function Home() {
 
   return (
     <AdminConfirmProvider>
-      <DashboardClient mode="user" />
+      <DashboardClient />
     </AdminConfirmProvider>
   );
 }

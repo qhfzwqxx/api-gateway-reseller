@@ -195,8 +195,8 @@ function formatReasoningEffortCell(
   actualValue?: string | null,
 ) {
   const original = formatReasoningEffort(value);
-  if (!original) return "-";
   const actual = formatReasoningEffort(actualValue);
+  if (!original) return actual || "-";
   return actual && actual !== original ? `${original} -> ${actual}` : original;
 }
 
@@ -204,11 +204,13 @@ function formatReasoningEffort(value?: string | null) {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return "";
   const labels: Record<string, string> = {
+    none: "none",
     minimal: "minimal",
     low: "low",
     medium: "medium",
     high: "high",
     xhigh: "xhigh",
+    max: "max",
   };
   return labels[normalized] ?? value?.trim() ?? "";
 }
