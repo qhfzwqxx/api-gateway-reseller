@@ -141,7 +141,7 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
           <div className="h-full overflow-y-auto">
             <table className="min-w-[1180px] w-full text-left">
             <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-              <tr><th className="px-5 py-3">Code / 名称</th><th className="px-5 py-3">状态</th><th className="px-5 py-3">前台选择</th><th className="px-5 py-3">排序</th><th className="px-5 py-3">扣费倍率</th><th className="px-5 py-3">等级限流</th><th className="px-5 py-3">关联数量</th><th className="px-5 py-3 text-right">操作</th></tr>
+              <tr><th className="px-5 py-3">Code / 名称</th><th className="px-5 py-3">状态</th><th className="px-5 py-3">前台选择</th><th className="px-5 py-3">排序</th><th className="px-5 py-3">扣费倍率</th><th className="px-5 py-3">等级限流</th><th className="px-5 py-3">最低余额</th><th className="px-5 py-3">关联数量</th><th className="px-5 py-3 text-right">操作</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
               {(tiersQuery.data ?? []).map((tier) => {
@@ -154,6 +154,7 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
                     <td className="px-5 py-4 text-sm text-slate-600">{tier.sortOrder}</td>
                     <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-700">× {formatMultiplier(tier.billingMultiplier)}</td>
                     <td className="px-5 py-4 text-sm text-slate-600"><div>并发：{formatRuntimeLimit(tier.concurrencyLimit)}</div><div className="mt-1">RPM：{formatRuntimeLimit(tier.rateLimitPerMinute)}</div></td>
+                    <td className="px-5 py-4 text-sm font-medium text-slate-600">{tier.walletRequired ? `$${tier.minimumWalletBalanceUsd ?? "0"}` : "不限"}</td>
                     <td className="px-5 py-4 text-sm text-slate-600">用户 {tier._count?.users ?? 0} · Key {tier._count?.apiKeys ?? 0} · 池 {tier._count?.modelPools ?? 0}</td>
                     <td className="px-5 py-4 text-right">
                       <div className="flex justify-end gap-2">
@@ -185,7 +186,7 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
   );
 }
 
-type AccessTierFormValues = Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "userSelectable"> & { description?: string | null };
+type AccessTierFormValues = Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "walletRequired" | "minimumWalletBalanceUsd" | "userSelectable"> & { description?: string | null };
 
 function AccessTierModal({
   open,
@@ -209,6 +210,8 @@ function AccessTierModal({
   const [billingMultiplier, setBillingMultiplier] = useState("1");
   const [rateLimitPerMinute, setRateLimitPerMinute] = useState("0");
   const [concurrencyLimit, setConcurrencyLimit] = useState("0");
+  const [walletRequired, setWalletRequired] = useState(false);
+  const [minimumWalletBalanceUsd, setMinimumWalletBalanceUsd] = useState("0");
   const [userSelectable, setUserSelectable] = useState(false);
   const [description, setDescription] = useState("");
 
@@ -221,6 +224,8 @@ function AccessTierModal({
     setBillingMultiplier(tier?.billingMultiplier ?? "1");
     setRateLimitPerMinute(String(tier?.rateLimitPerMinute ?? 0));
     setConcurrencyLimit(String(tier?.concurrencyLimit ?? 0));
+    setWalletRequired(tier?.walletRequired ?? false);
+    setMinimumWalletBalanceUsd(tier?.minimumWalletBalanceUsd ?? "0");
     setUserSelectable(tier?.userSelectable ?? false);
     setDescription(tier?.description ?? "");
   }, [open, tier]);
@@ -237,6 +242,8 @@ function AccessTierModal({
       billingMultiplier,
       rateLimitPerMinute: Number(rateLimitPerMinute),
       concurrencyLimit: Number(concurrencyLimit),
+      walletRequired,
+      minimumWalletBalanceUsd: walletRequired ? minimumWalletBalanceUsd || "0" : null,
       userSelectable,
       description: description.trim() || null,
     });
@@ -269,6 +276,20 @@ function AccessTierModal({
             <label className="grid gap-2">
               <span className="text-sm font-medium text-slate-700">排序</span>
               <input required type="number" min={1} max={10000} value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} className={inputClass} />
+            </label>
+          </div>
+          <div className="grid gap-4 rounded-md border border-slate-200 bg-slate-50 p-4 md:grid-cols-2">
+            <label className="flex min-h-12 cursor-pointer items-start gap-3">
+              <input type="checkbox" checked={walletRequired} onChange={(event) => setWalletRequired(event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+              <span className="grid gap-1">
+                <span className="text-sm font-semibold text-slate-800">启用最低余额要求</span>
+                <span className="text-xs leading-5 text-slate-500">关闭后，该访问等级不检查用户钱包余额。</span>
+              </span>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">最低余额（美元）</span>
+              <input disabled={!walletRequired} required={walletRequired} type="number" min={0} step="0.00000001" value={minimumWalletBalanceUsd} onChange={(event) => setMinimumWalletBalanceUsd(event.target.value)} className={inputClass} />
+              <span className="text-xs leading-5 text-slate-500">余额低于此金额时禁止调用；填写 0 表示余额不可为负数。</span>
             </label>
           </div>
           <label className="grid gap-2">

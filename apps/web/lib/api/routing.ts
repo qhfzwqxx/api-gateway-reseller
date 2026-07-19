@@ -15,6 +15,7 @@ export interface AccessTier {
   rateLimitPerMinute: number;
   concurrencyLimit: number;
   walletRequired: boolean;
+  minimumWalletBalanceUsd: string | null;
   userSelectable: boolean;
   description: string | null;
   createdAt: string;
@@ -171,12 +172,12 @@ export async function getAccessTiers() {
   return response.data.tiers;
 }
 
-export async function createAccessTier(input: Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "userSelectable"> & { description?: string | null }) {
+export async function createAccessTier(input: Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "walletRequired" | "minimumWalletBalanceUsd" | "userSelectable"> & { description?: string | null }) {
   const response = await http.post<{ tier: AccessTier }>("/admin/access-tiers", input);
   return response.data.tier;
 }
 
-export async function updateAccessTier(id: string, input: Partial<Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "userSelectable" | "description">>) {
+export async function updateAccessTier(id: string, input: Partial<Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "walletRequired" | "minimumWalletBalanceUsd" | "userSelectable" | "description">>) {
   const response = await http.patch<{ tier: AccessTier }>(`/admin/access-tiers/${id}`, input);
   return response.data.tier;
 }
