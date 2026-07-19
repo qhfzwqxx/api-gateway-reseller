@@ -633,7 +633,7 @@ export function AdminDispatchPage({
               </p>
             </div>
             <span className="pill ok">
-              默认：{standardTier?.name ?? "Standard"}
+              默认：{standardTier?.name ?? "Free"}
             </span>
           </div>
           <form className="dispatch-add-row tier" onSubmit={addTier}>

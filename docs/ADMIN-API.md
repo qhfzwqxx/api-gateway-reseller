@@ -75,6 +75,12 @@ GET /auth/me
     "rateLimitPerMinute": 0,
     "concurrencyLimit": 0,
     "tokenVersion": 1,
+    "tierId": "tier_standard",
+    "tier": {
+      "id": "tier_standard",
+      "code": "standard",
+      "name": "Free"
+    },
     "wallet": null
   }
 }
@@ -303,9 +309,13 @@ DELETE /admin/access-tiers/:id
 ```json
 {
   "code": "standard",
-  "name": "标准用户",
+  "name": "Free",
   "status": "ACTIVE",
   "sortOrder": 100,
+  "billingMultiplier": "0",
+  "concurrencyLimit": 2,
+  "rateLimitPerMinute": 60,
+  "userSelectable": true,
   "description": "默认访问等级"
 }
 ```
@@ -316,6 +326,10 @@ DELETE /admin/access-tiers/:id
 - `name`：1-80 位。
 - `status`：`ACTIVE` 或 `DISABLED`。
 - `sortOrder`：1-10000。
+- `billingMultiplier`：访问等级扣费倍率。
+- `concurrencyLimit`：每个用户在该访问等级下的并发上限，跨该用户的多个 API Key 聚合；`0` 表示无限制。
+- `rateLimitPerMinute`：每个用户在该访问等级下的 RPM 上限，跨该用户的多个 API Key 聚合；`0` 表示无限制。
+- `userSelectable`：是否允许登录用户在前台自行切换到该等级；新建等级默认 `false`。
 - `description`：最多 500 位，可空。
 
 响应：
@@ -326,9 +340,13 @@ DELETE /admin/access-tiers/:id
     {
       "id": "tier_id",
       "code": "standard",
-      "name": "标准用户",
+      "name": "Free",
       "status": "ACTIVE",
       "sortOrder": 100,
+      "billingMultiplier": "0",
+      "concurrencyLimit": 2,
+      "rateLimitPerMinute": 60,
+      "userSelectable": true,
       "description": null,
       "createdAt": "...",
       "updatedAt": "...",
@@ -343,7 +361,26 @@ DELETE /admin/access-tiers/:id
 }
 ```
 
-注意：标准等级 `standard` 不能删除，不能禁用，不能改 code。
+注意：默认等级内部 code 为 `standard`、显示名称为 `Free`。该等级不能删除，不能禁用，不能改 code。
+
+等级限流以每次请求最终解析出的访问等级为准，计数维度为“用户 + 访问等级”。同一用户的多个 Free Key 共享 Free 限额，但 Free 与 Pro 使用相互独立的计数桶。用户级和 API Key 级限制仍会同时生效。
+
+用户前台可选等级：
+
+```http
+GET /me/access-tiers
+PATCH /me/access-tier
+```
+
+`GET /me/access-tiers` 只返回 `ACTIVE` 且 `userSelectable=true` 的等级，并额外返回当前等级。切换请求：
+
+```json
+{
+  "tierId": "tier_id"
+}
+```
+
+切换成功后立即更新用户访问等级。未开放前台选择的等级会返回 `403`，因此未开放等级即使被直接调用接口也不能由用户自行选择。若用户存在活动订阅，订阅套餐会锁定当前访问等级，切换接口返回 `409`；用户需要等待订阅结束后再手动选择等级。
 
 ### 4.2 IP 访问等级规则
 

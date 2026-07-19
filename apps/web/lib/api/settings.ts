@@ -3,8 +3,10 @@ import http from "../http";
 export interface GatewayNoticeSettings {
   userConcurrencyMessage: string;
   keyConcurrencyMessage: string;
+  tierConcurrencyMessage: string;
   userRateLimitMessage: string;
   keyRateLimitMessage: string;
+  tierRateLimitMessage: string;
   charityIpRateLimitMessage: string;
   modelUnavailableMessage: string;
   missingUsageMessage: string;

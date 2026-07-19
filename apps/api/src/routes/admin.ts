@@ -1552,7 +1552,10 @@ export async function adminRoutes(app: FastifyInstance) {
         status: z.enum(["ACTIVE", "DISABLED"]).default("ACTIVE"),
         sortOrder: z.number().int().min(1).max(10000).default(100),
         billingMultiplier: accessTierBillingMultiplierSchema.default("1"),
+        rateLimitPerMinute: userRuntimeLimitSchema.default(0),
+        concurrencyLimit: userRuntimeLimitSchema.default(0),
         walletRequired: z.boolean().default(true),
+        userSelectable: z.boolean().default(false),
         description: z.string().trim().max(500).nullable().optional(),
       })
       .parse(request.body);
@@ -1587,7 +1590,10 @@ export async function adminRoutes(app: FastifyInstance) {
         status: z.enum(["ACTIVE", "DISABLED"]).optional(),
         sortOrder: z.number().int().min(1).max(10000).optional(),
         billingMultiplier: accessTierBillingMultiplierSchema.optional(),
+        rateLimitPerMinute: userRuntimeLimitSchema.optional(),
+        concurrencyLimit: userRuntimeLimitSchema.optional(),
         walletRequired: z.boolean().optional(),
+        userSelectable: z.boolean().optional(),
         description: z.string().trim().max(500).nullable().optional(),
       })
       .parse(request.body);
@@ -1607,7 +1613,7 @@ export async function adminRoutes(app: FastifyInstance) {
     ) {
       return reply
         .status(400)
-        .send({ message: "Standard tier code cannot be changed" });
+        .send({ message: "Free tier code cannot be changed" });
     }
 
     if (
@@ -1615,7 +1621,7 @@ export async function adminRoutes(app: FastifyInstance) {
       body.status === "DISABLED"
     ) {
       return reply.status(400).send({
-        message: "Standard tier is the default tier and cannot be disabled",
+        message: "Free tier is the default tier and cannot be disabled",
       });
     }
 
@@ -1632,8 +1638,17 @@ export async function adminRoutes(app: FastifyInstance) {
           ...(body.billingMultiplier !== undefined
             ? { billingMultiplier: body.billingMultiplier }
             : {}),
+          ...(body.rateLimitPerMinute !== undefined
+            ? { rateLimitPerMinute: body.rateLimitPerMinute }
+            : {}),
+          ...(body.concurrencyLimit !== undefined
+            ? { concurrencyLimit: body.concurrencyLimit }
+            : {}),
           ...(body.walletRequired !== undefined
             ? { walletRequired: body.walletRequired }
+            : {}),
+          ...(body.userSelectable !== undefined
+            ? { userSelectable: body.userSelectable }
             : {}),
           ...(body.description !== undefined
             ? { description: normalizeNullableText(body.description) }
@@ -1666,7 +1681,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (tier.code === standardAccessTierCode) {
       return reply
         .status(400)
-        .send({ message: "Standard tier cannot be deleted" });
+        .send({ message: "Free tier cannot be deleted" });
     }
 
     await prisma.accessTier.delete({ where: { id: params.id } });
@@ -2853,6 +2868,7 @@ export async function adminRoutes(app: FastifyInstance) {
         charityIpRateLimitPerMinute: userRuntimeLimitSchema.optional(),
       })
       .parse(request.body);
+    const standardTier = await ensureStandardAccessTier();
 
     const data = {
       ...(body.email ? { email: body.email } : {}),
@@ -2873,7 +2889,9 @@ export async function adminRoutes(app: FastifyInstance) {
       ...(body.displayGroup !== undefined
         ? { displayGroup: body.displayGroup }
         : {}),
-      ...(body.tierId !== undefined ? { tierId: body.tierId } : {}),
+      ...(body.tierId !== undefined
+        ? { tierId: body.tierId ?? standardTier.id }
+        : {}),
       ...(body.charityEnabled !== undefined
         ? { charityEnabled: body.charityEnabled }
         : {}),
@@ -4382,6 +4400,7 @@ export async function adminRoutes(app: FastifyInstance) {
           orderBy: [{ priority: "asc" }, { name: "asc" }],
           select: {
             name: true,
+            groupName: true,
             status: true,
             priority: true,
             keys: {
@@ -4450,6 +4469,7 @@ export async function adminRoutes(app: FastifyInstance) {
               priceEnabled: price?.enabled ?? false,
               providerStatus: provider?.status ?? "MISSING",
               providerPriority: provider?.priority ?? null,
+              providerGroupName: provider?.groupName ?? null,
               activeKeyCount,
               unavailableReasons,
               ...healthTiming,
@@ -4487,6 +4507,8 @@ export async function adminRoutes(app: FastifyInstance) {
         id: price.id,
         model: price.model,
         upstreamProvider: price.upstreamProvider,
+        providerGroupName:
+          providerMap.get(price.upstreamProvider)?.groupName ?? null,
         priceEnabled: price.enabled,
         providerStatus:
           providerMap.get(price.upstreamProvider)?.status ?? "MISSING",
@@ -5411,10 +5433,49 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/admin/upstream-providers", async (request) => {
+  app.get("/admin/upstream-provider-groups", async () => {
+    const groups = await prisma.upstreamProviderGroup.findMany({
+      orderBy: [{ name: "asc" }],
+      include: {
+        _count: {
+          select: { providers: true },
+        },
+      },
+    });
+
+    return { groups };
+  });
+
+  app.post("/admin/upstream-provider-groups", async (request, reply) => {
+    const body = z
+      .object({
+        name: z.string().trim().min(1).max(80),
+      })
+      .parse(request.body);
+
+    try {
+      const group = await prisma.upstreamProviderGroup.create({
+        data: { name: body.name },
+        include: {
+          _count: {
+            select: { providers: true },
+          },
+        },
+      });
+      return reply.status(201).send({ group });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        return reply.status(409).send({ message: "Upstream group already exists" });
+      }
+      throw error;
+    }
+  });
+
+  app.post("/admin/upstream-providers", async (request, reply) => {
     const body = z
       .object({
         name: z.string().min(1).max(80),
+        groupName: z.string().trim().max(80).nullable().optional(),
         baseUrl: z.string().url(),
         apiKey: z.string().min(1),
         priority: z.number().int().min(1).max(10000).default(100),
@@ -5423,10 +5484,21 @@ export async function adminRoutes(app: FastifyInstance) {
         status: z.enum(["ACTIVE", "DISABLED"]).default("ACTIVE"),
       })
       .parse(request.body);
+    const groupName = normalizeNullableText(body.groupName);
+    if (groupName) {
+      const group = await prisma.upstreamProviderGroup.findUnique({
+        where: { name: groupName },
+        select: { name: true },
+      });
+      if (!group) {
+        return reply.status(400).send({ message: "Upstream group not found" });
+      }
+    }
 
     const provider = await prisma.upstreamProvider.upsert({
       where: { name: body.name },
       update: {
+        ...(body.groupName !== undefined ? { groupName } : {}),
         baseUrl: body.baseUrl.replace(/\/+$/, ""),
         apiKey: body.apiKey,
         priority: body.priority,
@@ -5436,6 +5508,7 @@ export async function adminRoutes(app: FastifyInstance) {
       },
       create: {
         ...body,
+        groupName,
         baseUrl: body.baseUrl.replace(/\/+$/, ""),
       },
     });
@@ -5450,6 +5523,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const body = z
       .object({
         name: z.string().min(1).max(80).optional(),
+        groupName: z.string().trim().max(80).nullable().optional(),
         baseUrl: z.string().url().optional(),
         apiKey: z.string().optional(),
         priority: z.number().int().min(1).max(10000).optional(),
@@ -5458,9 +5532,22 @@ export async function adminRoutes(app: FastifyInstance) {
         status: z.enum(["ACTIVE", "DISABLED"]).optional(),
       })
       .parse(request.body);
+    const groupName = normalizeNullableText(body.groupName);
+    if (groupName) {
+      const group = await prisma.upstreamProviderGroup.findUnique({
+        where: { name: groupName },
+        select: { name: true },
+      });
+      if (!group) {
+        return reply.status(400).send({ message: "Upstream group not found" });
+      }
+    }
 
     const data = {
       ...body,
+      ...(body.groupName !== undefined
+        ? { groupName }
+        : {}),
       ...(body.baseUrl ? { baseUrl: body.baseUrl.replace(/\/+$/, "") } : {}),
       ...(body.apiKey && body.apiKey.trim().length > 0
         ? { apiKey: body.apiKey.trim() }

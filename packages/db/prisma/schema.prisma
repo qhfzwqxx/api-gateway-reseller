@@ -109,16 +109,19 @@ enum ReferralRewardType {
 }
 
 model AccessTier {
-  id          String           @id @default(cuid())
-  code        String           @unique
-  name        String
-  status      AccessTierStatus @default(ACTIVE)
-  sortOrder   Int              @default(100)
-  billingMultiplier Decimal    @default(1) @db.Decimal(18, 8)
-  walletRequired Boolean       @default(true)
-  description String?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  id                 String           @id @default(cuid())
+  code               String           @unique
+  name               String
+  status             AccessTierStatus @default(ACTIVE)
+  sortOrder          Int              @default(100)
+  billingMultiplier  Decimal          @default(1) @db.Decimal(18, 8)
+  rateLimitPerMinute Int              @default(0)
+  concurrencyLimit   Int              @default(0)
+  walletRequired     Boolean          @default(true)
+  userSelectable     Boolean          @default(false)
+  description        String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   users                 User[]
   apiKeys               ApiKey[]
@@ -157,20 +160,20 @@ model User {
   createdAt                   DateTime   @default(now())
   updatedAt                   DateTime   @updatedAt
 
-  tier               AccessTier?            @relation(fields: [tierId], references: [id], onDelete: SetNull)
-  apiKeys            ApiKey[]
-  wallet             Wallet?
-  walletTransactions WalletTransaction[]
-  apiRequests        ApiRequest[]
-  redeemRedemptions  RedeemCodeRedemption[]
-  subscriptions      UserSubscription[]
-  subscriptionUsages UserSubscriptionUsage[]
-  createdModelPrices ModelPrice[]
-  loginLogs          LoginLog[]
-  modelMappings      UserModelMapping[]
-  referralProfile    ReferralProfile?
-  sentReferralInvites ReferralInvite[] @relation("ReferralInviter")
-  receivedReferralInvite ReferralInvite? @relation("ReferralInvitee")
+  tier                   AccessTier?             @relation(fields: [tierId], references: [id], onDelete: SetNull)
+  apiKeys                ApiKey[]
+  wallet                 Wallet?
+  walletTransactions     WalletTransaction[]
+  apiRequests            ApiRequest[]
+  redeemRedemptions      RedeemCodeRedemption[]
+  subscriptions          UserSubscription[]
+  subscriptionUsages     UserSubscriptionUsage[]
+  createdModelPrices     ModelPrice[]
+  loginLogs              LoginLog[]
+  modelMappings          UserModelMapping[]
+  referralProfile        ReferralProfile?
+  sentReferralInvites    ReferralInvite[]        @relation("ReferralInviter")
+  receivedReferralInvite ReferralInvite?         @relation("ReferralInvitee")
 
   @@index([tierId])
   @@index([status])
@@ -178,18 +181,18 @@ model User {
 }
 
 model SubscriptionPlan {
-  id           String                 @id @default(cuid())
-  code         String                 @unique
-  name         String
-  status       SubscriptionPlanStatus @default(ACTIVE)
-  tierId       String
-  durationDays Int
-  quotaMode    SubscriptionQuotaMode   @default(DAILY)
-  quotaAmountUsd Decimal               @default(0) @db.Decimal(18, 8)
-  sortOrder    Int                    @default(100)
-  remark       String?
-  createdAt    DateTime               @default(now())
-  updatedAt    DateTime               @updatedAt
+  id             String                 @id @default(cuid())
+  code           String                 @unique
+  name           String
+  status         SubscriptionPlanStatus @default(ACTIVE)
+  tierId         String
+  durationDays   Int
+  quotaMode      SubscriptionQuotaMode  @default(DAILY)
+  quotaAmountUsd Decimal                @default(0) @db.Decimal(18, 8)
+  sortOrder      Int                    @default(100)
+  remark         String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
 
   tier              AccessTier         @relation(fields: [tierId], references: [id], onDelete: Restrict)
   redeemCodes       RedeemCode[]
@@ -200,32 +203,32 @@ model SubscriptionPlan {
 }
 
 model UserSubscription {
-  id               String                 @id @default(cuid())
-  userId           String
-  planId           String
-  tierId           String
-  status           UserSubscriptionStatus @default(QUEUED)
-  active           Boolean                @default(false)
-  startsAt         DateTime               @default(now())
-  endsAt           DateTime
-  remainingSeconds Int                    @default(0)
-  quotaGrantCount  Int                    @default(1)
+  id                String                 @id @default(cuid())
+  userId            String
+  planId            String
+  tierId            String
+  status            UserSubscriptionStatus @default(QUEUED)
+  active            Boolean                @default(false)
+  startsAt          DateTime               @default(now())
+  endsAt            DateTime
+  remainingSeconds  Int                    @default(0)
+  quotaGrantCount   Int                    @default(1)
   dailyUsageDateKey String?
-  dailyUsedUsd     Decimal                @default(0) @db.Decimal(18, 8)
-  totalUsedUsd     Decimal                @default(0) @db.Decimal(18, 8)
-  activatedAt      DateTime?
-  baseTierId       String?
-  source           String                 @default("ADMIN")
-  redeemCodeId     String?
-  remark           String?
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
+  dailyUsedUsd      Decimal                @default(0) @db.Decimal(18, 8)
+  totalUsedUsd      Decimal                @default(0) @db.Decimal(18, 8)
+  activatedAt       DateTime?
+  baseTierId        String?
+  source            String                 @default("ADMIN")
+  redeemCodeId      String?
+  remark            String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
 
-  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan       SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
-  tier       AccessTier       @relation("UserSubscriptionTier", fields: [tierId], references: [id], onDelete: Restrict)
-  baseTier   AccessTier?      @relation("UserSubscriptionBaseTier", fields: [baseTierId], references: [id], onDelete: SetNull)
-  redeemCode RedeemCode?      @relation(fields: [redeemCodeId], references: [id], onDelete: SetNull)
+  user       User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan       SubscriptionPlan        @relation(fields: [planId], references: [id], onDelete: Restrict)
+  tier       AccessTier              @relation("UserSubscriptionTier", fields: [tierId], references: [id], onDelete: Restrict)
+  baseTier   AccessTier?             @relation("UserSubscriptionBaseTier", fields: [baseTierId], references: [id], onDelete: SetNull)
+  redeemCode RedeemCode?             @relation(fields: [redeemCodeId], references: [id], onDelete: SetNull)
   usages     UserSubscriptionUsage[]
 
   @@index([userId, active])
@@ -269,14 +272,14 @@ model UserModelMapping {
 }
 
 model ReferralProfile {
-  id                 String                @id @default(cuid())
-  userId             String                @unique
-  code               String                @unique
-  status             ReferralProfileStatus @default(ACTIVE)
-  successfulInvites  Int                   @default(0)
-  rewardedInvites    Int                   @default(0)
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  id                String                @id @default(cuid())
+  userId            String                @unique
+  code              String                @unique
+  status            ReferralProfileStatus @default(ACTIVE)
+  successfulInvites Int                   @default(0)
+  rewardedInvites   Int                   @default(0)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
 
   user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   invites ReferralInvite[]
@@ -302,9 +305,9 @@ model ReferralInvite {
   rewardSnapshot      Json?
   createdAt           DateTime             @default(now())
 
-  referralProfile ReferralProfile  @relation(fields: [referralProfileId], references: [id], onDelete: Cascade)
-  inviter         User             @relation("ReferralInviter", fields: [inviterUserId], references: [id], onDelete: Cascade)
-  invitee         User             @relation("ReferralInvitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
+  referralProfile ReferralProfile @relation(fields: [referralProfileId], references: [id], onDelete: Cascade)
+  inviter         User            @relation("ReferralInviter", fields: [inviterUserId], references: [id], onDelete: Cascade)
+  invitee         User            @relation("ReferralInvitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
 
   @@index([referralProfileId, createdAt])
   @@index([inviterUserId, createdAt])
@@ -382,41 +385,41 @@ model WalletTransaction {
 }
 
 model ApiRequest {
-  id                    String                @id @default(cuid())
-  traceCode             String                @unique @default(dbgenerated("('REQ-DB-' || upper(substr(md5(((random())::text || (clock_timestamp())::text)), 1, 16)))"))
-  userId                String
-  apiKeyId              String?
-  upstreamProviderKeyId String?
-  upstreamProvider      String
-  model                 String
-  reasoningEffort       String?
-  reasoningEffortActual String?
-  endpoint              String
-  method                String
-  status                ApiRequestStatus      @default(PENDING)
-  resultType            ApiRequestResultType?
-  httpStatus            Int?
-  inputTokens           Int                   @default(0)
-  cachedInputTokens     Int                   @default(0)
-  outputTokens          Int                   @default(0)
-  totalTokens           Int                   @default(0)
-  upstreamCostUsd       Decimal               @default(0) @db.Decimal(18, 8)
-  chargedAmountUsd      Decimal               @default(0) @db.Decimal(18, 8)
-  subscriptionChargedAmountUsd Decimal        @default(0) @db.Decimal(18, 8)
-  walletChargedAmountUsd Decimal              @default(0) @db.Decimal(18, 8)
-  reservedAmountUsd     Decimal               @default(0) @db.Decimal(18, 8)
-  latencyMs             Int?
-  firstTokenLatencyMs   Int?
-  upstreamFirstChunkLatencyMs Int?
-  errorMessage          String?
-  upstreamRequestId     String?
-  clientIp              String?
-  userAgent             String?
-  requestBody           Json?
-  responseUsage         Json?
-  accessTierId          String?
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
+  id                           String                @id @default(cuid())
+  traceCode                    String                @unique @default(dbgenerated("('REQ-DB-' || upper(substr(md5(((random())::text || (clock_timestamp())::text)), 1, 16)))"))
+  userId                       String
+  apiKeyId                     String?
+  upstreamProviderKeyId        String?
+  upstreamProvider             String
+  model                        String
+  reasoningEffort              String?
+  reasoningEffortActual        String?
+  endpoint                     String
+  method                       String
+  status                       ApiRequestStatus      @default(PENDING)
+  resultType                   ApiRequestResultType?
+  httpStatus                   Int?
+  inputTokens                  Int                   @default(0)
+  cachedInputTokens            Int                   @default(0)
+  outputTokens                 Int                   @default(0)
+  totalTokens                  Int                   @default(0)
+  upstreamCostUsd              Decimal               @default(0) @db.Decimal(18, 8)
+  chargedAmountUsd             Decimal               @default(0) @db.Decimal(18, 8)
+  subscriptionChargedAmountUsd Decimal               @default(0) @db.Decimal(18, 8)
+  walletChargedAmountUsd       Decimal               @default(0) @db.Decimal(18, 8)
+  reservedAmountUsd            Decimal               @default(0) @db.Decimal(18, 8)
+  latencyMs                    Int?
+  firstTokenLatencyMs          Int?
+  upstreamFirstChunkLatencyMs  Int?
+  errorMessage                 String?
+  upstreamRequestId            String?
+  clientIp                     String?
+  userAgent                    String?
+  requestBody                  Json?
+  responseUsage                Json?
+  accessTierId                 String?
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
 
   user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   apiKey              ApiKey?              @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
@@ -587,6 +590,7 @@ model SystemSetting {
 model UpstreamProvider {
   id              String                 @id @default(cuid())
   name            String                 @unique
+  groupName       String?
   baseUrl         String
   apiKey          String
   status          UpstreamProviderStatus @default(ACTIVE)
@@ -596,7 +600,18 @@ model UpstreamProvider {
   createdAt       DateTime               @default(now())
   updatedAt       DateTime               @updatedAt
 
-  keys UpstreamProviderKey[]
+  group UpstreamProviderGroup? @relation(fields: [groupName], references: [name], onDelete: SetNull, onUpdate: Cascade)
+  keys  UpstreamProviderKey[]
+
+  @@index([groupName])
+}
+
+model UpstreamProviderGroup {
+  name      String   @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  providers UpstreamProvider[]
 }
 
 model UpstreamProviderKey {

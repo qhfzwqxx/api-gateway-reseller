@@ -8,6 +8,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
+import { ProviderGroupBadge } from "../../../components/shared/provider-group-badge";
 import {
   createModelPrice,
   deleteModelPriceGroup,
@@ -18,6 +19,7 @@ import {
   updateUnifiedPrices,
   type ModelPrice,
   type ModelPriceInput,
+  type UpstreamProvider,
   type UnifiedPriceSetting,
 } from "../../../lib/api/supply-chain";
 import { UnifiedPriceModal } from "./components/unified-price-modal";
@@ -63,9 +65,16 @@ export default function AdminModelPricesPage() {
   const prices = pricesQuery.data?.modelPrices ?? [];
   const unifiedSettings = pricesQuery.data?.unifiedPriceSettings ?? [];
   const providers = providersQuery.data ?? [];
+  const providerGroups = useMemo(
+    () => new Map(providers.map((provider) => [provider.name, provider.groupName])),
+    [providers],
+  );
   const visiblePrices = prices.filter((price) =>
     price.model.toLowerCase().includes(modelFilter.toLowerCase()) &&
-    price.upstreamProvider.toLowerCase().includes(providerFilter.toLowerCase()),
+    (price.upstreamProvider.toLowerCase().includes(providerFilter.toLowerCase()) ||
+      (providerGroups.get(price.upstreamProvider) ?? "")
+        .toLowerCase()
+        .includes(providerFilter.toLowerCase())),
   );
   const groupedPrices = useMemo(
     () => buildPriceGroups(visiblePrices, unifiedSettings),
@@ -139,7 +148,7 @@ export default function AdminModelPricesPage() {
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="按模型过滤"><input value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} className={inputClass} placeholder="gpt-4.1-mini" /></Field>
-          <Field label="按 Provider 过滤"><input value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} className={inputClass} placeholder="openai" /></Field>
+          <Field label="按 Provider / 分组过滤"><input value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} className={inputClass} placeholder="openai 或 官方渠道" /></Field>
         </div>
       </section>
 
@@ -186,6 +195,7 @@ export default function AdminModelPricesPage() {
 
       <ModelPriceGroupModal
         group={selectedGroup}
+        providerGroups={providerGroups}
         onClose={() => setSelectedGroupModel(null)}
         onDelete={setDeletingPrice}
         onEdit={setEditingPrice}
@@ -198,7 +208,7 @@ export default function AdminModelPricesPage() {
           .map((setting) => setting.model)}
         open={editingPrice !== undefined}
         price={editingPrice ?? null}
-        providers={providers.map((provider) => provider.name)}
+        providers={providers}
         loading={saveMutation.isPending}
         onClose={() => setEditingPrice(undefined)}
         onSubmit={(values) => saveMutation.mutateAsync(values)}
@@ -221,12 +231,14 @@ function ModelPriceCardMetric({ label, value }: { label: string; value: string }
 
 function ModelPriceGroupModal({
   group,
+  providerGroups,
   onClose,
   onEdit,
   onDelete,
   onUnifiedMode,
 }: {
   group: ModelPriceGroup | null;
+  providerGroups: ReadonlyMap<string, string | null>;
   onClose: () => void;
   onEdit: (price: ModelPrice) => void;
   onDelete: (price: ModelPrice) => void;
@@ -269,7 +281,7 @@ function ModelPriceGroupModal({
             <tbody className="divide-y divide-slate-100">
               {group.prices.map((price) => (
                 <tr key={price.id} className="hover:bg-slate-50/70">
-                  <td className="px-5 py-4"><div className="font-semibold text-slate-950">{price.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{endpointLabel(price.upstreamEndpoint)} · {price.pricingMode === "request" ? "按次" : "按 Token"} · {price.currency} · {price.priceVersion}</div></td>
+                  <td className="px-5 py-4"><div className="flex flex-wrap items-center gap-2"><div className="font-semibold text-slate-950">{price.upstreamProvider}</div><ProviderGroupBadge groupName={providerGroups.get(price.upstreamProvider)} /></div><div className="mt-1 text-xs text-slate-500">{endpointLabel(price.upstreamEndpoint)} · {price.pricingMode === "request" ? "按次" : "按 Token"} · {price.currency} · {price.priceVersion}</div></td>
                   <td className="px-5 py-4 text-sm tabular-nums text-slate-700">{price.pricingMode === "request" ? <div>每次：{money(price.upstreamPerRequestUsd)}</div> : <><div>Input：{money(price.upstreamInputPer1MTok)}</div><div className="mt-1">Output：{money(price.upstreamOutputPer1MTok)}</div></>}</td>
                   <td className="px-5 py-4 text-sm tabular-nums text-slate-700">{price.pricingMode === "request" ? <div>每次：{money(price.perRequestUsd ?? "0")}</div> : <><div>Input：{money(price.customerInputPer1MTok)}</div><div className="mt-1">Output：{money(price.customerOutputPer1MTok)}</div></>}</td>
                   <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-950">{effectivePricingMode(price, group.setting) === "request" ? <div>每次：{money(effectiveCustomerPerRequest(price, group.setting))}</div> : <><div>Input：{money(effectiveCustomerInput(price, group.setting))}</div><div className="mt-1">Output：{money(effectiveCustomerOutput(price, group.setting))}</div></>}</td>
@@ -297,19 +309,19 @@ function PriceModal({
 }: {
   open: boolean;
   price: ModelPrice | null;
-  providers: string[];
+  providers: Array<Pick<UpstreamProvider, "name" | "groupName">>;
   enabledUnifiedModels: string[];
   loading: boolean;
   onClose: () => void;
   onSubmit: (values: ModelPriceInput) => Promise<unknown>;
 }) {
-  const form = useForm<PriceFormInput, unknown, PriceValues>({ resolver: zodResolver(priceSchema), defaultValues: defaultPrice(price, providers[0]) });
+  const form = useForm<PriceFormInput, unknown, PriceValues>({ resolver: zodResolver(priceSchema), defaultValues: defaultPrice(price, providers[0]?.name) });
   const watchedModel = form.watch("model");
   const pricingMode = form.watch("pricingMode");
   const unifiedModelMatch = enabledUnifiedModels.find(
     (model) => model.toLowerCase() === watchedModel.trim().toLowerCase(),
   );
-  useEffect(() => { if (open) form.reset(defaultPrice(price, providers[0])); }, [form, open, price, providers]);
+  useEffect(() => { if (open) form.reset(defaultPrice(price, providers[0]?.name)); }, [form, open, price, providers]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/40">
@@ -338,7 +350,7 @@ function PriceModal({
               >
                 <input className={inputClass} {...form.register("model")} />
               </Field>
-              <Field label="Provider" error={form.formState.errors.upstreamProvider?.message}><input list="provider-options" className={inputClass} {...form.register("upstreamProvider")} /><datalist id="provider-options">{providers.map((provider) => <option value={provider} key={provider} />)}</datalist></Field>
+              <Field label="Provider" error={form.formState.errors.upstreamProvider?.message}><input list="provider-options" className={inputClass} {...form.register("upstreamProvider")} /><datalist id="provider-options">{providers.map((provider) => <option value={provider.name} label={provider.groupName ? `分组：${provider.groupName}` : "未分组"} key={provider.name} />)}</datalist></Field>
               <Field label="上游接口">
                 <select className={inputClass} {...form.register("upstreamEndpoint")}>
                   <option value="responses">Responses API</option>

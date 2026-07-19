@@ -27,6 +27,7 @@ export interface UpstreamProviderKey {
 export interface UpstreamProvider {
   id: string;
   name: string;
+  groupName: string | null;
   baseUrl: string;
   apiKey: string;
   priority: number;
@@ -38,8 +39,18 @@ export interface UpstreamProvider {
   keys?: UpstreamProviderKey[];
 }
 
+export interface UpstreamProviderGroup {
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  _count: {
+    providers: number;
+  };
+}
+
 export interface UpstreamProviderInput {
   name: string;
+  groupName: string | null;
   baseUrl: string;
   apiKey?: string;
   priority: number;
@@ -140,6 +151,23 @@ export async function getUpstreamProviders() {
   );
 
   return response.data.providers;
+}
+
+export async function getUpstreamProviderGroups() {
+  const response = await http.get<{ groups: UpstreamProviderGroup[] }>(
+    "/admin/upstream-provider-groups",
+  );
+
+  return response.data.groups;
+}
+
+export async function createUpstreamProviderGroup(input: { name: string }) {
+  const response = await http.post<{ group: UpstreamProviderGroup }>(
+    "/admin/upstream-provider-groups",
+    input,
+  );
+
+  return response.data.group;
 }
 
 export async function createUpstreamProvider(

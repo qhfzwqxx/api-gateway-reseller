@@ -3,8 +3,10 @@ import { prisma } from "@gateway/db";
 export type GatewayNoticeSettings = {
   userConcurrencyMessage: string;
   keyConcurrencyMessage: string;
+  tierConcurrencyMessage: string;
   userRateLimitMessage: string;
   keyRateLimitMessage: string;
+  tierRateLimitMessage: string;
   charityIpRateLimitMessage: string;
   modelUnavailableMessage: string;
   missingUsageMessage: string;
@@ -16,8 +18,12 @@ export type GatewayNoticeSettings = {
 export const defaultGatewayNoticeSettings: GatewayNoticeSettings = {
   userConcurrencyMessage: "当前账号并发已达到 {limit}，请等待正在处理的请求完成后重试。",
   keyConcurrencyMessage: "当前 API Key 并发已达到 {limit}，请等待正在处理的请求完成后重试。",
+  tierConcurrencyMessage:
+    "当前访问等级并发已达到 {limit}，请等待该等级下正在处理的请求完成后重试。",
   userRateLimitMessage: "当前账号已达到每分钟 {limit} 次请求限制，请约 {seconds} 秒后重试。",
   keyRateLimitMessage: "当前 API Key 已达到每分钟 {limit} 次请求限制，请约 {seconds} 秒后重试。",
+  tierRateLimitMessage:
+    "当前访问等级已达到每分钟 {limit} 次请求限制，请约 {seconds} 秒后重试。",
   charityIpRateLimitMessage:
     "当前 IP 已达到公益账号每分钟 {limit} 次请求限制，请约 {seconds} 秒后重试。",
   modelUnavailableMessage: "当前模型暂不可用，请稍后再试。",

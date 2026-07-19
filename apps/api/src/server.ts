@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 import { redis } from "./lib/redis.js";
 import { env } from "./env.js";
 import { authRoutes } from "./routes/auth.js";
+import { accessTierRoutes } from "./routes/access-tiers.js";
 import { apiKeyRoutes } from "./routes/api-keys.js";
 import { walletRoutes } from "./routes/wallet.js";
 import { usageRoutes } from "./routes/usage.js";
@@ -131,6 +132,7 @@ app.get("/", async () => ({
 app.get("/health", async () => ({ ok: true }));
 
 await app.register(authRoutes);
+await app.register(accessTierRoutes);
 await app.register(apiKeyRoutes);
 await app.register(walletRoutes);
 await app.register(usageRoutes);

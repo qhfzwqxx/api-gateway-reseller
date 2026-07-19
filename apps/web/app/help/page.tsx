@@ -1,89 +1,28 @@
 import {
   Activity,
-  ArrowRight,
+  ArrowUp,
   BookOpen,
   CheckCircle2,
-  Code2,
   CreditCard,
-  ExternalLink,
   KeyRound,
   LifeBuoy,
   LockKeyhole,
-  MessageSquareText,
   Route,
   ShieldCheck,
-  Sparkles,
-  TerminalSquare,
+  Terminal,
   WalletCards,
 } from "lucide-react";
 import Link from "next/link";
+import { configuredApiV1BaseUrl } from "../../lib/public-config";
+import {
+  FrontBadge,
+  FrontCard,
+  FrontCodeBlock,
+  FrontCopyButton,
+  FrontLogo,
+  FrontProviders,
+} from "../front/_components/ui/front-ui";
 import { EmergencyAdminCallButton } from "./emergency-admin-call-button";
-
-const quickSteps = [
-  {
-    icon: KeyRound,
-    title: "创建 API Key",
-    body: "登录控制台后进入密钥管理，创建一枚用于服务端调用的 API Key。",
-  },
-  {
-    icon: CreditCard,
-    title: "确认余额",
-    body: "在钱包里完成充值或领取可用额度，网关会按实际模型消耗计费。",
-  },
-  {
-    icon: TerminalSquare,
-    title: "替换 Base URL",
-    body: "把 SDK 的 Base URL 替换为 https://gateway.l-kx.cn/v1 即可开始调用。",
-  },
-];
-
-const endpoints = [
-  {
-    method: "POST",
-    path: "/v1/chat/completions",
-    desc: "OpenAI 兼容聊天补全接口，支持流式返回。",
-  },
-  {
-    method: "POST",
-    path: "/v1/responses",
-    desc: "OpenAI Responses 兼容接口，适合新项目接入。",
-  },
-  {
-    method: "POST",
-    path: "/v1/embeddings",
-    desc: "Embedding 向量接口，按账号密钥权限和后台路由转发。",
-  },
-  {
-    method: "POST",
-    path: "/v1/completions",
-    desc: "旧版 Completions 兼容接口。",
-  },
-  {
-    method: "POST",
-    path: "/v1/images/generations",
-    desc: "图片生成接口，需使用后台已配置可用的模型和上游。",
-  },
-  {
-    method: "POST",
-    path: "/v1/images/edits",
-    desc: "图片编辑接口，支持 multipart 请求转发。",
-  },
-];
-
-const faqs = [
-  {
-    q: "APIshare 的调用方式和 OpenAI SDK 兼容吗？",
-    a: "兼容。大多数 SDK 只需要把 baseURL 设置为 https://gateway.l-kx.cn/v1，并把 API Key 改成 APIshare 控制台生成的密钥。",
-  },
-  {
-    q: "为什么请求会返回余额不足或并发限制？",
-    a: "网关会在请求进入上游前检查账号余额、密钥状态、频率限制和并发限制。请在控制台查看钱包、密钥和用量记录。",
-  },
-  {
-    q: "模型不可用时应该怎么处理？",
-    a: "建议客户端保留重试和降级模型策略。若控制台显示模型已开放但仍不可用，请带上请求时间、模型名和错误信息联系支持。",
-  },
-];
 
 export const metadata = {
   title: "帮助中心 | APIshare",
@@ -91,268 +30,163 @@ export const metadata = {
 };
 
 export default function HelpPage() {
-  return (
-    <main className="h-dvh overflow-x-hidden overflow-y-auto bg-[#f6f8fb] text-slate-950">
-      <section className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex w-full max-w-7xl flex-col px-4 py-5 sm:min-h-[76vh] sm:px-8 sm:py-6 lg:px-10">
-          <header className="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
-            <Link
-              href="/"
-              className="flex min-h-11 min-w-0 items-center gap-3 rounded-md px-1 text-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-            >
-              <span className="grid size-10 place-items-center rounded-md border border-blue-200 bg-blue-50 text-blue-700">
-                <Route className="size-5" aria-hidden="true" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-base font-semibold leading-tight">
-                  APIshare
-                </span>
-                <span className="block text-sm leading-tight text-slate-500">
-                  Gateway Docs
-                </span>
-              </span>
-            </Link>
-            <div className="flex items-center gap-2">
-              <Link
-                href="/login"
-                className="inline-flex min-h-11 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-              >
-                控制台
-                <ArrowRight className="size-4" aria-hidden="true" />
-              </Link>
-            </div>
-          </header>
-
-          <div className="grid flex-1 items-center gap-6 py-8 sm:gap-10 sm:py-12 lg:grid-cols-[minmax(0,1.02fr)_minmax(360px,0.72fr)] lg:py-16">
-            <div className="min-w-0 max-w-3xl">
-              <div className="mb-5 inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">
-                <Sparkles className="size-4" aria-hidden="true" />
-                OpenAI 兼容网关
-              </div>
-              <h1 className="text-3xl font-bold leading-tight tracking-normal text-slate-950 sm:text-5xl lg:text-6xl">
-                APIshare 帮助中心
-              </h1>
-              <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600 sm:mt-6 sm:text-lg sm:leading-8">
-                从创建密钥、替换网关地址到查看用量和处理错误，这里放着接入
-                APIshare 网关最常用的信息。
-              </p>
-              <div className="mt-6 flex flex-col gap-3 sm:mt-8 sm:flex-row">
-                <a
-                  href="#quick-start"
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-blue-600 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                >
-                  快速接入
-                  <ArrowRight className="size-4" aria-hidden="true" />
-                </a>
-                <a
-                  href="#examples"
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                >
-                  查看示例
-                  <Code2 className="size-4" aria-hidden="true" />
-                </a>
-              </div>
-            </div>
-
-            <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-950 p-3 shadow-xl sm:p-4">
-              <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-sm text-slate-300">
-                <span className="size-3 rounded-full bg-red-400" />
-                <span className="size-3 rounded-full bg-amber-300" />
-                <span className="size-3 rounded-full bg-emerald-400" />
-                <span className="ml-2 font-medium">curl</span>
-              </div>
-              <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-slate-100 sm:text-sm sm:leading-7">
-                <code>{`curl https://gateway.l-kx.cn/v1/chat/completions \\
+  const baseUrl = configuredApiV1BaseUrl();
+  const curlExample = `curl ${baseUrl}/responses \\
   -H "Authorization: Bearer $APISHARE_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "gpt-4o-mini",
-    "messages": [
-      { "role": "user", "content": "你好，介绍一下 APIshare" }
-    ],
-    "stream": true
-  }'`}</code>
-              </pre>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section
-        id="quick-start"
-        className="mx-auto grid w-full max-w-7xl gap-4 px-4 py-8 sm:px-8 sm:py-10 lg:grid-cols-3 lg:px-10"
-      >
-        {quickSteps.map((step) => (
-          <article
-            key={step.title}
-            className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
-          >
-            <step.icon className="mb-4 size-6 text-blue-600" aria-hidden="true" />
-            <h2 className="text-lg font-semibold text-slate-950">
-              {step.title}
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">{step.body}</p>
-          </article>
-        ))}
-      </section>
-
-      <section className="mx-auto grid w-full max-w-7xl gap-6 px-4 pb-10 sm:px-8 sm:pb-12 lg:grid-cols-[0.9fr_1.1fr] lg:px-10">
-        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-          <div className="mb-5 flex items-center gap-3">
-            <BookOpen className="size-6 text-blue-600" aria-hidden="true" />
-            <h2 className="text-xl font-bold text-slate-950 sm:text-2xl">
-              支持的网关端点
-            </h2>
-          </div>
-          <div className="divide-y divide-slate-200">
-            {endpoints.map((endpoint) => (
-              <div
-                key={endpoint.path}
-                className="grid min-w-0 gap-2 py-4 sm:grid-cols-[92px_1fr]"
-              >
-                <span className="w-fit rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
-                  {endpoint.method}
-                </span>
-                <div className="min-w-0">
-                  <code className="break-words font-mono text-sm font-semibold text-slate-950">
-                    {endpoint.path}
-                  </code>
-                  <p className="mt-1 text-sm leading-6 text-slate-600">
-                    {endpoint.desc}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div
-          id="examples"
-          className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
-        >
-          <div className="mb-5 flex items-center gap-3">
-            <Code2 className="size-6 text-blue-600" aria-hidden="true" />
-            <h2 className="text-xl font-bold text-slate-950 sm:text-2xl">
-              SDK 示例
-            </h2>
-          </div>
-          <pre className="max-w-full overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs leading-6 text-slate-100 sm:p-4 sm:text-sm sm:leading-7">
-            <code>{`import OpenAI from "openai";
+    "model": "gpt-4.1",
+    "input": "Hello from APIshare"
+  }'`;
+  const nodeExample = `import OpenAI from "openai";
 
 const client = new OpenAI({
   apiKey: process.env.APISHARE_API_KEY,
-  baseURL: "https://gateway.l-kx.cn/v1",
+  baseURL: "${baseUrl}"
 });
 
-const result = await client.chat.completions.create({
-  model: "gpt-4o-mini",
-  messages: [{ role: "user", content: "写一段欢迎语" }],
-});`}</code>
-          </pre>
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <InfoLine icon={LockKeyhole} text="API Key 只放在服务端环境变量中。" />
-            <InfoLine icon={ShieldCheck} text="生产环境建议配置超时、重试和日志脱敏。" />
-          </div>
-        </div>
-      </section>
+const response = await client.responses.create({
+  model: "gpt-4.1",
+  input: "Hello from APIshare"
+});
 
-      <section className="border-y border-slate-200 bg-white">
-        <div className="mx-auto grid w-full max-w-7xl gap-4 px-4 py-8 sm:px-8 sm:py-10 lg:grid-cols-3 lg:px-10">
-          <InfoPanel
-            icon={WalletCards}
-            title="余额与计费"
-            body="控制台会展示钱包余额、充值记录和调用扣费记录。不同模型按后台价格策略结算。"
-          />
-          <InfoPanel
-            icon={Activity}
-            title="用量记录"
-            body="请求列表可查看模型、状态、Token、耗时和扣费，方便定位异常调用。"
-          />
-          <InfoPanel
-            icon={MessageSquareText}
-            title="错误反馈"
-            body="联系支持时请附上请求时间、模型名、状态码和响应错误信息，排查会更快。"
-          />
-        </div>
-      </section>
+console.log(response.output_text);`;
+  const pythonExample = `import os
+from openai import OpenAI
 
-      <section className="mx-auto grid w-full max-w-7xl gap-6 px-4 py-10 sm:px-8 sm:py-12 lg:grid-cols-[1fr_360px] lg:px-10">
-        <div className="min-w-0">
-          <div className="mb-6 flex items-center gap-3">
-            <LifeBuoy className="size-6 text-blue-600" aria-hidden="true" />
-            <h2 className="text-xl font-bold text-slate-950 sm:text-2xl">
-              常见问题
-            </h2>
+client = OpenAI(
+    api_key=os.environ["APISHARE_API_KEY"],
+    base_url="${baseUrl}"
+)
+
+response = client.responses.create(
+    model="gpt-4.1",
+    input="Hello from APIshare"
+)
+
+print(response.output_text)`;
+
+  return (
+    <FrontProviders>
+      <main id="top" className="front-public-page front-help-page">
+        <header className="front-public-header front-help-header">
+          <Link href="/" aria-label="APIshare 控制台"><FrontLogo /></Link>
+          <nav aria-label="帮助中心公共导航">
+            <Link href="/">进入控制台</Link>
+            <a href="#top"><ArrowUp aria-hidden="true" size={16} />返回顶部</a>
+          </nav>
+        </header>
+
+        <section className="front-help-hero">
+          <div>
+            <FrontBadge tone="primary"><BookOpen aria-hidden="true" size={14} />开发者文档</FrontBadge>
+            <h1>APIshare 接入帮助中心</h1>
+            <p>从创建 API Key、替换 Base URL 到理解计费与排查错误，按步骤完成稳定接入。</p>
+            <div className="front-help-hero-actions">
+              <Link className="front-button front-button-primary" href="/?tab=keys"><KeyRound aria-hidden="true" size={17} />创建 API Key</Link>
+              <Link className="front-button front-button-secondary" href="/?tab=test"><Terminal aria-hidden="true" size={17} />打开调用测试</Link>
+            </div>
           </div>
-          <div className="grid gap-4">
-            {faqs.map((faq) => (
-              <article
-                key={faq.q}
-                className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
-              >
-                <h3 className="text-base font-semibold text-slate-950">
-                  {faq.q}
-                </h3>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{faq.a}</p>
-              </article>
-            ))}
+          <div className="front-help-base-url">
+            <span>Base URL</span>
+            <code>{baseUrl}</code>
+            <FrontCopyButton value={baseUrl} label="复制 Base URL" />
           </div>
+        </section>
+
+        <div className="front-help-content">
+          <section aria-labelledby="help-quick-start">
+            <div className="front-help-section-head"><div><span>01</span><h2 id="help-quick-start">快速开始</h2></div><p>完成三个基础步骤即可发起第一条请求。</p></div>
+            <div className="front-help-card-grid">
+              <HelpStep icon={<KeyRound aria-hidden="true" size={20} />} title="创建 API Key" body="进入控制台的 API Key 页面，创建一枚用于服务端调用的密钥。" />
+              <HelpStep icon={<WalletCards aria-hidden="true" size={20} />} title="确认余额或订阅" body="确保钱包有可用余额，或已有生效订阅套餐。" />
+              <HelpStep icon={<Route aria-hidden="true" size={20} />} title="替换 Base URL" body={`将 SDK 的 Base URL 替换为 ${baseUrl}。`} />
+            </div>
+          </section>
+
+          <section aria-labelledby="help-endpoints">
+            <div className="front-help-section-head"><div><span>02</span><h2 id="help-endpoints">兼容端点</h2></div><p>以下地址均使用控制台生成的 API Key 鉴权。</p></div>
+            <FrontCard className="front-help-endpoints">
+              {[
+                ["POST", "/v1/responses", "OpenAI Responses 兼容接口，推荐新项目使用。"],
+                ["POST", "/v1/chat/completions", "Chat Completions 兼容接口，支持流式响应。"],
+                ["POST", "/v1/embeddings", "Embedding 向量接口。"],
+                ["POST", "/v1/completions", "旧版 Completions 兼容接口。"],
+                ["POST", "/v1/images/generations", "图片生成接口，取决于后台已开放模型。"],
+                ["POST", "/v1/images/edits", "图片编辑 multipart 请求转发。"],
+              ].map(([method, path, description]) => (
+                <div className="front-help-endpoint" key={path}>
+                  <FrontBadge tone="primary">{method}</FrontBadge>
+                  <code>{path}</code>
+                  <p>{description}</p>
+                </div>
+              ))}
+            </FrontCard>
+          </section>
+
+          <section aria-labelledby="help-examples">
+            <div className="front-help-section-head"><div><span>03</span><h2 id="help-examples">调用示例</h2></div><p>复制后将环境变量替换为自己的 API Key。</p></div>
+            <div className="front-help-code-grid">
+              <FrontCodeBlock label="cURL" value={curlExample} />
+              <FrontCodeBlock label="Node.js" value={nodeExample} />
+              <FrontCodeBlock label="Python" value={pythonExample} />
+            </div>
+          </section>
+
+          <section aria-labelledby="help-billing">
+            <div className="front-help-section-head"><div><span>04</span><h2 id="help-billing">计费与限制</h2></div><p>请求进入上游前会检查账号、Key、余额和并发状态。</p></div>
+            <div className="front-help-card-grid front-help-card-grid-2">
+              <HelpStep icon={<CreditCard aria-hidden="true" size={20} />} title="余额与订阅" body="系统优先按生效订阅规则扣费；需要钱包兜底时再使用可用余额。" />
+              <HelpStep icon={<Activity aria-hidden="true" size={20} />} title="频率与并发" body="每枚 API Key 可独立设置每分钟限流、并发限制、总额度与过期时间。" />
+              <HelpStep icon={<ShieldCheck aria-hidden="true" size={20} />} title="访问等级" body="访问等级决定模型池、路由规则和扣费倍率，切换后立即生效。" />
+              <HelpStep icon={<LockKeyhole aria-hidden="true" size={20} />} title="密钥安全" body="Secret 仅应保存在服务端环境变量中，不要写入浏览器或提交到仓库。" />
+            </div>
+          </section>
+
+          <section aria-labelledby="help-checklist">
+            <div className="front-help-section-head"><div><span>05</span><h2 id="help-checklist">接入检查</h2></div><p>遇到错误时优先核对以下项目。</p></div>
+            <FrontCard className="front-help-checklist">
+              {["Authorization 使用 Bearer + API Key", "Base URL 指向当前环境配置的网关地址", "模型名已在控制台“可用模型”中显示", "API Key 未停用、未过期且未超过总额度", "钱包有可用余额或存在生效订阅", "客户端保留超时、重试和错误日志"].map((item) => (
+                <div key={item}><CheckCircle2 aria-hidden="true" size={18} /><span>{item}</span></div>
+              ))}
+            </FrontCard>
+          </section>
+
+          <section aria-labelledby="help-faq">
+            <div className="front-help-section-head"><div><span>06</span><h2 id="help-faq">常见问题</h2></div><p>可使用键盘聚焦并展开每个问题。</p></div>
+            <div className="front-help-faq-list">
+              <Faq question="APIshare 与 OpenAI SDK 兼容吗？">兼容。通常只需要替换 baseURL，并将 API Key 改为 APIshare 控制台生成的密钥。</Faq>
+              <Faq question="为什么返回余额不足或并发限制？">网关会在请求进入上游前检查余额、订阅、密钥状态、每分钟限流和并发限制。请分别查看钱包、API Key 与调用记录。</Faq>
+              <Faq question="模型不可用时如何处理？">确认模型在控制台显示为可用；客户端应保留重试与降级策略。若仍失败，请记录请求时间、模型名、HTTP 状态和错误内容。</Faq>
+            </div>
+          </section>
+
+          <section aria-labelledby="help-support">
+            <div className="front-help-section-head"><div><span>07</span><h2 id="help-support">需要支持</h2></div><p>紧急问题可触发管理员邮件提醒。</p></div>
+            <FrontCard className="front-help-support-card">
+              <div><LifeBuoy aria-hidden="true" size={26} /><div><h3>仍然无法解决？</h3><p>请准备请求时间、模型、HTTP 状态、错误摘要和调用记录截图。</p></div></div>
+              <EmergencyAdminCallButton />
+            </FrontCard>
+          </section>
         </div>
 
-        <aside className="min-w-0 rounded-lg border border-blue-200 bg-blue-50 p-4 sm:p-6">
-          <CheckCircle2 className="size-7 text-blue-700" aria-hidden="true" />
-          <h2 className="mt-4 text-xl font-bold text-slate-950">接入检查</h2>
-          <ul className="mt-4 grid gap-3 text-sm leading-6 text-slate-700">
-            <li>已生成 API Key</li>
-            <li>已设置服务端环境变量</li>
-            <li>已替换 SDK Base URL</li>
-            <li>已确认模型名和账号余额</li>
-          </ul>
-          <Link
-            href="/"
-            className="mt-6 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-          >
-            进入控制台
-            <ExternalLink className="size-4" aria-hidden="true" />
-          </Link>
-          <div className="mt-4 border-t border-blue-200 pt-4">
-            <EmergencyAdminCallButton />
-          </div>
-        </aside>
-      </section>
-    </main>
+        <footer className="front-help-footer">
+          <FrontLogo />
+          <nav><Link href="/">控制台</Link><Link href="/access">白名单验证</Link><Link href="/help">帮助中心</Link></nav>
+        </footer>
+      </main>
+    </FrontProviders>
   );
 }
 
-function InfoLine({
-  icon: Icon,
-  text,
-}: {
-  icon: typeof LockKeyhole;
-  text: string;
-}) {
+function HelpStep({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-700">
-      <Icon className="mt-0.5 size-4 shrink-0 text-blue-600" aria-hidden="true" />
-      <span>{text}</span>
-    </div>
+    <FrontCard className="front-help-step"><span>{icon}</span><h3>{title}</h3><p>{body}</p></FrontCard>
   );
 }
 
-function InfoPanel({
-  icon: Icon,
-  title,
-  body,
-}: {
-  icon: typeof WalletCards;
-  title: string;
-  body: string;
-}) {
+function Faq({ question, children }: { question: string; children: React.ReactNode }) {
   return (
-    <article className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-      <Icon className="mb-4 size-6 text-blue-600" aria-hidden="true" />
-      <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
-      <p className="mt-2 text-sm leading-6 text-slate-600">{body}</p>
-    </article>
+    <details className="front-help-faq"><summary>{question}</summary><div>{children}</div></details>
   );
 }

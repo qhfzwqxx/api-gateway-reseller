@@ -12,7 +12,10 @@ export interface AccessTier {
   status: AccessTierStatus;
   sortOrder: number;
   billingMultiplier: string;
+  rateLimitPerMinute: number;
+  concurrencyLimit: number;
   walletRequired: boolean;
+  userSelectable: boolean;
   description: string | null;
   createdAt: string;
   updatedAt: string;
@@ -65,6 +68,7 @@ export interface PoolChannel {
   priceEnabled?: boolean;
   providerStatus?: string;
   providerPriority?: number | null;
+  providerGroupName?: string | null;
   activeKeyCount?: number;
   unavailableReasons?: string[];
   isChecking?: boolean;
@@ -97,6 +101,7 @@ export interface AvailableChannel {
   id: string;
   model: string;
   upstreamProvider: string;
+  providerGroupName: string | null;
   priceEnabled: boolean;
   providerStatus: string;
   activeKeyCount: number;
@@ -166,12 +171,12 @@ export async function getAccessTiers() {
   return response.data.tiers;
 }
 
-export async function createAccessTier(input: Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier"> & { description?: string | null }) {
+export async function createAccessTier(input: Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "userSelectable"> & { description?: string | null }) {
   const response = await http.post<{ tier: AccessTier }>("/admin/access-tiers", input);
   return response.data.tier;
 }
 
-export async function updateAccessTier(id: string, input: Partial<Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "description">>) {
+export async function updateAccessTier(id: string, input: Partial<Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "userSelectable" | "description">>) {
   const response = await http.patch<{ tier: AccessTier }>(`/admin/access-tiers/${id}`, input);
   return response.data.tier;
 }

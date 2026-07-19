@@ -334,9 +334,14 @@ function buildRouteSimulationSteps(params: {
     `请求模型：${params.model}`,
     "按来源 IP 等级、Key 等级、用户等级、默认 standard 解析访问等级",
     `最终访问等级：${params.policy.tierCode}`,
+    `等级限流：并发 ${formatRuntimeLimit(params.policy.concurrencyLimit)}，RPM ${formatRuntimeLimit(params.policy.rateLimitPerMinute)}`,
     "仅使用最终访问等级对应的模型池",
     params.route.selectedCandidate
       ? `模拟首选渠道：${params.route.selectedCandidate.upstreamProvider}，客户输入/输出价 ${params.route.selectedCandidate.price?.customerInputPer1MTok ?? "-"} / ${params.route.selectedCandidate.price?.customerOutputPer1MTok ?? "-"} 每 1M tokens`
       : `无可用渠道：${params.route.unavailableReasons.join("；")}`,
   ];
+}
+
+function formatRuntimeLimit(value: number) {
+  return value > 0 ? String(value) : "无限";
 }

@@ -48,7 +48,18 @@ if [ -z "${UPSTREAM_KEY_ENCRYPTION_SECRET:-}" ]; then
 fi
 
 log "Checking database migration status"
-npx prisma migrate status --schema packages/db/prisma/schema.prisma
+set +e
+migration_status="$(npx prisma migrate status --schema packages/db/prisma/schema.prisma 2>&1)"
+migration_status_code=$?
+set -e
+printf '%s\n' "$migration_status"
+if [ "$migration_status_code" -ne 0 ]; then
+  if grep -q "have not yet been applied" <<<"$migration_status"; then
+    warn "Pending migrations detected; the deployment flow will apply them after backup and build."
+  else
+    die "Database migration status check failed."
+  fi
+fi
 
 log "Validating Prisma schema"
 npx prisma validate --schema packages/db/prisma/schema.prisma

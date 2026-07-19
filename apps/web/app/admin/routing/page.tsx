@@ -129,7 +129,7 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h3 className="text-base font-semibold text-slate-950">访问等级</h3>
-            <p className="mt-1 text-sm text-slate-500">standard 为系统标准等级，不允许删除、禁用或修改 code。</p>
+            <p className="mt-1 text-sm text-slate-500">standard 是 Free 的内部兼容 code，不允许删除、禁用或修改。</p>
           </div>
           <button type="button" onClick={() => setEditingTier(null)} className={primaryButton}>
             新建等级
@@ -139,9 +139,9 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
       {tiersQuery.isLoading ? <SkeletonRows /> : (
         <div className="min-h-0 flex-1 overflow-x-auto">
           <div className="h-full overflow-y-auto">
-            <table className="min-w-[920px] w-full text-left">
+            <table className="min-w-[1180px] w-full text-left">
             <thead className="sticky top-0 z-10 bg-slate-50 text-xs font-semibold uppercase text-slate-500 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
-              <tr><th className="px-5 py-3">Code / 名称</th><th className="px-5 py-3">状态</th><th className="px-5 py-3">排序</th><th className="px-5 py-3">扣费倍率</th><th className="px-5 py-3">关联数量</th><th className="px-5 py-3 text-right">操作</th></tr>
+              <tr><th className="px-5 py-3">Code / 名称</th><th className="px-5 py-3">状态</th><th className="px-5 py-3">前台选择</th><th className="px-5 py-3">排序</th><th className="px-5 py-3">扣费倍率</th><th className="px-5 py-3">等级限流</th><th className="px-5 py-3">关联数量</th><th className="px-5 py-3 text-right">操作</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
               {(tiersQuery.data ?? []).map((tier) => {
@@ -150,8 +150,10 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
                   <tr key={tier.id} className="hover:bg-slate-50/70">
                     <td className="px-5 py-4"><div className="font-semibold text-slate-950">{tier.code}</div><div className="mt-1 text-sm text-slate-500">{tier.name}</div></td>
                     <td className="px-5 py-4"><Badge active={tier.status === "ACTIVE"}>{tier.status}</Badge></td>
+                    <td className="px-5 py-4"><Badge active={tier.userSelectable}>{tier.userSelectable ? "已开放" : "仅后台"}</Badge></td>
                     <td className="px-5 py-4 text-sm text-slate-600">{tier.sortOrder}</td>
                     <td className="px-5 py-4 text-sm font-semibold tabular-nums text-slate-700">× {formatMultiplier(tier.billingMultiplier)}</td>
+                    <td className="px-5 py-4 text-sm text-slate-600"><div>并发：{formatRuntimeLimit(tier.concurrencyLimit)}</div><div className="mt-1">RPM：{formatRuntimeLimit(tier.rateLimitPerMinute)}</div></td>
                     <td className="px-5 py-4 text-sm text-slate-600">用户 {tier._count?.users ?? 0} · Key {tier._count?.apiKeys ?? 0} · 池 {tier._count?.modelPools ?? 0}</td>
                     <td className="px-5 py-4 text-right">
                       <div className="flex justify-end gap-2">
@@ -183,7 +185,7 @@ function AccessTiersPanel({ onNotice }: { onNotice: (message: string) => void })
   );
 }
 
-type AccessTierFormValues = Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier"> & { description?: string | null };
+type AccessTierFormValues = Pick<AccessTier, "code" | "name" | "status" | "sortOrder" | "billingMultiplier" | "rateLimitPerMinute" | "concurrencyLimit" | "userSelectable"> & { description?: string | null };
 
 function AccessTierModal({
   open,
@@ -205,6 +207,9 @@ function AccessTierModal({
   const [status, setStatus] = useState<AccessTier["status"]>("ACTIVE");
   const [sortOrder, setSortOrder] = useState("100");
   const [billingMultiplier, setBillingMultiplier] = useState("1");
+  const [rateLimitPerMinute, setRateLimitPerMinute] = useState("0");
+  const [concurrencyLimit, setConcurrencyLimit] = useState("0");
+  const [userSelectable, setUserSelectable] = useState(false);
   const [description, setDescription] = useState("");
 
   useEffect(() => {
@@ -214,6 +219,9 @@ function AccessTierModal({
     setStatus(tier?.status ?? "ACTIVE");
     setSortOrder(String(tier?.sortOrder ?? 100));
     setBillingMultiplier(tier?.billingMultiplier ?? "1");
+    setRateLimitPerMinute(String(tier?.rateLimitPerMinute ?? 0));
+    setConcurrencyLimit(String(tier?.concurrencyLimit ?? 0));
+    setUserSelectable(tier?.userSelectable ?? false);
     setDescription(tier?.description ?? "");
   }, [open, tier]);
 
@@ -227,18 +235,21 @@ function AccessTierModal({
       status,
       sortOrder: Number(sortOrder),
       billingMultiplier,
+      rateLimitPerMinute: Number(rateLimitPerMinute),
+      concurrencyLimit: Number(concurrencyLimit),
+      userSelectable,
       description: description.trim() || null,
     });
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4">
-      <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-slate-200 bg-white shadow-xl">
+      <form onSubmit={submit} className="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
         <div className="border-b border-slate-200 px-6 py-4">
           <h2 className="text-lg font-semibold text-slate-950">{isEdit ? "编辑访问等级" : "新建访问等级"}</h2>
           <p className="mt-1 text-sm text-slate-500">访问等级会影响用户、Key 和模型池的路由匹配。</p>
         </div>
-        <div className="grid gap-4 p-6">
+        <div className="grid min-h-0 gap-4 overflow-y-auto p-6">
           <label className="grid gap-2">
             <span className="text-sm font-medium text-slate-700">Code</span>
             <input required disabled={isStandard} value={code} onChange={(event) => setCode(event.target.value)} className={inputClass} placeholder="vip" />
@@ -264,6 +275,25 @@ function AccessTierModal({
             <span className="text-sm font-medium text-slate-700">扣费倍率</span>
             <input required inputMode="decimal" value={billingMultiplier} onChange={(event) => setBillingMultiplier(event.target.value)} className={inputClass} placeholder="1" />
             <span className="text-xs leading-5 text-slate-500">最终扣费 = 现有计费结果 × 此倍率。1 为不调整，0.8 为八折，1.2 为加价 20%。</span>
+          </label>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">等级并发上限</span>
+              <input required type="number" min={0} max={10000} value={concurrencyLimit} onChange={(event) => setConcurrencyLimit(event.target.value)} className={inputClass} />
+              <span className="text-xs leading-5 text-slate-500">按“用户 + 当前访问等级”统计，多个 API Key 共享；0 表示无限制。</span>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">等级 RPM 上限</span>
+              <input required type="number" min={0} max={10000} value={rateLimitPerMinute} onChange={(event) => setRateLimitPerMinute(event.target.value)} className={inputClass} />
+              <span className="text-xs leading-5 text-slate-500">限制每个用户在该等级下每分钟的请求总数；0 表示无限制。</span>
+            </label>
+          </div>
+          <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 transition-colors hover:border-blue-200 hover:bg-blue-50/60">
+            <input type="checkbox" checked={userSelectable} onChange={(event) => setUserSelectable(event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <span className="grid gap-1">
+              <span className="text-sm font-semibold text-slate-800">允许用户前台选择</span>
+              <span className="text-xs leading-5 text-slate-500">开启后，用户可在前台立即切换到这个等级；关闭后只能管理员分配。</span>
+            </span>
           </label>
           <label className="grid gap-2">
             <span className="text-sm font-medium text-slate-700">描述</span>
@@ -433,6 +463,10 @@ function formatMultiplier(value: string | number) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "1";
   return numeric.toLocaleString("en-US", { maximumFractionDigits: 8 });
+}
+
+function formatRuntimeLimit(value: number) {
+  return value > 0 ? String(value) : "无限";
 }
 
 const inputClass = "h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100";

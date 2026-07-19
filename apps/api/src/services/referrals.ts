@@ -114,6 +114,12 @@ export async function ensureReferralProfile(userId: string) {
       });
     } catch (error) {
       if (!isUniqueConstraintError(error)) throw error;
+      const createdByConcurrentRequest = await prisma.referralProfile.findUnique({
+        where: { userId },
+      });
+      if (createdByConcurrentRequest) {
+        return createdByConcurrentRequest;
+      }
     }
   }
 

@@ -9,9 +9,11 @@ import {
   createPoolChannel,
   deletePoolChannel,
   updatePoolChannel,
+  type AvailableChannel,
   type ModelPool,
   type PoolChannelStatus,
 } from "../../../../lib/api/routing";
+import { ProviderGroupBadge } from "../../../../components/shared/provider-group-badge";
 import type { HealthCheckRuntime } from "../page";
 
 export function ChannelManagerDrawer({
@@ -26,7 +28,9 @@ export function ChannelManagerDrawer({
   pool: ModelPool | null;
   healthCheck: HealthCheckRuntime | null;
   nowMs: number;
-  availableProviders: string[];
+  availableProviders: Array<
+    Pick<AvailableChannel, "upstreamProvider" | "providerGroupName">
+  >;
   forceAvailableButtonEnabled: boolean;
   open: boolean;
   onClose: () => void;
@@ -36,7 +40,9 @@ export function ChannelManagerDrawer({
   const [status, setStatus] = useState<PoolChannelStatus>("ACTIVE");
   const [notice, setNotice] = useState("");
   const existingProviders = useMemo(() => new Set(pool?.channels.map((channel) => channel.upstreamProvider) ?? []), [pool]);
-  const selectableProviders = availableProviders.filter((item) => !existingProviders.has(item));
+  const selectableProviders = availableProviders.filter(
+    (item) => !existingProviders.has(item.upstreamProvider),
+  );
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["admin", "model-pools"] });
   const addMutation = useMutation({
@@ -97,7 +103,7 @@ export function ChannelManagerDrawer({
             <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto]">
               <select value={provider} onChange={(event) => setProvider(event.target.value)} className={inputClass}>
                 <option value="">选择上游 Provider</option>
-                {selectableProviders.map((item) => <option value={item} key={item}>{item}</option>)}
+                {selectableProviders.map((item) => <option value={item.upstreamProvider} key={item.upstreamProvider}>{item.upstreamProvider} · {item.providerGroupName ?? "未分组"}</option>)}
               </select>
               <select value={status} onChange={(event) => setStatus(event.target.value as PoolChannelStatus)} className={inputClass}>
                 {channelStatuses.map((item) => <option value={item} key={item}>{channelStatusLabel(item)}</option>)}
@@ -176,7 +182,7 @@ function ChannelSection({
               const checking = checkingChannelId === channel.id || Boolean(channel.isChecking);
               return (
                 <tr key={channel.id}>
-                  <td className="px-4 py-3"><div className="break-words font-semibold text-slate-950">{channel.upstreamProvider}</div><div className="mt-1 text-xs text-slate-500">{channel.effectiveStatusLabel ?? channelStatusLabel(channel.effectiveStatus ?? "-")}</div></td>
+                  <td className="px-4 py-3"><div className="flex flex-wrap items-center gap-2"><div className="break-words font-semibold text-slate-950">{channel.upstreamProvider}</div><ProviderGroupBadge groupName={channel.providerGroupName} /></div><div className="mt-1 text-xs text-slate-500">{channel.effectiveStatusLabel ?? channelStatusLabel(channel.effectiveStatus ?? "-")}</div></td>
                   <td className="px-4 py-3 text-sm text-slate-600">{channel.priority}</td>
                   <td className="px-4 py-3">
                     <div className="grid gap-2">

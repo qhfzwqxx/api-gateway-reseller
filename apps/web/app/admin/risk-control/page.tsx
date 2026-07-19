@@ -101,6 +101,12 @@ const gatewayNoticeFields: Array<{
     placeholders: "{limit}=Key 并发上限",
   },
   {
+    key: "tierConcurrencyMessage",
+    title: "访问等级并发限制",
+    trigger: "当用户在当前访问等级下的并发数达到该等级上限时返回。",
+    placeholders: "{limit}=等级并发上限",
+  },
+  {
     key: "userRateLimitMessage",
     title: "用户每分钟速率限制",
     trigger: "当用户级每分钟请求数达到用户 RPM 上限时返回。",
@@ -111,6 +117,12 @@ const gatewayNoticeFields: Array<{
     title: "API Key 每分钟速率限制",
     trigger: "当当前 API Key 每分钟请求数达到 Key RPM 上限时返回。",
     placeholders: "{limit}=Key RPM；{seconds}=建议等待秒数",
+  },
+  {
+    key: "tierRateLimitMessage",
+    title: "访问等级每分钟速率限制",
+    trigger: "当用户在当前访问等级下每分钟请求数达到该等级 RPM 上限时返回。",
+    placeholders: "{limit}=等级 RPM；{seconds}=建议等待秒数",
   },
   {
     key: "charityIpRateLimitMessage",

@@ -19,6 +19,7 @@ import {
   type PoolChannelStatus,
 } from "../../../lib/api/routing";
 import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
+import { ProviderGroupBadge } from "../../../components/shared/provider-group-badge";
 import { ChannelManagerDrawer } from "./components/channel-manager-drawer";
 
 const poolSchema = z.object({
@@ -55,7 +56,23 @@ export default function AdminModelPoolsPage() {
   const healthCheck = data?.healthCheck ? { ...data.healthCheck, receivedAtMs: healthReceivedAtMs } : null;
   const pools = data?.modelPools ?? [];
   const tiers = data?.accessTiers ?? [];
-  const availableProviders = useMemo(() => Array.from(new Set((data?.availableChannels ?? []).map((item) => item.upstreamProvider))).sort(), [data]);
+  const availableProviders = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          (data?.availableChannels ?? []).map((item) => [
+            item.upstreamProvider,
+            {
+              upstreamProvider: item.upstreamProvider,
+              providerGroupName: item.providerGroupName,
+            },
+          ]),
+        ).values(),
+      ).sort((left, right) =>
+        left.upstreamProvider.localeCompare(right.upstreamProvider),
+      ),
+    [data],
+  );
   const pricedModels = useMemo(() => new Set((data?.availableChannels ?? []).map((item) => item.model)), [data]);
   const modelGroups = useMemo(() => buildModelGroups(pools), [pools]);
   const selectedModelName = selectedModel || modelGroups[0]?.model || "";
@@ -280,7 +297,7 @@ export default function AdminModelPoolsPage() {
               {selectedModelPools.map((pool) => (
                 <button key={pool.id} type="button" onClick={() => setSelectedPoolId(pool.id)} className={pool.id === activePool?.id ? selectedCompactStepButton : compactStepButton}>
                   <div className="flex items-center justify-between gap-1.5">
-                    <span className="truncate font-semibold">{pool.tier?.name ?? "Standard"}</span>
+                    <span className="truncate font-semibold">{pool.tier?.name ?? "Free"}</span>
         <Badge active={pool.status === "ACTIVE"}>{modelPoolStatusLabel(pool.status)}</Badge>
                   </div>
                   <div className="mt-1 grid grid-cols-1 gap-0.5 text-[11px]">
@@ -328,7 +345,7 @@ export default function AdminModelPoolsPage() {
       <ConfirmDialog
         open={Boolean(deletingPool)}
         title="删除模型池"
-        description={`删除 ${deletingPool?.model ?? ""} / ${deletingPool?.tier?.name ?? "Standard"} 模型池会同时移除池内渠道，用户将不能通过这个等级调用该池。此操作不可撤销。`}
+        description={`删除 ${deletingPool?.model ?? ""} / ${deletingPool?.tier?.name ?? "Free"} 模型池会同时移除池内渠道，用户将不能通过这个等级调用该池。此操作不可撤销。`}
         confirmText="确认删除"
         requireInputText="确认删除"
         loading={deletePoolMutation.isPending}
@@ -440,7 +457,7 @@ function PoolChannelBoard({
               <Badge active={pool.autoHealthCheckEnabled}>{pool.autoHealthCheckEnabled ? "AUTO" : "MANUAL"}</Badge>
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              等级 {pool.tier?.name ?? "Standard"} · 检测接口 {pool.healthCheckEndpoint} · 已定价 {pool.pricedChannelCount} · 已加入 {pool.channels.length} · 下次 {poolNextCheckText(pool, healthCheck, nowMs)}
+              等级 {pool.tier?.name ?? "Free"} · 检测接口 {pool.healthCheckEndpoint} · 已定价 {pool.pricedChannelCount} · 已加入 {pool.channels.length} · 下次 {poolNextCheckText(pool, healthCheck, nowMs)}
             </p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
@@ -569,6 +586,10 @@ function ChannelCard({
             <h5 className="truncate text-xs font-semibold text-slate-950">{channel.upstreamProvider}</h5>
             <span className={statusDotClass(channel.effectiveStatus)} aria-hidden="true" />
           </div>
+          <ProviderGroupBadge
+            groupName={channel.providerGroupName}
+            className="mt-1 max-w-full"
+          />
           <div className="mt-1 grid grid-cols-2 gap-1">
             <CompactStatus label="通道" value={channel.effectiveStatusLabel ?? compactStatusLabel(channel.effectiveStatus ?? "-")} />
             <CompactStatus label="调度" value={channel.statusLabel ?? channelStatusLabel(channel.status)} />

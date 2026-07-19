@@ -780,6 +780,9 @@ export async function proxyRoutes(app: FastifyInstance) {
             apiKeyId: apiKey.id,
             apiKeyConcurrencyLimit: apiKey.concurrencyLimit,
             apiKeyRateLimitPerMinute: apiKey.rateLimitPerMinute,
+            accessTierId: accessRoutePolicy.tierId,
+            tierConcurrencyLimit: accessRoutePolicy.concurrencyLimit,
+            tierRateLimitPerMinute: accessRoutePolicy.rateLimitPerMinute,
             charityIpRateLimitEnabled:
               user.charityEnabled && user.charityIpRateLimitEnabled,
             charityIpRateLimitPerMinute: user.charityIpRateLimitPerMinute,

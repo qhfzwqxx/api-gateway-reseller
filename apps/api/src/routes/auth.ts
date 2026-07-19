@@ -16,6 +16,7 @@ import { applyReferralForNewUser } from "../services/referrals.js";
 import { sendEmailLoginCode } from "../services/mailer.js";
 import { getClientIp } from "../services/proxy-request-utils.js";
 import { unlockWhitelistFilterUser } from "../services/whitelist-filter-settings.js";
+import { ensureStandardAccessTier } from "../services/access-routing.js";
 
 const emailCodeSchema = z.object({
   email: z
@@ -203,6 +204,7 @@ export async function authRoutes(app: FastifyInstance) {
         randomBytes(32).toString("base64url"),
       );
       const newUserBonus = new Decimal(settings.newUserBonusUsd);
+      const standardTier = await ensureStandardAccessTier();
 
       try {
         user = await prisma.$transaction(async (tx) => {
@@ -210,6 +212,7 @@ export async function authRoutes(app: FastifyInstance) {
             email: body.email,
             passwordHash,
             newUserBonus,
+            tierId: standardTier.id,
           });
           await applyReferralForNewUser(tx, {
             inviteeUserId: created.id,
@@ -346,6 +349,14 @@ export async function authRoutes(app: FastifyInstance) {
         rateLimitPerMinute: true,
         concurrencyLimit: true,
         tokenVersion: true,
+        tierId: true,
+        tier: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+          },
+        },
         wallet: true,
       },
     });
@@ -480,6 +491,7 @@ async function createPublicUser(
     email: string;
     passwordHash: string;
     newUserBonus: Decimal;
+    tierId: string;
   },
 ) {
   const bonus =
@@ -492,6 +504,7 @@ async function createPublicUser(
       passwordHash: input.passwordHash,
       role: "USER",
       status: "ACTIVE",
+      tierId: input.tierId,
       wallet: {
         create: {
           balance: bonus.toFixed(8),

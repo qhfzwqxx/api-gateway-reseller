@@ -1,6 +1,5 @@
 import DashboardClient from "./dashboard-client";
 import CharityVueApp from "./charity-vue-app";
-import { AdminConfirmProvider } from "./admin/_components/admin-confirm";
 import { headers } from "next/headers";
 
 export const dynamic = "force-dynamic";
@@ -58,11 +57,7 @@ export default async function Home() {
     return <CharityHome data={data} />;
   }
 
-  return (
-    <AdminConfirmProvider>
-      <DashboardClient />
-    </AdminConfirmProvider>
-  );
+  return <DashboardClient />;
 }
 
 async function loadCharityDashboard(): Promise<CharityDashboard | null> {

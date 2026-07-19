@@ -2,23 +2,36 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Edit3, Eye, EyeOff, KeyRound, Plus, Trash2, X } from "lucide-react";
+import {
+  Edit3,
+  Eye,
+  EyeOff,
+  FolderPlus,
+  KeyRound,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
+import { ProviderGroupBadge } from "../../../components/shared/provider-group-badge";
 import { SecretInput } from "../../../components/shared/secret-input";
 import {
   createUpstreamProviderKey,
   createUpstreamProvider,
+  createUpstreamProviderGroup,
   deleteUpstreamProviderKey,
   deleteUpstreamProviderKeys,
   deleteUpstreamProvider,
+  getUpstreamProviderGroups,
   getUpstreamProviders,
   updateUpstreamProviderKey,
   updateUpstreamProvider,
   type UpstreamProvider,
+  type UpstreamProviderGroup,
   type UpstreamProviderInput,
   type UpstreamProviderKey,
   type UpstreamProviderKeyInput,
@@ -26,12 +39,22 @@ import {
 
 const providerSchema = z.object({
   name: z.string().trim().min(1, "请输入名称").max(80),
+  groupName: z
+    .string()
+    .trim()
+    .max(80, "分组名称最多 80 个字符")
+    .optional()
+    .or(z.literal("")),
   baseUrl: z.string().trim().url("请输入有效 URL"),
   apiKey: z.string().optional().or(z.literal("")),
   priority: z.coerce.number().int().min(1).max(10000),
   timeoutMs: z.coerce.number().int().min(5000).max(600000),
   compactItemType: z.enum(["compaction", "compaction_summary"]),
   status: z.enum(["ACTIVE", "DISABLED"]),
+});
+
+const providerGroupSchema = z.object({
+  name: z.string().trim().min(1, "请输入分组名称").max(80),
 });
 
 const providerKeySchema = z.object({
@@ -46,6 +69,8 @@ const providerKeySchema = z.object({
 
 type ProviderInput = z.input<typeof providerSchema>;
 type ProviderValues = z.output<typeof providerSchema>;
+type ProviderGroupInput = z.input<typeof providerGroupSchema>;
+type ProviderGroupValues = z.output<typeof providerGroupSchema>;
 type ProviderKeyInput = z.input<typeof providerKeySchema>;
 type ProviderKeyValues = z.output<typeof providerKeySchema>;
 
@@ -76,24 +101,53 @@ export default function AdminUpstreamsPage() {
   const [deletingKeys, setDeletingKeys] = useState<UpstreamProviderKey[]>([]);
   const [hiddenProviderIds, setHiddenProviderIds] = useState<string[]>([]);
   const [hiddenProvidersOpen, setHiddenProvidersOpen] = useState(false);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [notice, setNotice] = useState("");
 
   const providersQuery = useQuery({
     queryKey: ["admin", "upstream-providers"],
     queryFn: getUpstreamProviders,
   });
+  const groupsQuery = useQuery({
+    queryKey: ["admin", "upstream-provider-groups"],
+    queryFn: getUpstreamProviderGroups,
+  });
+  const groups = groupsQuery.data ?? [];
 
   const refreshSupplyChain = () => {
     void queryClient.invalidateQueries({
       queryKey: ["admin", "upstream-providers"],
     });
     void queryClient.invalidateQueries({ queryKey: ["admin", "model-prices"] });
+    void queryClient.invalidateQueries({ queryKey: ["admin", "model-pools"] });
+    void queryClient.invalidateQueries({
+      queryKey: ["admin", "upstream-provider-groups"],
+    });
   };
+
+  const createGroupMutation = useMutation({
+    mutationFn: (values: ProviderGroupValues) => {
+      const name = values.name.trim();
+      if (groups.some((group) => group.name === name)) {
+        throw new Error("该分组已存在，请直接在上游编辑中选择");
+      }
+      return createUpstreamProviderGroup({ name });
+    },
+    onSuccess: (group) => {
+      setGroupModalOpen(false);
+      setNotice(`分组“${group.name}”已创建，现在可以在上游编辑中选择`);
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "upstream-provider-groups"],
+      });
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
 
   const saveMutation = useMutation({
     mutationFn: async (values: ProviderValues) => {
       const payload: UpstreamProviderInput = {
         name: values.name.trim(),
+        groupName: values.groupName?.trim() || null,
         baseUrl: values.baseUrl,
         apiKey: values.apiKey ?? "",
         priority: values.priority,
@@ -284,7 +338,7 @@ export default function AdminUpstreamsPage() {
               上游管理
             </h2>
             <p className="mt-2 text-sm text-slate-500">
-              管理上游 Provider、密钥、优先级与请求超时策略。
+              管理上游 Provider、所属分组、密钥、优先级与请求超时策略。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -296,6 +350,17 @@ export default function AdminUpstreamsPage() {
               <Eye className="h-4 w-4" aria-hidden="true" />
               隐藏区
               {hiddenProviders.length > 0 ? ` (${hiddenProviders.length})` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                createGroupMutation.reset();
+                setGroupModalOpen(true);
+              }}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100"
+            >
+              <FolderPlus className="h-4 w-4" aria-hidden="true" />
+              新建分组
             </button>
             <button
               type="button"
@@ -331,10 +396,11 @@ export default function AdminUpstreamsPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-[980px] w-full text-left">
+            <table className="min-w-[1080px] w-full text-left">
               <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
                 <tr>
                   <th className="px-5 py-3">名称 / Base URL</th>
+                  <th className="px-5 py-3">所属分组</th>
                   <th className="px-5 py-3">密钥</th>
                   <th className="px-5 py-3">优先级</th>
                   <th className="px-5 py-3">超时</th>
@@ -353,6 +419,9 @@ export default function AdminUpstreamsPage() {
                       <div className="mt-1 text-xs text-slate-500">
                         {provider.baseUrl}
                       </div>
+                    </td>
+                    <td className="px-5 py-4">
+                      <ProviderGroupBadge groupName={provider.groupName} />
                     </td>
                     <td className="px-5 py-4">
                       <div className="font-mono text-xs text-slate-600">
@@ -416,7 +485,7 @@ export default function AdminUpstreamsPage() {
                   <tr>
                     <td
                       className="px-5 py-8 text-center text-sm text-slate-500"
-                      colSpan={7}
+                      colSpan={8}
                     >
                       暂无可见上游，已隐藏的上游可在隐藏区恢复。
                     </td>
@@ -448,10 +517,11 @@ export default function AdminUpstreamsPage() {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
               <div className="overflow-x-auto rounded-lg border border-slate-200">
-                <table className="min-w-[980px] w-full text-left">
+                <table className="min-w-[1080px] w-full text-left">
                   <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
                     <tr>
                       <th className="px-5 py-3">名称 / Base URL</th>
+                      <th className="px-5 py-3">所属分组</th>
                       <th className="px-5 py-3">密钥</th>
                       <th className="px-5 py-3">优先级</th>
                       <th className="px-5 py-3">超时</th>
@@ -470,6 +540,9 @@ export default function AdminUpstreamsPage() {
                           <div className="mt-1 text-xs text-slate-500">
                             {provider.baseUrl}
                           </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <ProviderGroupBadge groupName={provider.groupName} />
                         </td>
                         <td className="px-5 py-4">
                           <div className="font-mono text-xs text-slate-600">
@@ -511,7 +584,7 @@ export default function AdminUpstreamsPage() {
                       <tr>
                         <td
                           className="px-5 py-8 text-center text-sm text-slate-500"
-                          colSpan={7}
+                          colSpan={8}
                         >
                           隐藏区暂无上游
                         </td>
@@ -525,9 +598,28 @@ export default function AdminUpstreamsPage() {
         </div>
       ) : null}
 
+      <ProviderGroupModal
+        open={groupModalOpen}
+        groups={groups}
+        loading={createGroupMutation.isPending}
+        error={
+          createGroupMutation.isError
+            ? errorToText(createGroupMutation.error)
+            : undefined
+        }
+        onClose={() => {
+          setGroupModalOpen(false);
+          createGroupMutation.reset();
+        }}
+        onSubmit={(values) => createGroupMutation.mutateAsync(values)}
+      />
+
       <ProviderModal
         open={editingProvider !== undefined}
         provider={editingProvider ?? null}
+        groups={groups}
+        groupsLoading={groupsQuery.isLoading}
+        groupsError={groupsQuery.isError}
         loading={saveMutation.isPending}
         onClose={() => setEditingProvider(undefined)}
         onSubmit={(values) => saveMutation.mutateAsync(values)}
@@ -1067,15 +1159,127 @@ function BatchProviderKeyModal({
   );
 }
 
+function ProviderGroupModal({
+  open,
+  groups,
+  loading,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  groups: UpstreamProviderGroup[];
+  loading: boolean;
+  error?: string;
+  onClose: () => void;
+  onSubmit: (values: ProviderGroupValues) => Promise<unknown>;
+}) {
+  const form = useForm<ProviderGroupInput, unknown, ProviderGroupValues>({
+    resolver: zodResolver(providerGroupSchema),
+    defaultValues: { name: "" },
+  });
+
+  useEffect(() => {
+    if (open) form.reset({ name: "" });
+  }, [form, open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+      <section className="w-full max-w-lg overflow-hidden rounded-lg bg-white shadow-xl">
+        <div className="flex items-start justify-between border-b border-slate-200 px-6 py-5">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">新建分组</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              创建后，上游编辑页面会直接提供该分组选项。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            aria-label="关闭新建分组窗口"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        <form
+          className="grid gap-5 p-6"
+          onSubmit={form.handleSubmit((values) => onSubmit(values))}
+        >
+          {error ? (
+            <div
+              role="alert"
+              className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"
+            >
+              {error}
+            </div>
+          ) : null}
+          <Field label="分组名称" error={form.formState.errors.name?.message}>
+            <input
+              autoFocus
+              className={inputClass}
+              placeholder="例如：官方渠道、国内中转、备用渠道"
+              {...form.register("name")}
+            />
+          </Field>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-800">
+              已有分组（{groups.length}）
+            </div>
+            {groups.length > 0 ? (
+              <div className="mt-3 flex max-h-32 flex-wrap gap-2 overflow-y-auto">
+                {groups.map((group) => (
+                  <span
+                    key={group.name}
+                    className="inline-flex items-center rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700"
+                  >
+                    {group.name} · {group._count.providers} 个上游
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-slate-500">
+                还没有分组，请创建第一个分组。
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-3 border-t border-slate-200 pt-5">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className={secondaryButton}
+            >
+              取消
+            </button>
+            <button type="submit" disabled={loading} className={primaryButton}>
+              {loading ? "创建中" : "创建分组"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function ProviderModal({
   open,
   provider,
+  groups,
+  groupsLoading,
+  groupsError,
   loading,
   onClose,
   onSubmit,
 }: {
   open: boolean;
   provider: UpstreamProvider | null;
+  groups: UpstreamProviderGroup[];
+  groupsLoading: boolean;
+  groupsError: boolean;
   loading: boolean;
   onClose: () => void;
   onSubmit: (values: ProviderValues) => Promise<unknown>;
@@ -1089,6 +1293,10 @@ function ProviderModal({
   useEffect(() => {
     if (open) form.reset(defaultValues(provider));
   }, [form, open, provider]);
+
+  const currentGroupMissing =
+    provider?.groupName &&
+    !groups.some((group) => group.name === provider.groupName);
 
   if (!open) return null;
 
@@ -1119,6 +1327,39 @@ function ProviderModal({
           <div className="grid gap-5">
             <Field label="名称" error={form.formState.errors.name?.message}>
               <input className={inputClass} {...form.register("name")} />
+            </Field>
+            <Field
+              label="所属分组"
+              error={form.formState.errors.groupName?.message}
+            >
+              <select
+                className={inputClass}
+                disabled={groupsLoading || groupsError}
+                {...form.register("groupName")}
+              >
+                <option value="">
+                  {groupsLoading
+                    ? "分组加载中…"
+                    : groupsError
+                      ? "分组加载失败"
+                      : "未分组"}
+                </option>
+                {currentGroupMissing ? (
+                  <option value={provider.groupName ?? ""}>
+                    {provider.groupName}（当前分组）
+                  </option>
+                ) : null}
+                {groups.map((group) => (
+                  <option key={group.name} value={group.name}>
+                    {group.name}（{group._count.providers} 个上游）
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs leading-5 text-slate-500">
+                {groupsError
+                  ? "分组加载失败，请关闭窗口后重试，当前不会保存上游修改。"
+                  : "分组需要先通过页面右上角“新建分组”创建；留空表示未分组。"}
+              </p>
             </Field>
             <Field
               label="Base URL"
@@ -1200,7 +1441,11 @@ function ProviderModal({
             >
               取消
             </button>
-            <button type="submit" disabled={loading} className={primaryButton}>
+            <button
+              type="submit"
+              disabled={loading || groupsLoading || groupsError}
+              className={primaryButton}
+            >
               {loading ? "保存中" : "保存"}
             </button>
           </div>
@@ -1213,6 +1458,7 @@ function ProviderModal({
 function defaultValues(provider: UpstreamProvider | null): ProviderInput {
   return {
     name: provider?.name ?? "",
+    groupName: provider?.groupName ?? "",
     baseUrl: provider?.baseUrl ?? "",
     apiKey: "",
     priority: provider?.priority ?? 100,

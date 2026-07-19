@@ -1285,7 +1285,7 @@ function AdminModelPools({
                 <summary className="provider-head model-tier-foldout-summary">
                   <div>
                     <div className="provider-title">
-                      <strong>{pool.tier?.name ?? "Standard"}</strong>
+                      <strong>{pool.tier?.name ?? "Free"}</strong>
                       <span className="muted">
                         {pool.tier?.code ?? "standard"}
                       </span>
@@ -1310,7 +1310,7 @@ function AdminModelPools({
                       {modelPoolHealthCheckEndpointLabel(
                         pool.healthCheckEndpoint,
                       )}
-                      · 等级 {pool.tier?.name ?? "Standard"}· 惩罚期{" "}
+                      · 等级 {pool.tier?.name ?? "Free"}· 惩罚期{" "}
                       {healthCheck?.penaltySeconds ?? 60} 秒 · 自动检测
                       {pool.autoHealthCheckEnabled ? "已开启" : "已关闭"}
                     </p>
@@ -1646,7 +1646,7 @@ function AdminModelPools({
               <ConsoleNavButton
                 key={pool.id}
                 active={selectedPool?.id === pool.id}
-                title={pool.tier?.name ?? "Standard"}
+                title={pool.tier?.name ?? "Free"}
                 description={`${pool.tier?.code ?? "standard"} · READY ${pool.readyChannelCount}/${pool.channels.length} · ${modelPoolHealthCheckEndpointLabel(pool.healthCheckEndpoint)}`}
                 meta={<StatusPill status={pool.readyChannelCount > 0 ? "READY" : "UNAVAILABLE"} />}
                 onClick={() => setSelectedPoolId(pool.id)}
@@ -1662,7 +1662,7 @@ function AdminModelPools({
               <div className="section-head">
                 <div>
                   <h2 className="section-title">
-                    {selectedPool.tier?.name ?? "Standard"} · {selectedPool.model}
+                    {selectedPool.tier?.name ?? "Free"} · {selectedPool.model}
                   </h2>
                   <p className="section-subtitle">
                     READY {selectedPool.readyChannelCount} · 已定价 {selectedPool.pricedChannelCount} · 渠道 {selectedPool.channels.length}

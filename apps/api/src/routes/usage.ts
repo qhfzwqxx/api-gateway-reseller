@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "@gateway/db";
+import { z } from "zod";
 import { requireApiKey, requireUser } from "../services/auth.js";
 import { resolveAccessRoutePolicy } from "../services/access-routing.js";
 import { getClientIp } from "../services/proxy-request-utils.js";
@@ -86,7 +87,7 @@ export async function usageRoutes(app: FastifyInstance) {
       prisma.apiRequest.findMany({
         where: summaryWhere,
         orderBy: { createdAt: "desc" },
-        take: 500,
+        take: 8,
         select: publicRequestSelect,
       }),
       prisma.apiRequest.aggregate({
@@ -116,14 +117,35 @@ export async function usageRoutes(app: FastifyInstance) {
 
   app.get("/usage/requests", { preHandler: requireUser }, async (request) => {
     const user = request.user as { sub: string };
-    const requests = await prisma.apiRequest.findMany({
-      where: { userId: user.sub },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      select: publicRequestSelect,
-    });
+    const query = z
+      .object({
+        page: z.coerce.number().int().min(1).max(1_000_000).optional(),
+        pageSize: z.coerce.number().int().min(1).max(100).optional(),
+      })
+      .parse(request.query);
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 100;
+    const where = { userId: user.sub };
+    const [requests, total] = await Promise.all([
+      prisma.apiRequest.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: publicRequestSelect,
+      }),
+      prisma.apiRequest.count({ where }),
+    ]);
 
-    return { requests };
+    return {
+      requests,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      },
+    };
   });
 }
 

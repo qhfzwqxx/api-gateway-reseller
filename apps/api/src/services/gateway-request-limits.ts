@@ -27,7 +27,7 @@ type GatewayConcurrencyLock =
     }
   | {
       ok: false;
-      layer: "user" | "key";
+      layer: "user" | "key" | "tier";
       limit: number;
       redisFailure?: boolean;
       noticeText?: string;
@@ -40,7 +40,7 @@ type GatewayRateLimitResult =
     }
   | {
       ok: false;
-      layer: "user" | "key" | "charity_ip";
+      layer: "user" | "key" | "tier" | "charity_ip";
       limit: number;
       retryAfterSeconds: number;
     }
@@ -66,6 +66,9 @@ export async function checkNewRequestLimits(
     apiKeyId: string;
     apiKeyConcurrencyLimit: number;
     apiKeyRateLimitPerMinute: number;
+    accessTierId: string | null;
+    tierConcurrencyLimit: number;
+    tierRateLimitPerMinute: number;
     charityIpRateLimitEnabled: boolean;
     charityIpRateLimitPerMinute: number;
     clientIp: string | null;
@@ -123,6 +126,8 @@ async function acquireGatewayConcurrency(
     userConcurrencyLimit: number;
     apiKeyId: string;
     apiKeyConcurrencyLimit: number;
+    accessTierId: string | null;
+    tierConcurrencyLimit: number;
     userRole?: string | null;
   },
 ): Promise<GatewayConcurrencyLock> {
@@ -139,6 +144,8 @@ async function acquireGatewayConcurrency(
       ok: false,
       layer: "user",
       limit: params.userConcurrencyLimit,
+      redisFailure: userLock.redisFailure,
+      noticeText: userLock.noticeText,
       release: userLock.release,
     };
   }
@@ -157,14 +164,44 @@ async function acquireGatewayConcurrency(
       ok: false,
       layer: "key",
       limit: params.apiKeyConcurrencyLimit,
+      redisFailure: apiKeyLock.redisFailure,
+      noticeText: apiKeyLock.noticeText,
       release: apiKeyLock.release,
+    };
+  }
+
+  const tierLock = await acquireConcurrencySlot(app, {
+    layer: "tier",
+    key: `concurrency:user-tier:${params.userId}:${params.accessTierId ?? "none"}`,
+    limit: params.accessTierId ? params.tierConcurrencyLimit : 0,
+    logContext: {
+      userId: params.userId,
+      accessTierId: params.accessTierId,
+      layer: "tier",
+    },
+    principal: { userId: params.userId, userRole: params.userRole },
+  });
+
+  if (!tierLock.ok) {
+    await Promise.all([apiKeyLock.release(), userLock.release()]);
+    return {
+      ok: false,
+      layer: "tier",
+      limit: params.tierConcurrencyLimit,
+      redisFailure: tierLock.redisFailure,
+      noticeText: tierLock.noticeText,
+      release: tierLock.release,
     };
   }
 
   return {
     ok: true,
     release: async () => {
-      await Promise.all([apiKeyLock.release(), userLock.release()]);
+      await Promise.all([
+        tierLock.release(),
+        apiKeyLock.release(),
+        userLock.release(),
+      ]);
     },
   };
 }
@@ -172,7 +209,7 @@ async function acquireGatewayConcurrency(
 async function acquireConcurrencySlot(
   app: FastifyInstance,
   params: {
-    layer: "user" | "key";
+    layer: "user" | "key" | "tier";
     key: string;
     limit: number;
     logContext: Record<string, unknown>;
@@ -269,6 +306,8 @@ async function checkGatewayRateLimit(
     userRateLimitPerMinute: number;
     apiKeyId: string;
     apiKeyRateLimitPerMinute: number;
+    accessTierId: string | null;
+    tierRateLimitPerMinute: number;
     charityIpRateLimitEnabled: boolean;
     charityIpRateLimitPerMinute: number;
     clientIp: string | null;
@@ -277,12 +316,20 @@ async function checkGatewayRateLimit(
 ): Promise<GatewayRateLimitResult> {
   const userLimit = normalizeRuntimeLimit(params.userRateLimitPerMinute);
   const apiKeyLimit = normalizeRuntimeLimit(params.apiKeyRateLimitPerMinute);
+  const tierLimit = params.accessTierId
+    ? normalizeRuntimeLimit(params.tierRateLimitPerMinute)
+    : 0;
   const charityIpLimit = params.charityIpRateLimitEnabled
     ? normalizeRuntimeLimit(params.charityIpRateLimitPerMinute)
     : 0;
   const clientIp = params.clientIp?.trim() || "unknown";
 
-  if (userLimit <= 0 && apiKeyLimit <= 0 && charityIpLimit <= 0) {
+  if (
+    userLimit <= 0 &&
+    apiKeyLimit <= 0 &&
+    tierLimit <= 0 &&
+    charityIpLimit <= 0
+  ) {
     return { ok: true };
   }
 
@@ -295,10 +342,12 @@ async function checkGatewayRateLimit(
       `
       local userLimit = tonumber(ARGV[1]) or 0
       local keyLimit = tonumber(ARGV[2]) or 0
-      local charityIpLimit = tonumber(ARGV[3]) or 0
-      local ttl = tonumber(ARGV[4]) or 70
+      local tierLimit = tonumber(ARGV[3]) or 0
+      local charityIpLimit = tonumber(ARGV[4]) or 0
+      local ttl = tonumber(ARGV[5]) or 70
       local userCurrent = 0
       local keyCurrent = 0
+      local tierCurrent = 0
       local charityIpCurrent = 0
 
       if userLimit > 0 then
@@ -315,8 +364,15 @@ async function checkGatewayRateLimit(
         end
       end
 
+      if tierLimit > 0 then
+        tierCurrent = tonumber(redis.call("GET", KEYS[3]) or "0") or 0
+        if tierCurrent >= tierLimit then
+          return {0, "tier", tierLimit}
+        end
+      end
+
       if charityIpLimit > 0 then
-        charityIpCurrent = tonumber(redis.call("GET", KEYS[3]) or "0") or 0
+        charityIpCurrent = tonumber(redis.call("GET", KEYS[4]) or "0") or 0
         if charityIpCurrent >= charityIpLimit then
           return {0, "charity_ip", charityIpLimit}
         end
@@ -332,19 +388,26 @@ async function checkGatewayRateLimit(
         redis.call("EXPIRE", KEYS[2], ttl)
       end
 
-      if charityIpLimit > 0 then
+      if tierLimit > 0 then
         redis.call("INCR", KEYS[3])
         redis.call("EXPIRE", KEYS[3], ttl)
       end
 
+      if charityIpLimit > 0 then
+        redis.call("INCR", KEYS[4])
+        redis.call("EXPIRE", KEYS[4], ttl)
+      end
+
       return {1, "", 0}
       `,
-      3,
+      4,
       `ratelimit:user:${params.userId}:${minuteBucket}`,
       `ratelimit:${params.apiKeyId}:${minuteBucket}`,
+      `ratelimit:user-tier:${params.userId}:${params.accessTierId ?? "none"}:${minuteBucket}`,
       `ratelimit:charity-ip:${params.userId}:${clientIp}:${minuteBucket}`,
       userLimit,
       apiKeyLimit,
+      tierLimit,
       charityIpLimit,
       70,
     );
@@ -359,25 +422,32 @@ async function checkGatewayRateLimit(
     }
 
     const limitedLayer =
-      layer === "user" || layer === "charity_ip" ? layer : "key";
+      layer === "user" || layer === "tier" || layer === "charity_ip"
+        ? layer
+        : "key";
     const numericLimit = Number(limit);
+    const fallbackLimit =
+      limitedLayer === "user"
+        ? userLimit
+        : limitedLayer === "tier"
+          ? tierLimit
+          : limitedLayer === "charity_ip"
+            ? charityIpLimit
+            : apiKeyLimit;
     return {
       ok: false,
       layer: limitedLayer,
       limit:
         Number.isFinite(numericLimit) && numericLimit > 0
           ? numericLimit
-          : limitedLayer === "user"
-            ? userLimit
-            : limitedLayer === "charity_ip"
-              ? charityIpLimit
-              : apiKeyLimit,
+          : fallbackLimit,
       retryAfterSeconds,
     };
   } catch (error) {
     const failureDecision = await decideRedisFailure(app, error, {
       userId: params.userId,
       apiKeyId: params.apiKeyId,
+      accessTierId: params.accessTierId,
       component: "rate_limit",
       principal: { userId: params.userId, userRole: params.userRole },
     });
@@ -386,6 +456,7 @@ async function checkGatewayRateLimit(
         error,
         userId: params.userId,
         apiKeyId: params.apiKeyId,
+        accessTierId: params.accessTierId,
         policy: failureDecision.policy,
       },
       failureDecision.allow
@@ -434,20 +505,22 @@ function secondsUntilNextMinute(now: number) {
 }
 
 function concurrencyNotice(
-  layer: "user" | "key",
+  layer: "user" | "key" | "tier",
   limit: number,
   settings: GatewayNoticeSettings,
 ) {
   return renderGatewayNoticeTemplate(
     layer === "user"
       ? settings.userConcurrencyMessage
-      : settings.keyConcurrencyMessage,
+      : layer === "tier"
+        ? settings.tierConcurrencyMessage
+        : settings.keyConcurrencyMessage,
     { limit },
   );
 }
 
 function rateLimitNotice(
-  layer: "user" | "key" | "charity_ip",
+  layer: "user" | "key" | "tier" | "charity_ip",
   limit: number,
   retryAfterSeconds: number,
   settings: GatewayNoticeSettings,
@@ -455,9 +528,11 @@ function rateLimitNotice(
   const template =
     layer === "user"
       ? settings.userRateLimitMessage
-      : layer === "charity_ip"
-        ? settings.charityIpRateLimitMessage
-        : settings.keyRateLimitMessage;
+      : layer === "tier"
+        ? settings.tierRateLimitMessage
+        : layer === "charity_ip"
+          ? settings.charityIpRateLimitMessage
+          : settings.keyRateLimitMessage;
   return renderGatewayNoticeTemplate(template, {
     limit,
     seconds: retryAfterSeconds,
