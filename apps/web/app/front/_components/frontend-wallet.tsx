@@ -355,39 +355,45 @@ export function WalletManagement({
             error={redeemError}
             hint="输入内容会自动去除首尾空格"
           >
-            <input
-              id="front-redeem-code"
-              className="front-input front-input-mono"
-              value={code}
-              disabled={redeeming}
-              onChange={(event) => {
-                setCode(event.target.value);
-                setRedeemError(null);
-                setRedeemResult(null);
-              }}
-              placeholder="rdm_..."
-              autoComplete="off"
-            />
+            <div className="front-redeem-control-row">
+              <input
+                id="front-redeem-code"
+                className="front-input front-input-mono"
+                value={code}
+                disabled={redeeming}
+                onChange={(event) => {
+                  setCode(event.target.value);
+                  setRedeemError(null);
+                  setRedeemResult(null);
+                }}
+                placeholder="rdm_..."
+                autoComplete="off"
+              />
+              <FrontButton
+                variant="secondary"
+                type="button"
+                disabled={redeeming}
+                onClick={async () => {
+                  try {
+                    const text = await navigator.clipboard.readText();
+                    setCode(text.trim());
+                  } catch {
+                    toast("无法读取剪贴板，请手动粘贴", "error");
+                  }
+                }}
+              >
+                <Copy aria-hidden="true" size={17} />
+                粘贴
+              </FrontButton>
+              <FrontButton
+                type="submit"
+                loading={redeeming}
+                disabled={!code.trim()}
+              >
+                {redeeming ? "兑换中" : "立即兑换"}
+              </FrontButton>
+            </div>
           </FrontField>
-          <FrontButton
-            variant="secondary"
-            type="button"
-            disabled={redeeming}
-            onClick={async () => {
-              try {
-                const text = await navigator.clipboard.readText();
-                setCode(text.trim());
-              } catch {
-                toast("无法读取剪贴板，请手动粘贴", "error");
-              }
-            }}
-          >
-            <Copy aria-hidden="true" size={17} />
-            粘贴
-          </FrontButton>
-          <FrontButton type="submit" loading={redeeming} disabled={!code.trim()}>
-            {redeeming ? "兑换中" : "立即兑换"}
-          </FrontButton>
         </form>
 
         {redeemResult ? (

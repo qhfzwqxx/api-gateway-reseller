@@ -2538,9 +2538,19 @@
 .front-redeem-form {
   display: grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.front-redeem-control-row {
+  display: grid;
+  min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: end;
+  align-items: stretch;
   gap: 10px;
+}
+
+.front-redeem-control-row .front-button {
+  min-height: 42px;
 }
 
 .front-redeem-result {
@@ -2647,12 +2657,16 @@
     gap: 12px;
   }
 
-  .front-redeem-form {
+  .front-redeem-control-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .front-redeem-form .front-field {
+  .front-redeem-control-row .front-input {
     grid-column: 1 / -1;
+  }
+
+  .front-redeem-control-row .front-button {
+    width: 100%;
   }
 
   .front-subscription-option {
@@ -2679,11 +2693,11 @@
 }
 
 @media (max-width: 640px) {
-  .front-redeem-form {
+  .front-redeem-control-row {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .front-redeem-form .front-field {
+  .front-redeem-control-row .front-input {
     grid-column: auto;
   }
 }
