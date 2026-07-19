@@ -70,7 +70,7 @@ export function AccessTierCard({
     <FrontCard className="front-access-tier-card">
       <div className="front-page-section-head">
         <div>
-          <h2>访问等级（基础）</h2>
+          <h2>访问等级</h2>
           <p>默认决定可用模型、扣费倍率与运行限制；没有订阅也会持续生效。</p>
         </div>
         <FrontBadge tone={activeSubscription ? "warning" : "primary"}>
@@ -148,6 +148,16 @@ export function AccessTierCard({
                     {tier.description}
                   </p>
                 ) : null}
+                <dl className="front-tier-limit-grid">
+                  <div>
+                    <dt>RPM</dt>
+                    <dd>{formatRateLimit(tier.rateLimitPerMinute)}</dd>
+                  </div>
+                  <div>
+                    <dt>并发</dt>
+                    <dd>{formatConcurrencyLimit(tier.concurrencyLimit)}</dd>
+                  </div>
+                </dl>
                 <div className="front-tier-option-foot">
                   <span className="front-data-number">
                     扣费倍率 × {formatMultiplier(tier.billingMultiplier)}
@@ -181,4 +191,12 @@ function formatMultiplier(value: string) {
   return Number.isFinite(number)
     ? number.toLocaleString("zh-CN", { maximumFractionDigits: 8 })
     : value;
+}
+
+function formatRateLimit(value: number) {
+  return value > 0 ? `${value.toLocaleString("zh-CN")} 次/分钟` : "无限制";
+}
+
+function formatConcurrencyLimit(value: number) {
+  return value > 0 ? `${value.toLocaleString("zh-CN")} 路` : "无限制";
 }

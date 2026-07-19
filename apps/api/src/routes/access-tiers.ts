@@ -11,6 +11,8 @@ const accessTierSelect = {
   status: true,
   sortOrder: true,
   billingMultiplier: true,
+  rateLimitPerMinute: true,
+  concurrencyLimit: true,
   walletRequired: true,
   userSelectable: true,
   description: true,

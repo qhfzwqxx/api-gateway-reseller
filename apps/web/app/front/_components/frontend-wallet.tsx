@@ -273,7 +273,7 @@ export function WalletManagement({
         <FrontCard className="front-subscription-card">
           <div className="front-page-section-head">
             <div>
-              <h2>订阅权益（可选）</h2>
+              <h2>订阅权益</h2>
               <p>可提供临时访问等级或套餐额度；未订阅时继续使用基础等级和钱包余额。</p>
             </div>
             <div className="front-section-actions">

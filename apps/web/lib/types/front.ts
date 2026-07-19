@@ -48,6 +48,8 @@ export type FrontSelectableAccessTier = FrontAccessTier & {
   status: "ACTIVE";
   sortOrder: number;
   billingMultiplier: string;
+  rateLimitPerMinute: number;
+  concurrencyLimit: number;
   walletRequired: boolean;
   userSelectable: true;
   description: string | null;
