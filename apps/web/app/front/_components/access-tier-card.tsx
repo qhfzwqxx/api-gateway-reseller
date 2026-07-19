@@ -79,27 +79,6 @@ export function AccessTierCard({
         </FrontBadge>
       </div>
 
-      <div className="front-tier-summary">
-        <div className="front-tier-summary-primary">
-          <span>当前生效等级</span>
-          <strong>{effectiveTier?.name ?? "默认等级"}</strong>
-          <p>
-            {activeSubscription
-              ? `由订阅「${activeSubscription.plan.name}」在有效期内提供`
-              : "当前使用账户基础等级，订阅不是必需条件"}
-          </p>
-        </div>
-        <div className="front-tier-summary-secondary">
-          <span>账户基础等级</span>
-          <strong>{currentTier?.name ?? "默认等级"}</strong>
-          <p>
-            {activeSubscription
-              ? "订阅结束后自动恢复"
-              : "可在下方开放等级中切换"}
-          </p>
-        </div>
-      </div>
-
       {activeSubscription ? (
         <FrontAlert tone="info" title="订阅正在临时覆盖基础等级">
           当前订阅「{activeSubscription.plan.name}」提供「
