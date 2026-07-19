@@ -114,6 +114,7 @@ export function AccessTierCard({
           {tiers.map((tier) => {
             const active = tier.id === effectiveTier?.id;
             const switching = tier.id === switchingTierId;
+            const description = formatTierDescription(tier.description);
             const disabled =
               active || selectionLocked || Boolean(switchingTierId);
             const buttonLabel = active
@@ -143,9 +144,9 @@ export function AccessTierCard({
                     </FrontBadge>
                   ) : null}
                 </div>
-                {tier.description ? (
+                {description ? (
                   <p className="front-tier-option-description">
-                    {tier.description}
+                    {description}
                   </p>
                 ) : null}
                 <dl className="front-tier-limit-grid">
@@ -198,5 +199,12 @@ function formatRateLimit(value: number) {
 }
 
 function formatConcurrencyLimit(value: number) {
-  return value > 0 ? `${value.toLocaleString("zh-CN")} 路` : "无限制";
+  return value > 0 ? value.toLocaleString("zh-CN") : "无限制";
+}
+
+function formatTierDescription(value: string | null) {
+  const description = value?.trim();
+  return description?.toLowerCase() === "default access tier"
+    ? null
+    : description || null;
 }

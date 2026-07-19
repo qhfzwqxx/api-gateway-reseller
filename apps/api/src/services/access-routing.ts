@@ -40,7 +40,6 @@ export async function ensureStandardAccessTier() {
       id: "tier_standard",
       code: standardAccessTierCode,
       name: "Free",
-      description: "Default access tier",
       sortOrder: 100,
       userSelectable: true,
     },
