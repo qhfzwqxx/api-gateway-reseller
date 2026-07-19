@@ -206,7 +206,7 @@
 .front-auth-links a:focus-visible,
 .front-help-header nav a:focus-visible,
 .front-help-footer nav a:focus-visible,
-.front-sidebar-help:focus-visible,
+.front-topbar-help:focus-visible,
 .front-balance-summary:focus-visible,
 .front-account-mobile:focus-visible,
 .front-mobile-drawer-links a:focus-visible,
@@ -4326,24 +4326,6 @@
   font-size: 11px;
 }
 
-.front-sidebar-help {
-  display: flex;
-  min-height: 40px;
-  align-items: center;
-  gap: 10px;
-  border-radius: 8px;
-  color: var(--front-text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 10px;
-  text-decoration: none;
-}
-
-.front-sidebar-help:hover {
-  background: var(--front-surface-muted);
-  color: var(--front-text);
-}
-
 .front-main {
   display: grid;
   min-width: 0;
@@ -4393,6 +4375,32 @@
   min-width: 0;
   align-items: center;
   gap: 10px;
+}
+
+.front-topbar-help {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--front-border);
+  border-radius: 8px;
+  background: var(--front-surface);
+  color: var(--front-text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+  padding: 0 12px;
+  text-decoration: none;
+  transition:
+    border-color 180ms ease-out,
+    background-color 180ms ease-out,
+    color 180ms ease-out;
+}
+
+.front-topbar-help:hover {
+  border-color: var(--front-border-hover);
+  background: var(--front-surface-muted);
+  color: var(--front-text);
 }
 
 .front-balance-summary {
@@ -4596,8 +4604,7 @@
   .front-sidebar .front-logo-copy,
   .front-nav-heading,
   .front-nav-item > span,
-  .front-account-copy,
-  .front-sidebar-help > span {
+  .front-account-copy {
     display: none;
   }
 
@@ -4624,10 +4631,17 @@
     gap: 4px;
   }
 
-  .front-sidebar-help {
-    min-height: 44px;
+  .front-topbar-help {
+    width: 40px;
+    min-width: 40px;
     justify-content: center;
+    padding: 0;
   }
+
+  .front-topbar-help > span {
+    display: none;
+  }
+
 }
 
 @media (max-width: 767px) {
@@ -4666,6 +4680,7 @@
 
   .front-page-heading p,
   .front-balance-summary,
+  .front-topbar-help,
   .front-topbar-actions > .front-button {
     display: none;
   }

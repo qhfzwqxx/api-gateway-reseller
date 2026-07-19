@@ -212,15 +212,6 @@ export function FrontAppShell({
               <LogOut aria-hidden="true" size={18} />
             </FrontIconButton>
           </div>
-          <Link
-            aria-label="帮助中心"
-            className="front-sidebar-help"
-            href="/help"
-            title="帮助中心"
-          >
-            <HelpCircle aria-hidden="true" size={18} />
-            <span>帮助中心</span>
-          </Link>
         </div>
       </aside>
 
@@ -246,6 +237,15 @@ export function FrontAppShell({
                 <strong>${money(availableBalance(wallet))}</strong>
               </button>
             ) : null}
+            <Link
+              aria-label="帮助中心"
+              className="front-topbar-help"
+              href="/help"
+              title="帮助中心"
+            >
+              <HelpCircle aria-hidden="true" size={18} />
+              <span>帮助中心</span>
+            </Link>
             <Dialog.Root open={drawerOpen} onOpenChange={setDrawerOpen}>
               <Dialog.Trigger asChild>
                 <FrontIconButton
