@@ -2378,17 +2378,17 @@
 }
 
 .front-subscription-card > .front-empty-state {
-  min-height: 135px;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 220px;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
-    "icon title action"
-    "icon description action";
-  place-items: initial;
-  align-items: center;
-  column-gap: 14px;
-  row-gap: 4px;
-  padding: 12px 4px 2px;
-  text-align: left;
+    "icon"
+    "title"
+    "description"
+    "action";
+  place-items: center;
+  gap: 8px;
+  padding: 24px 24px 28px;
+  text-align: center;
 }
 
 .front-subscription-card > .front-empty-state > .front-empty-icon {
@@ -2396,19 +2396,16 @@
 }
 
 .front-subscription-card > .front-empty-state > strong {
-  align-self: end;
   grid-area: title;
 }
 
 .front-subscription-card > .front-empty-state > p {
-  align-self: start;
   grid-area: description;
 }
 
 .front-subscription-card > .front-empty-state > .front-empty-action {
-  align-self: center;
   grid-area: action;
-  margin-top: 0;
+  margin-top: 8px;
 }
 
 .front-subscription-skeleton,
