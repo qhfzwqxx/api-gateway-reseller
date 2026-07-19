@@ -15,7 +15,7 @@ import type { Usage } from "../types.js";
 
 export const defaultWalletReservationUsd = new Decimal("0.01");
 
-export async function ensureWalletCanStart(userId: string) {
+export async function ensureWalletCanStart(userId: string, minimumBalanceUsd: string | null) {
   const wallet = await prisma.wallet.findUnique({
     where: { userId },
   });
@@ -29,7 +29,7 @@ export async function ensureWalletCanStart(userId: string) {
 
   const balance = new Decimal(wallet.balance.toString());
 
-  if (balance.lte(0)) {
+  if (minimumBalanceUsd !== null && balance.lt(new Decimal(minimumBalanceUsd))) {
     return {
       ok: false as const,
       reason: "你的 APIshare 钱包余额不足，请充值后继续使用。",

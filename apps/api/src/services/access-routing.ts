@@ -6,6 +6,7 @@ export type AccessRoutePolicy = {
   tierId: string | null;
   tierCode: string;
   walletRequired: boolean;
+  minimumWalletBalanceUsd: string | null;
   rateLimitPerMinute: number;
   concurrencyLimit: number;
 };
@@ -23,6 +24,7 @@ let cachedStandardTier:
       id: string;
       code: string;
       walletRequired: boolean;
+      minimumWalletBalanceUsd: { toString(): string } | null;
       rateLimitPerMinute: number;
       concurrencyLimit: number;
     }
@@ -49,6 +51,7 @@ export async function ensureStandardAccessTier() {
       walletRequired: true,
       rateLimitPerMinute: true,
       concurrencyLimit: true,
+      minimumWalletBalanceUsd: true,
     },
   });
   cachedStandardTier = tier;
@@ -84,6 +87,7 @@ export async function resolveAccessRoutePolicy(
         walletRequired: true,
         rateLimitPerMinute: true,
         concurrencyLimit: true,
+        minimumWalletBalanceUsd: true,
       },
     })) ??
     standardTier;
@@ -92,6 +96,7 @@ export async function resolveAccessRoutePolicy(
     tierId: tier.id,
     tierCode: tier.code,
     walletRequired: tier.walletRequired,
+    minimumWalletBalanceUsd: tier.minimumWalletBalanceUsd?.toString() ?? null,
     rateLimitPerMinute: tier.rateLimitPerMinute,
     concurrencyLimit: tier.concurrencyLimit,
   };
@@ -117,6 +122,7 @@ async function findMatchingIpAccessTier(clientIp?: string | null) {
           id: true,
           code: true,
           walletRequired: true,
+          minimumWalletBalanceUsd: true,
           rateLimitPerMinute: true,
           concurrencyLimit: true,
         },

@@ -1555,6 +1555,7 @@ export async function adminRoutes(app: FastifyInstance) {
         rateLimitPerMinute: userRuntimeLimitSchema.default(0),
         concurrencyLimit: userRuntimeLimitSchema.default(0),
         walletRequired: z.boolean().default(true),
+        minimumWalletBalanceUsd: z.string().trim().regex(/^\d+(\.\d{1,8})?$/).nullable().optional(),
         userSelectable: z.boolean().default(false),
         description: z.string().trim().max(500).nullable().optional(),
       })
@@ -1593,6 +1594,7 @@ export async function adminRoutes(app: FastifyInstance) {
         rateLimitPerMinute: userRuntimeLimitSchema.optional(),
         concurrencyLimit: userRuntimeLimitSchema.optional(),
         walletRequired: z.boolean().optional(),
+        minimumWalletBalanceUsd: z.string().trim().regex(/^\d+(\.\d{1,8})?$/).nullable().optional(),
         userSelectable: z.boolean().optional(),
         description: z.string().trim().max(500).nullable().optional(),
       })
@@ -1646,6 +1648,9 @@ export async function adminRoutes(app: FastifyInstance) {
             : {}),
           ...(body.walletRequired !== undefined
             ? { walletRequired: body.walletRequired }
+            : {}),
+          ...(body.minimumWalletBalanceUsd !== undefined
+            ? { minimumWalletBalanceUsd: body.minimumWalletBalanceUsd }
             : {}),
           ...(body.userSelectable !== undefined
             ? { userSelectable: body.userSelectable }

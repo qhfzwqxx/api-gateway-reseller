@@ -118,6 +118,7 @@ model AccessTier {
   rateLimitPerMinute Int              @default(0)
   concurrencyLimit   Int              @default(0)
   walletRequired     Boolean          @default(true)
+  minimumWalletBalanceUsd Decimal?     @db.Decimal(18, 8)
   userSelectable     Boolean          @default(false)
   description        String?
   createdAt          DateTime         @default(now())

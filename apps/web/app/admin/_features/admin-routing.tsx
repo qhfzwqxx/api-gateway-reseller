@@ -22,6 +22,7 @@ type AccessTier = AccessTierRef & {
   sortOrder: number;
   billingMultiplier?: string;
   walletRequired?: boolean;
+  minimumWalletBalanceUsd?: string | null;
   description?: string | null;
   _count?: { users: number; apiKeys: number; modelPools: number };
 };
@@ -89,6 +90,7 @@ export function AdminRouting({
     sortOrder: "100",
     billingMultiplier: "1",
     walletRequired: true,
+    minimumWalletBalanceUsd: "",
     description: "",
   });
   const [simulationDraft, setSimulationDraft] = useState({
@@ -156,6 +158,12 @@ export function AdminRouting({
     status: <StatusPill status={tier.status} />,
     billingMultiplier: `× ${formatMultiplier(tier.billingMultiplier ?? "1")}`,
     walletRequired: tier.walletRequired === false ? "不要求余额" : "需要余额",
+    minimumWalletBalanceUsd:
+      tier.walletRequired === false
+        ? "不限"
+        : tier.minimumWalletBalanceUsd
+          ? `$${tier.minimumWalletBalanceUsd}`
+          : "$0",
     references: (
       <span className="muted">
         用户 {tier._count?.users ?? 0} · Key {tier._count?.apiKeys ?? 0} · 池{" "}
@@ -222,6 +230,7 @@ export function AdminRouting({
           sortOrder: Number(tierDraft.sortOrder) || 100,
           billingMultiplier: tierDraft.billingMultiplier || "1",
           walletRequired: tierDraft.walletRequired,
+          minimumWalletBalanceUsd: tierDraft.minimumWalletBalanceUsd || null,
           description: tierDraft.description || null,
           status: "ACTIVE",
         }),
@@ -232,6 +241,7 @@ export function AdminRouting({
         sortOrder: "100",
         billingMultiplier: "1",
         walletRequired: true,
+        minimumWalletBalanceUsd: "",
         description: "",
       });
       await tiersQuery.refetch();
@@ -531,6 +541,24 @@ export function AdminRouting({
                   要求余额检查
                 </span>
               </label>
+              <label>
+                最低余额（美元）
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  min="0"
+                  onChange={(event) =>
+                    setTierDraft((current) => ({
+                      ...current,
+                      minimumWalletBalanceUsd: event.target.value,
+                    }))
+                  }
+                  placeholder="留空表示不限"
+                  step="0.00000001"
+                  type="number"
+                  value={tierDraft.minimumWalletBalanceUsd}
+                />
+              </label>
               <div className="form-actions">
                 <button className="button" type="submit">
                   <Plus size={17} />
@@ -544,6 +572,7 @@ export function AdminRouting({
                 { accessorKey: "status", header: "状态" },
                 { accessorKey: "billingMultiplier", header: "扣费倍率" },
                 { accessorKey: "walletRequired", header: "钱包门槛" },
+                { accessorKey: "minimumWalletBalanceUsd", header: "最低余额" },
                 { accessorKey: "references", header: "引用" },
                 { accessorKey: "actions", header: "操作" },
               ]}

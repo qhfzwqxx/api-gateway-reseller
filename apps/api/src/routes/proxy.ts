@@ -739,9 +739,9 @@ export async function proxyRoutes(app: FastifyInstance) {
         const subscriptionCanStart =
           activeSubscription &&
           hasAvailableSubscriptionQuota(activeSubscription);
-        const walletCheck = subscriptionCanStart
+        const walletCheck = subscriptionCanStart || !accessRoutePolicy.walletRequired
           ? { ok: true as const, balance: new Decimal(0) }
-          : await ensureWalletCanStart(user.id);
+          : await ensureWalletCanStart(user.id, accessRoutePolicy.minimumWalletBalanceUsd);
         if (!walletCheck.ok) {
           await createGatewayRejectedRequest({
             body,
