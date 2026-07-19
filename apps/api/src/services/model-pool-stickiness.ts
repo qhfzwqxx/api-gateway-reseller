@@ -249,7 +249,6 @@ export async function recordStickyModelPoolResult(params: {
   channelId?: string;
   upstreamProviderKeyId?: string | null;
   failed?: boolean;
-  retryableFailure?: boolean;
   streamed?: boolean;
   firstTokenLatencyMs?: number | null;
   latencyMs?: number | null;
@@ -269,16 +268,6 @@ export async function recordStickyModelPoolResult(params: {
 
   const settings = await readDispatchSettings();
   if (!settings.stickyEnabled) {
-    await clearStickyModelPoolChannel(
-      callerIdentity,
-      model,
-      channelId,
-      upstreamProviderKeyId,
-    );
-    return;
-  }
-
-  if (params.failed === true && params.retryableFailure === true) {
     await clearStickyModelPoolChannel(
       callerIdentity,
       model,

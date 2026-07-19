@@ -235,32 +235,35 @@ export async function reserveProviderKey(
           available: true,
         })),
       };
-      if (!options.dryRun) {
-        try {
-          await reservePreferredKeyAtomically(preferredKey.id);
-          await prisma.upstreamProviderKey.update({
-            where: { id: preferredKey.id },
-            data: { lastUsedAt: new Date() },
-          }).catch(() => undefined);
-          return {
-            ...createKeyReservation(preferredKey),
-            decisionTrace: preferredTrace,
-          };
-        } catch {
-          await prisma.upstreamProviderKey.update({
-            where: { id: preferredKey.id },
-            data: { lastUsedAt: new Date() },
-          }).catch(() => undefined);
-          return {
-            ...createUntrackedKeyReservation(preferredKey),
-            decisionTrace: preferredTrace,
-          };
-        }
+      if (options.dryRun) {
+        return {
+          ...createDryRunKeyReservation(preferredKey),
+          decisionTrace: preferredTrace,
+        };
       }
-      return {
-        ...createUntrackedKeyReservation(preferredKey),
-        decisionTrace: preferredTrace,
-      };
+
+      try {
+        await reservePreferredKeyAtomically(preferredKey.id);
+        await prisma.upstreamProviderKey.update({
+          where: { id: preferredKey.id },
+          data: { lastUsedAt: new Date() },
+        }).catch(() => undefined);
+
+        return {
+          ...createKeyReservation(preferredKey),
+          decisionTrace: preferredTrace,
+        };
+      } catch {
+        await prisma.upstreamProviderKey.update({
+          where: { id: preferredKey.id },
+          data: { lastUsedAt: new Date() },
+        }).catch(() => undefined);
+
+        return {
+          ...createDryRunKeyReservation(preferredKey),
+          decisionTrace: preferredTrace,
+        };
+      }
     }
   }
 
@@ -281,7 +284,7 @@ export async function reserveProviderKey(
     );
     return fallbackKey
       ? {
-          ...createUntrackedKeyReservation(fallbackKey),
+          ...createDryRunKeyReservation(fallbackKey),
           decisionTrace: {
             selectedBy: "fallback",
             candidates: keyCandidates,
@@ -330,7 +333,7 @@ export async function reserveProviderKey(
     }).catch(() => undefined);
 
     return {
-      ...createUntrackedKeyReservation(fallbackKey),
+      ...createDryRunKeyReservation(fallbackKey),
       decisionTrace: {
         selectedBy: "fallback",
         candidates: keyCandidates,
@@ -477,7 +480,7 @@ return next
   };
 }
 
-function createUntrackedKeyReservation(key: UpstreamProviderKey) {
+function createDryRunKeyReservation(key: UpstreamProviderKey) {
   return {
     key: {
       ...key,

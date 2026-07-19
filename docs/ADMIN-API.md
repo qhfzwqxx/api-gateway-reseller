@@ -1577,8 +1577,6 @@ GET /admin/model-pools
 }
 ```
 
-`lastLatencyMs` 是本次健康检测中第一个拿到有效首 token 的赢家 Key 的完整响应耗时；`lastFirstTokenLatencyMs` 是所有 active Key 首 token 耗时的平均值。
-
 ### 13.2 健康检查配置
 
 ```http

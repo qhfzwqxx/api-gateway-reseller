@@ -85,7 +85,6 @@ import {
   normalizeEndpoint,
   normalizeRequestUrl,
   parseMultipartProxyBody,
-  pickHeaderValue,
   redactBodyForLog,
   resolveUpstreamEndpoint,
   resolveUpstreamRequestUrl,
@@ -143,13 +142,12 @@ import {
 import { createSafeStreamController } from "../services/proxy-stream-controller.js";
 import { createProxyStreamTransformer } from "../services/proxy-stream-transform.js";
 import {
-  createCompactRouteFingerprint,
-  expandCachedCompactionItemsForBody,
-  extractCompactionItems,
+  collectEncryptedContents,
+  createCompactChannelFingerprint,
+  extractEncryptedItems,
   findCachedCompactForBody,
   findCachedCompactsForBody,
   hashEncryptedContent,
-  isCompactionTriggerRequestBody,
   normalizeCrossChannelResponsesInput,
   readTargetCompactItems,
   removeMalformedEncryptedInputItems,
@@ -1076,8 +1074,8 @@ function hasModelPoolRouteChanged(
   const routeKeyId = getLoggedUpstreamProviderKeyId(route);
   return Boolean(
     previousRoute.upstreamProviderKeyId &&
-    routeKeyId &&
-    previousRoute.upstreamProviderKeyId !== routeKeyId,
+      routeKeyId &&
+      previousRoute.upstreamProviderKeyId !== routeKeyId,
   );
 }
 
@@ -1135,7 +1133,7 @@ async function resolveUserModelMapping(userId: string, fromModel: string) {
 }
 
 function getCompactChannelFingerprint(route: UpstreamAttemptRoute) {
-  return createCompactRouteFingerprint({
+  return createCompactChannelFingerprint({
     channelId: route.channelId,
     upstreamProviderKeyId:
       route.upstreamProviderKeyId ?? getLoggedUpstreamProviderKeyId(route),
@@ -1252,7 +1250,7 @@ async function applyCompactFallback(params: {
   });
   if (targetCacheHit) {
     const replacementsByHash = buildCompactFallbackReplacements(
-      cachedCompact.matchedEncryptedContentHashes,
+      cachedCompact.cache.encryptedContentHashes,
       targetCacheHit,
       getTargetCompactItemType(route),
     );
@@ -1307,9 +1305,6 @@ async function applyCompactFallback(params: {
     const targetCompactItems = await requestTargetCompact({
       route,
       requestBody: cachedCompact.cache.requestBody,
-      userId: cachedCompact.cache.userId,
-      apiKeyId: cachedCompact.cache.apiKeyId,
-      model: cachedCompact.cache.model,
     });
     await saveTargetCompactItems({
       compactCacheId: cachedCompact.compactCacheId,
@@ -1317,7 +1312,7 @@ async function applyCompactFallback(params: {
       targetItems: targetCompactItems,
     });
     const replacementsByHash = buildCompactFallbackReplacements(
-      cachedCompact.matchedEncryptedContentHashes,
+      cachedCompact.cache.encryptedContentHashes,
       targetCompactItems,
       getTargetCompactItemType(route),
     );
@@ -1365,7 +1360,6 @@ async function applyAllCompactFallbacks(params: {
   userId: string;
   apiKeyId: string;
   model?: string;
-  userAgent?: string;
   compactFallbackContext: CompactFallbackContext;
 }): Promise<ProxyBody> {
   const {
@@ -1378,7 +1372,6 @@ async function applyAllCompactFallbacks(params: {
     userId,
     apiKeyId,
     model,
-    userAgent,
     compactFallbackContext,
   } = params;
   if (endpoint !== "/v1/responses" || method !== "POST") {
@@ -1454,10 +1447,6 @@ async function applyAllCompactFallbacks(params: {
         targetItems = await requestTargetCompact({
           route,
           requestBody: cachedCompact.cache.requestBody,
-          userId: cachedCompact.cache.userId,
-          apiKeyId: cachedCompact.cache.apiKeyId,
-          model: cachedCompact.cache.model,
-          userAgent,
         });
         await saveTargetCompactItems({
           compactCacheId: cachedCompact.compactCacheId,
@@ -1508,7 +1497,6 @@ async function recoverInvalidEncryptedContentWithCompact(params: {
   userId: string;
   apiKeyId: string;
   model?: string;
-  userAgent?: string;
   compactFallbackContext: CompactFallbackContext;
 }): Promise<ProxyBody | null> {
   const {
@@ -1519,7 +1507,6 @@ async function recoverInvalidEncryptedContentWithCompact(params: {
     userId,
     apiKeyId,
     model,
-    userAgent,
     compactFallbackContext,
   } = params;
 
@@ -1582,10 +1569,6 @@ async function recoverInvalidEncryptedContentWithCompact(params: {
     const targetCompactItems = await requestTargetCompact({
       route,
       requestBody: cachedCompact.cache.requestBody,
-      userId: cachedCompact.cache.userId,
-      apiKeyId: cachedCompact.cache.apiKeyId,
-      model: cachedCompact.cache.model,
-      userAgent,
     });
     await saveTargetCompactItems({
       compactCacheId: cachedCompact.compactCacheId,
@@ -1593,7 +1576,7 @@ async function recoverInvalidEncryptedContentWithCompact(params: {
       targetItems: targetCompactItems,
     });
     const replacementsByHash = buildCompactFallbackReplacements(
-      cachedCompact.matchedEncryptedContentHashes,
+      cachedCompact.cache.encryptedContentHashes,
       targetCompactItems,
       getTargetCompactItemType(route),
     );
@@ -1742,203 +1725,56 @@ function rewriteCompactionItemsForTargetType<T>(
 async function requestTargetCompact(params: {
   route: UpstreamAttemptRoute;
   requestBody: unknown;
-  userId: string;
-  apiKeyId: string;
-  model?: string;
-  userAgent?: string;
 }): Promise<Array<{ encryptedContent: string; item: unknown }>> {
-  const { route, requestBody, userId, apiKeyId, model, userAgent } = params;
-  const expandedRequestBody = await expandCachedCompactionItemsForBody({
-    value: requestBody,
-    userId,
-    apiKeyId,
-    model,
-  });
-  const reasoningSanitized = removeReasoningInputItems(
-    expandedRequestBody.value,
-  ).value;
-
-  let responsesError: unknown;
-  try {
-    return await requestTargetCompactionTrigger({
-      route,
-      requestBody: reasoningSanitized,
-      userAgent,
-    });
-  } catch (error) {
-    responsesError = error;
-  }
-
-  try {
-    return await requestTargetLegacyCompact({
-      route,
-      requestBody: reasoningSanitized,
-      userAgent,
-    });
-  } catch (legacyError) {
-    const responsesMessage =
-      responsesError instanceof Error
-        ? responsesError.message
-        : String(responsesError ?? "unknown responses compaction error");
-    const legacyMessage =
-      legacyError instanceof Error ? legacyError.message : String(legacyError);
-    throw new Error(
-      `target compaction failed via responses trigger (${responsesMessage}) and legacy compact (${legacyMessage})`,
-    );
-  }
-}
-
-async function requestTargetCompactionTrigger(params: {
-  route: UpstreamAttemptRoute;
-  requestBody: unknown;
-  userAgent?: string;
-}) {
-  const { route, requestBody, userAgent } = params;
-  const upstreamRequestUrl = resolveUpstreamRequestUrl(
-    "/v1/responses",
-    "/v1/responses",
-    route.price,
-  );
-  const upstreamEndpoint = resolveUpstreamEndpoint(upstreamRequestUrl);
-  if (upstreamEndpoint !== "/v1/responses") {
-    throw new Error(
-      `responses compaction trigger unavailable for upstream endpoint ${upstreamEndpoint}`,
-    );
-  }
-
-  const compactionBody = buildInternalCompactionTriggerBody(requestBody);
-  const upstreamBody = await applyReasoningEffortTransform(
-    buildUpstreamBody(
-      "/v1/responses",
-      compactionBody,
-      route.provider,
-      upstreamEndpoint,
-    ),
-    { endpoint: "/v1/responses" },
-  );
-
-  return fetchTargetCompactItems({
-    route,
-    upstreamRequestUrl,
-    body: upstreamBody,
-    accept: "text/event-stream, application/json",
-    protocol: "responses compaction trigger",
-    userAgent,
-  });
-}
-
-async function requestTargetLegacyCompact(params: {
-  route: UpstreamAttemptRoute;
-  requestBody: unknown;
-  userAgent?: string;
-}) {
-  return fetchTargetCompactItems({
-    route: params.route,
-    upstreamRequestUrl: "/v1/responses/compact",
-    body: buildInternalCompactRequestBody(params.requestBody),
-    accept: "application/json, text/event-stream",
-    protocol: "legacy responses compact",
-    userAgent: params.userAgent,
-  });
-}
-
-async function fetchTargetCompactItems(params: {
-  route: UpstreamAttemptRoute;
-  upstreamRequestUrl: string;
-  body: unknown;
-  accept: string;
-  protocol: string;
-  userAgent?: string;
-}) {
+  const { route, requestBody } = params;
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    params.route.provider.timeoutMs,
+    route.provider.timeoutMs,
   );
   try {
     const response = await fetch(
-      buildUpstreamUrl(
-        params.route.provider.baseUrl,
-        params.upstreamRequestUrl,
-      ),
+      buildUpstreamUrl(route.provider.baseUrl, "/v1/responses/compact"),
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${params.route.provider.apiKey}`,
+          Authorization: `Bearer ${route.provider.apiKey}`,
           "Content-Type": "application/json",
-          Accept: params.accept,
-          "User-Agent":
-            params.userAgent ??
-            "Codex Desktop/0.141.0 (gateway compact migration)",
+          Accept: "application/json",
         },
-        body: JSON.stringify(params.body),
+        body: JSON.stringify(buildInternalCompactRequestBody(requestBody)),
         signal: controller.signal,
       },
     );
     const contentType = response.headers.get("content-type") ?? "";
-    const responseText = await response.text();
-    const responseBody = parseCompactResponseBody(responseText, contentType);
+    const responseBody = contentType.includes("application/json")
+      ? await response.json()
+      : await response.text();
 
     if (!response.ok) {
-      const message = responseText.slice(0, 1000);
+      const message =
+        typeof responseBody === "string"
+          ? responseBody.slice(0, 1000)
+          : JSON.stringify(responseBody).slice(0, 1000);
       throw new Error(
-        `${params.protocol} failed with ${response.status}: ${message}`,
+        `compact fallback upstream failed with ${response.status}: ${message}`,
       );
     }
 
-    const compactItems = extractCompactionItems(responseBody);
-    if (compactItems.length === 0) {
-      throw new Error(
-        `${params.protocol} response missing compaction encrypted_content`,
-      );
+    const parsedResponseBody =
+      typeof responseBody === "string" &&
+      contentType.includes("text/event-stream")
+        ? parseSseJsonPayloads(responseBody)
+        : responseBody;
+    const encryptedItems = extractEncryptedItems(parsedResponseBody);
+    if (encryptedItems.length === 0) {
+      throw new Error("compact fallback response missing encrypted_content");
     }
 
-    return compactItems;
+    return encryptedItems;
   } finally {
     clearTimeout(timeout);
   }
-}
-
-function parseCompactResponseBody(responseText: string, contentType: string) {
-  if (
-    contentType.includes("text/event-stream") ||
-    responseText.includes("data:")
-  ) {
-    return parseSseJsonPayloads(responseText);
-  }
-
-  try {
-    return JSON.parse(responseText) as unknown;
-  } catch {
-    return responseText;
-  }
-}
-
-function buildInternalCompactionTriggerBody(requestBody: unknown): ProxyBody {
-  if (!isPlainObject(requestBody)) {
-    return {
-      input: [{ type: "compaction_trigger" }],
-      store: false,
-      stream: true,
-    };
-  }
-
-  const input = Array.isArray(requestBody.input)
-    ? requestBody.input.filter(
-        (item) => !isPlainObject(item) || item.type !== "compaction_trigger",
-      )
-    : typeof requestBody.input === "string"
-      ? [{ role: "user", content: requestBody.input }]
-      : [];
-  const compactBody: ProxyBody = {
-    ...requestBody,
-    input: [...input, { type: "compaction_trigger" }],
-    store: false,
-    stream: true,
-  };
-  delete compactBody.previous_response_id;
-  delete compactBody.stream_options;
-  return compactBody;
 }
 
 function buildInternalCompactRequestBody(requestBody: unknown) {
@@ -1947,11 +1783,6 @@ function buildInternalCompactRequestBody(requestBody: unknown) {
   }
 
   const compactBody = { ...requestBody };
-  if (Array.isArray(compactBody.input)) {
-    compactBody.input = compactBody.input.filter(
-      (item) => !isPlainObject(item) || item.type !== "compaction_trigger",
-    );
-  }
   delete compactBody.stream;
   delete compactBody.stream_options;
   return compactBody;
@@ -2103,7 +1934,6 @@ async function runUpstreamAttempt(params: {
     userId,
     apiKeyId,
     model,
-    userAgent: pickHeaderValue(request.headers["user-agent"]) ?? undefined,
     compactFallbackContext,
   });
   const transformContext = imageToolBridge
@@ -2169,9 +1999,6 @@ async function runUpstreamAttempt(params: {
         ? (multipartContentType ?? "multipart/form-data")
         : "application/json",
       Accept: body.stream ? "text/event-stream" : "application/json",
-      ...(pickHeaderValue(request.headers["user-agent"])
-        ? { "User-Agent": pickHeaderValue(request.headers["user-agent"])! }
-        : {}),
     };
     const upstreamRequestBody =
       request.method === "GET" || request.method === "DELETE"
@@ -2232,24 +2059,18 @@ async function runUpstreamAttempt(params: {
         isCompactItemTypeCompatibilityError(text)
       ) {
         const configuredType = getTargetCompactItemType(route);
-        const currentType = findFirstCompactionItemType(fallbackBody);
-        const retryType: CompactItemType =
-          currentType && currentType !== configuredType
-            ? configuredType
-            : configuredType === "compaction"
-              ? "compaction_summary"
-              : "compaction";
+        const alternateType: CompactItemType =
+          configuredType === "compaction" ? "compaction_summary" : "compaction";
         const rewritten = rewriteCompactionItemsForTargetType(
           fallbackBody,
-          retryType,
+          alternateType,
         );
         if (rewritten.replacements > 0) {
           app.log.warn(
             {
               apiRequestId,
-              currentType,
               configuredType,
-              retryType,
+              alternateType,
               replacements: rewritten.replacements,
             },
             "Retrying Responses request with alternate compact item type",
@@ -2293,8 +2114,6 @@ async function runUpstreamAttempt(params: {
           userId,
           apiKeyId,
           model,
-          userAgent:
-            pickHeaderValue(request.headers["user-agent"]) ?? undefined,
           compactFallbackContext,
         });
 
@@ -2441,18 +2260,12 @@ async function runUpstreamAttempt(params: {
         upstreamRequestStartedAt,
         logger: app.log,
         compactFallbackTrace: compactFallbackContext.trace,
-        compactCacheRequestBody: isCompactProducingRequest(
-          endpoint,
-          fallbackBody,
-        )
-          ? fallbackBody
-          : undefined,
-        compactCacheSourceFingerprint: isCompactProducingRequest(
-          endpoint,
-          fallbackBody,
-        )
-          ? getCompactChannelFingerprint(route)
-          : undefined,
+        compactCacheRequestBody:
+          endpoint === "/v1/responses/compact" ? body : undefined,
+        compactCacheSourceFingerprint:
+          endpoint === "/v1/responses/compact"
+            ? getCompactChannelFingerprint(route)
+            : undefined,
         gatewayAbortReason,
       });
       return { kind: "sent" };
@@ -2513,10 +2326,10 @@ async function runUpstreamAttempt(params: {
     let normalCompactUsageMetadata:
       | ReturnType<typeof createNormalCompactResponseUsage>
       | undefined;
-    if (isCompactProducingRequest(endpoint, fallbackBody)) {
+    if (endpoint === "/v1/responses/compact") {
       const compactCacheResult = await cacheCompactResponse({
         logger: app.log,
-        requestBody: fallbackBody,
+        requestBody: body,
         responseBody: upstreamResponseBody,
         userId,
         apiKeyId,
@@ -2846,36 +2659,6 @@ function isCompactItemTypeCompatibilityError(value: unknown) {
   return mentionsCompactType && rejectsType;
 }
 
-function findFirstCompactionItemType(value: unknown): CompactItemType | null {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const type = findFirstCompactionItemType(item);
-      if (type) return type;
-    }
-    return null;
-  }
-
-  if (!isPlainObject(value)) {
-    return null;
-  }
-
-  if (value.type === "compaction") {
-    return "compaction";
-  }
-  if (
-    value.type === "compaction_summary" ||
-    value.type === "response.compaction_summary"
-  ) {
-    return "compaction_summary";
-  }
-
-  for (const item of Object.values(value)) {
-    const type = findFirstCompactionItemType(item);
-    if (type) return type;
-  }
-  return null;
-}
-
 async function markRecoveryNoticeReturned(
   requestId: string,
   noticeText: string,
@@ -3093,13 +2876,6 @@ function inferModelFromBody(body: unknown) {
   return isPlainObject(body) && typeof body.model === "string"
     ? body.model
     : undefined;
-}
-
-function isCompactProducingRequest(endpoint: string, body: unknown) {
-  return (
-    endpoint === "/v1/responses/compact" ||
-    (endpoint === "/v1/responses" && isCompactionTriggerRequestBody(body))
-  );
 }
 
 function applyApiKeyFastMode(body: ProxyBody, forceFastMode: boolean) {
@@ -3339,7 +3115,11 @@ async function proxyStream(params: {
         );
         flushBufferedStreamChunks();
 
-        if (compactCacheRequestBody && compactCacheSourceFingerprint) {
+        if (
+          endpoint === "/v1/responses/compact" &&
+          compactCacheRequestBody &&
+          compactCacheSourceFingerprint
+        ) {
           const compactCacheResult = await cacheCompactResponse({
             logger,
             requestBody: compactCacheRequestBody,

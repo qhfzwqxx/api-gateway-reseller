@@ -1,6 +1,6 @@
 export {
   getInflightPenaltyMs,
   getSpeedScoreMs,
-  reserveModelPoolChannel,
   reserveBalancedModelPoolChannel,
+  reserveModelPoolChannel,
 } from "../model-pool-load-balancer.js";

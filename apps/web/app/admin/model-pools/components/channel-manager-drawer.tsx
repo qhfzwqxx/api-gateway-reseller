@@ -193,7 +193,7 @@ function ChannelSection({
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-600">
-                    <div>{checking ? "检测中" : channel.lastCheckStatus ?? "未检测"}{channel.lastLatencyMs ? ` · 赢家总耗 ${channel.lastLatencyMs}ms` : ""}</div>
+                    <div>{checking ? "检测中" : channel.lastCheckStatus ?? "未检测"}{channel.lastLatencyMs ? ` · ${channel.lastLatencyMs}ms` : ""}</div>
                     <div className="mt-1 text-xs text-slate-400">上次：{channel.lastCheckedAt ? formatDateTime(channel.lastCheckedAt) : "尚未检测"}</div>
                   </td>
                   <td className="px-4 py-3 text-sm font-medium tabular-nums text-slate-700">

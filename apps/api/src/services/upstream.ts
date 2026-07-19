@@ -5,7 +5,6 @@ import {
   getStickyChannelOccupancies,
   getStickyModelPoolRoute,
 } from "./model-pool-stickiness.js";
-import { getSessionFailedModelPoolChannelIds } from "./model-pool-session-failover.js";
 import {
   getInflightPenaltyMs,
   getSpeedScoreMs,
@@ -114,15 +113,8 @@ export async function getProviderForModel(
     callerIdentity,
     options.tierId,
   );
-  const explicitExcludedChannelIds = new Set(options.excludeChannelIds ?? []);
-  const [dispatchSettings, sessionFailedChannelIds] = await Promise.all([
-    readDispatchSettings(),
-    getSessionFailedModelPoolChannelIds(scopedCallerIdentity, model),
-  ]);
-  const preferredExcludedChannelIds = new Set([
-    ...explicitExcludedChannelIds,
-    ...sessionFailedChannelIds,
-  ]);
+  const excludedChannelIds = new Set(options.excludeChannelIds ?? []);
+  const dispatchSettings = await readDispatchSettings();
   const stickyRouteState =
     options.bypassSticky || !dispatchSettings.stickyEnabled
       ? null
@@ -137,10 +129,7 @@ export async function getProviderForModel(
     const stickyChannel = modelPool.channels.find(
       (channel) => channel.id === stickyRouteState.channelId,
     );
-    if (
-      stickyChannel &&
-      !preferredExcludedChannelIds.has(stickyChannel.id)
-    ) {
+    if (stickyChannel && !excludedChannelIds.has(stickyChannel.id)) {
       const stickyRoute = await getRouteForChannelWithKey(
         model,
         stickyChannel,
@@ -170,20 +159,10 @@ export async function getProviderForModel(
     );
   }
 
-  let routeCandidates = await getRouteCandidates(
+  const routeCandidates = await getRouteCandidates(
     model,
-    modelPool.channels.filter(
-      (channel) => !preferredExcludedChannelIds.has(channel.id),
-    ),
+    modelPool.channels.filter((channel) => !excludedChannelIds.has(channel.id)),
   );
-  if (routeCandidates.length === 0 && sessionFailedChannelIds.size > 0) {
-    routeCandidates = await getRouteCandidates(
-      model,
-      modelPool.channels.filter(
-        (channel) => !explicitExcludedChannelIds.has(channel.id),
-      ),
-    );
-  }
   decisionTrace.candidates = routeCandidates.map((route) => ({
     channelId: route.channelId,
     provider: route.provider.name,

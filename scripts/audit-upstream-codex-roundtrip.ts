@@ -1,39 +1,17 @@
-import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { prisma } from "@gateway/db";
-import { applyReasoningEffortTransform } from "../apps/api/src/services/reasoning-effort-transform-settings.js";
-import {
-  buildUpstreamBody,
-  type ProxyBody,
-} from "../apps/api/src/services/proxy-request-utils.js";
 import { buildUpstreamUrl } from "../apps/api/src/services/upstream.js";
 import { resolveStoredUpstreamKey } from "../apps/api/src/services/upstream-key-encryption.js";
 
 type JsonRecord = Record<string, unknown>;
-type CompactItemType = "compaction" | "compaction_summary";
 
 type AttemptClassification =
   | "PASS"
-  | "PASS_ALTERNATE_TYPE"
-  | "TRIGGER_REJECTED"
-  | "TRIGGER_NO_COMPACT_ITEM"
-  | "TRIGGER_FAILED"
-  | "REPLAY_FAILED"
-  | "RESPONSES_FAILED"
-  | "TRANSIENT_FAILURE";
-
-type AuditClassification =
-  | AttemptClassification
-  | "NO_ACTIVE_KEY"
-  | "PROVIDER_DISABLED"
-  | "LIVE_NOT_RUN";
-
-type CompactItemSummary = {
-  type: string;
-  encryptedContentLength: number;
-  hasId: boolean;
-};
+  | "PASS_WITHOUT_REASONING"
+  | "PASS_WITH_MALFORMED_REASONING"
+  | "FIRST_TURN_FAILED"
+  | "SECOND_TURN_FAILED";
 
 type TurnResult = {
   ok: boolean;
@@ -44,60 +22,29 @@ type TurnResult = {
   error: string | null;
   eventTypes: string[];
   outputItemTypes: string[];
-  compactItems: Array<{ encryptedContent: string; item: JsonRecord }>;
+  reasoningItemCount: number;
+  encryptedReasoningItemCount: number;
   outputItems: unknown[];
-};
-
-type SafeTurnResult = Omit<TurnResult, "compactItems" | "outputItems"> & {
-  compactItems: CompactItemSummary[];
-};
-
-type ReplayAttempt = {
-  itemType: CompactItemType;
-  result: SafeTurnResult;
 };
 
 type Attempt = {
   keyName: string;
   classification: AttemptClassification;
-  emittedCompactTypes: string[];
-  workingReplayType: CompactItemType | null;
-  trigger: SafeTurnResult;
-  replayAttempts: ReplayAttempt[];
-  basicCheck: SafeTurnResult | null;
+  firstTurn: Omit<TurnResult, "outputItems">;
+  secondTurn: Omit<TurnResult, "outputItems"> | null;
 };
-
-type ProductionEvidence = {
-  windowDays: number;
-  triggerSuccessCount: number;
-  triggerFailedCount: number;
-  triggerPendingCount: number;
-  replaySuccessCount: number;
-  replayFailedCount: number;
-  replayPendingCount: number;
-  observedReplayTypes: string[];
-  latestTriggerSuccessAt: string | null;
-  latestTriggerFailureAt: string | null;
-  latestReplaySuccessAt: string | null;
-  latestReplayFailureAt: string | null;
-};
-
-type OperationalAssessment =
-  | "LIVE_AND_PRODUCTION_CONFIRMED"
-  | "LIVE_ROUNDTRIP_PASS"
-  | "PRODUCTION_CONFIRMED"
-  | "PARTIAL_PRODUCTION_EVIDENCE"
-  | "UNVERIFIED_OR_UNAVAILABLE";
 
 type AuditResult = {
   provider: string;
   providerStatus: string;
   baseUrl: string;
   model: string;
-  configuredCompactItemType: CompactItemType;
-  classification: AuditClassification;
+  classification:
+    | AttemptClassification
+    | "NO_ACTIVE_KEY"
+    | "NO_HEALTHY_KEY"
+    | "LIVE_NOT_RUN";
   workingKeyName: string | null;
-  workingReplayType: CompactItemType | null;
   attemptedKeyCount: number;
   attempts: Attempt[];
   keyHealth: {
@@ -107,39 +54,33 @@ type AuditResult = {
     unknownHealthChecks: number;
     latestCheckedAt: string | null;
   };
-  productionEvidence: ProductionEvidence;
-  operationalAssessment: OperationalAssessment;
-};
-
-type ProductionCountRow = {
-  provider: string;
-  model: string;
-  status: string;
-  count: bigint;
-  latest: Date | null;
-};
-
-type ProductionReplayRow = ProductionCountRow & {
-  itemType: string;
+  productionEvidence: {
+    windowDays: number;
+    successCount: number;
+    failedCount: number;
+    pendingCount: number;
+    latestSuccessAt: string | null;
+    latestFailureAt: string | null;
+  };
+  operationalAssessment:
+    | "PRODUCTION_CONFIRMED"
+    | "LIVE_ROUNDTRIP_PASS"
+    | "UNVERIFIED_OR_UNAVAILABLE";
 };
 
 const timeoutMs = Number(process.env.AUDIT_TIMEOUT_MS ?? 45_000);
-const concurrency = Math.max(1, Number(process.env.AUDIT_CONCURRENCY ?? 3));
-const maxKeysPerProvider = Math.max(
-  1,
-  Number(process.env.AUDIT_MAX_KEYS_PER_PROVIDER ?? 2),
+const concurrency = Number(process.env.AUDIT_CONCURRENCY ?? 3);
+const maxKeysPerProvider = Number(
+  process.env.AUDIT_MAX_KEYS_PER_PROVIDER ?? Number.POSITIVE_INFINITY,
 );
-const productionWindowDays = Math.max(
-  1,
-  Number(process.env.AUDIT_PRODUCTION_WINDOW_DAYS ?? 30),
-);
-const skipLive = process.env.AUDIT_SKIP_LIVE === "1";
-const includeDisabled = process.env.AUDIT_INCLUDE_DISABLED === "1";
 const maxResponseBytes = 4 * 1024 * 1024;
-const auditMarker = `gateway-codex-compaction-v2-${Date.now()}`;
-const auditUserAgent =
-  process.env.AUDIT_USER_AGENT ??
-  "Codex Desktop/0.141.0 (Ubuntu 22.4.0; x86_64) unknown (Codex Desktop; 26.715.31925)";
+const skipLive = process.env.AUDIT_SKIP_LIVE === "1";
+const requireHealthyKey = process.env.AUDIT_REQUIRE_HEALTHY_KEY === "1";
+const productionWindowDays = Number(
+  process.env.AUDIT_PRODUCTION_WINDOW_DAYS ?? 30,
+);
+const auditMarker = `gateway-codex-roundtrip-${Date.now()}`;
+const probeToolName = "gateway_codex_roundtrip_probe";
 
 async function main() {
   const providers = await prisma.upstreamProvider.findMany({
@@ -182,9 +123,7 @@ async function main() {
       (input) =>
         configuredTargets === null ||
         configuredTargets.has(targetKey(input.provider.name, input.model)),
-    )
-    .filter((input) => includeDisabled || input.provider.status === "ACTIVE");
-
+    );
   const results: AuditResult[] = new Array(jobs.length);
   let cursor = 0;
 
@@ -193,7 +132,9 @@ async function main() {
       const index = cursor;
       cursor += 1;
       const job = jobs[index];
-      if (!job) return;
+      if (!job) {
+        return;
+      }
       results[index] = await auditProviderModel(
         job.provider,
         job.model,
@@ -214,50 +155,43 @@ async function main() {
     generatedAt: new Date().toISOString(),
     methodology: {
       purpose:
-        "Current Codex remote compaction v2 capability audit using /v1/responses with a terminal compaction_trigger, followed immediately by same-key replay of the fresh encrypted compaction item.",
+        "Codex-style Responses API session roundtrip; this does not use /v1/responses/compact and does not treat foreign encrypted blobs as provider capability tests.",
       liveProbeEnabled: !skipLive,
-      trigger:
-        "Send a streaming Responses request whose final input item is {type: 'compaction_trigger'} and require a completed response containing compaction encrypted_content.",
-      replay:
-        "Replay the fresh item as the Codex-standard {type: 'compaction', encrypted_content}, then try compaction_summary only if the standard replay fails.",
-      productionEvidence:
-        "Count real Codex compaction_trigger requests and later encrypted compaction replay requests separately; only exact current provider-model names are attributed.",
-      userAgent: auditUserAgent,
+      requireHealthyKey,
+      firstTurn:
+        "Send a small streaming Responses request with store=false, reasoning=null, include=[], and a function tool.",
+      secondTurn:
+        "Replay the first provider's own output items using the minimal item fields emitted by current Codex clients, add the tool output or a user continuation, and require response.completed.",
       interpretation: {
-        PASS: "The provider generated a fresh compact item and accepted Codex-standard compaction replay.",
-        PASS_ALTERNATE_TYPE:
-          "The provider generated a fresh compact item but only compaction_summary replay succeeded; gateway type rewriting is required.",
-        TRIGGER_REJECTED:
-          "Normal Responses worked, but the provider rejected compaction_trigger or incorrectly required encrypted_content on the trigger item.",
-        TRIGGER_NO_COMPACT_ITEM:
-          "The trigger request completed but did not return an encrypted compaction item.",
-        REPLAY_FAILED:
-          "The provider generated an encrypted compaction item but could not replay its own fresh item using either supported item type.",
-        TRANSIENT_FAILURE:
-          "The live check hit a timeout, rate limit, or retryable 5xx failure; this is not classified as protocol incompatibility.",
+        PASS: "Two turns completed and every reasoning item carried encrypted_content.",
+        PASS_WITHOUT_REASONING:
+          "Two turns completed, but the probe did not produce a reasoning item, so encrypted reasoning replay was not exercised.",
+        PASS_WITH_MALFORMED_REASONING:
+          "Two turns completed, but at least one reasoning item lacked encrypted_content; same-provider use may work, while switching to a stricter upstream is unsafe without gateway sanitization.",
+        FIRST_TURN_FAILED: "The initial Codex-style Responses request failed.",
+        SECOND_TURN_FAILED:
+          "The provider created a response but failed when its own output items were replayed.",
+        PRODUCTION_CONFIRMED:
+          "At least one real Codex request completed successfully on this exact provider-model pair during the production evidence window; this takes precedence over a transient live probe failure.",
       },
     },
     scope: {
       providerModelPairs: jobs.length,
       timeoutMs,
       concurrency,
-      maxKeysPerProvider,
-      includeDisabled,
-      productionWindowDays,
+      keyPolicy: Number.isFinite(maxKeysPerProvider)
+        ? `Try up to ${maxKeysPerProvider} active keys, prioritizing the latest successful health check, until a two-turn pass classification is found.`
+        : "Try active keys, prioritizing the latest successful health check, until a two-turn pass classification is found; all active keys are tried when the provider-model pair fails.",
     },
     summary: summarizeResults(results),
     operationalSummary: summarizeOperationalAssessments(results),
     results,
   };
-
   await mkdir(resolve("tmp"), { recursive: true });
   const outputPath = resolve("tmp/upstream-codex-roundtrip-audit-final.json");
   await writeFile(outputPath, JSON.stringify(report, null, 2), "utf8");
   console.log(`REPORT_PATH=${outputPath}`);
   console.log(`SUMMARY=${JSON.stringify(report.summary)}`);
-  console.log(
-    `OPERATIONAL_SUMMARY=${JSON.stringify(report.operationalSummary)}`,
-  );
 }
 
 async function auditProviderModel(
@@ -275,56 +209,51 @@ async function auditProviderModel(
     }>;
   },
   model: string,
-  productionEvidence: ProductionEvidence,
+  productionEvidence: AuditResult["productionEvidence"],
 ): Promise<AuditResult> {
   const result: AuditResult = {
     provider: provider.name,
     providerStatus: provider.status,
     baseUrl: provider.baseUrl,
     model,
-    configuredCompactItemType: normalizeCompactItemType(
-      provider.compactItemType,
-    ),
-    classification:
-      provider.status !== "ACTIVE"
-        ? "PROVIDER_DISABLED"
-        : skipLive
-          ? "LIVE_NOT_RUN"
-          : provider.keys.length === 0
-            ? "NO_ACTIVE_KEY"
-            : "RESPONSES_FAILED",
+    classification: skipLive
+      ? "LIVE_NOT_RUN"
+      : provider.keys.length === 0
+        ? "NO_ACTIVE_KEY"
+        : requireHealthyKey &&
+            !provider.keys.some((key) => key.lastCheckStatus === "SUCCESS")
+          ? "NO_HEALTHY_KEY"
+          : "FIRST_TURN_FAILED",
     workingKeyName: null,
-    workingReplayType: null,
     attemptedKeyCount: 0,
     attempts: [],
     keyHealth: summarizeKeyHealth(provider.keys),
     productionEvidence,
-    operationalAssessment: assessOperationalState(
-      "LIVE_NOT_RUN",
-      productionEvidence,
-    ),
+    operationalAssessment:
+      productionEvidence.successCount > 0
+        ? "PRODUCTION_CONFIRMED"
+        : "UNVERIFIED_OR_UNAVAILABLE",
   };
 
   if (
-    result.classification === "PROVIDER_DISABLED" ||
-    result.classification === "LIVE_NOT_RUN" ||
-    result.classification === "NO_ACTIVE_KEY"
+    skipLive ||
+    result.classification === "NO_ACTIVE_KEY" ||
+    result.classification === "NO_HEALTHY_KEY"
   ) {
-    result.operationalAssessment = assessOperationalState(
-      result.classification,
-      productionEvidence,
-    );
     return result;
   }
 
-  const keys = sortProviderKeys(provider.keys).slice(0, maxKeysPerProvider);
+  const candidateKeys = requireHealthyKey
+    ? provider.keys.filter((key) => key.lastCheckStatus === "SUCCESS")
+    : provider.keys;
+  const keys = sortProviderKeys(candidateKeys).slice(0, maxKeysPerProvider);
   for (const key of keys) {
     result.attemptedKeyCount += 1;
     console.log(
       `[TRY] ${provider.name} ${model} key=${key.name} health=${key.lastCheckStatus ?? "unknown"}`,
     );
-    const attempt = await runCompactionRoundtrip({
-      provider,
+    const attempt = await runRoundtrip({
+      baseUrl: provider.baseUrl,
       apiKey: resolveStoredUpstreamKey(key),
       keyName: key.name,
       model,
@@ -337,133 +266,201 @@ async function auditProviderModel(
     if (isPass(attempt.classification)) {
       result.classification = attempt.classification;
       result.workingKeyName = key.name;
-      result.workingReplayType = attempt.workingReplayType;
-      break;
+      if (result.operationalAssessment !== "PRODUCTION_CONFIRMED") {
+        result.operationalAssessment = "LIVE_ROUNDTRIP_PASS";
+      }
+      return result;
     }
   }
 
-  result.operationalAssessment = assessOperationalState(
-    result.classification,
-    productionEvidence,
-  );
   return result;
 }
 
-async function runCompactionRoundtrip(input: {
-  provider: { name: string; baseUrl: string };
+function summarizeKeyHealth(
+  keys: Array<{ lastCheckStatus: string | null; lastCheckedAt: Date | null }>,
+): AuditResult["keyHealth"] {
+  let successfulHealthChecks = 0;
+  let failedHealthChecks = 0;
+  let unknownHealthChecks = 0;
+  let latestCheckedAt: string | null = null;
+  for (const key of keys) {
+    if (key.lastCheckStatus === "SUCCESS") {
+      successfulHealthChecks += 1;
+    } else if (key.lastCheckStatus === "FAILED") {
+      failedHealthChecks += 1;
+    } else {
+      unknownHealthChecks += 1;
+    }
+    latestCheckedAt = laterIso(
+      latestCheckedAt,
+      key.lastCheckedAt?.toISOString() ?? null,
+    );
+  }
+  return {
+    activeKeyCount: keys.length,
+    successfulHealthChecks,
+    failedHealthChecks,
+    unknownHealthChecks,
+    latestCheckedAt,
+  };
+}
+
+function sortProviderKeys<
+  T extends {
+    priority: number;
+    lastUsedAt: Date | null;
+    lastCheckStatus: string | null;
+  },
+>(keys: T[]) {
+  const healthRank = (value: string | null) =>
+    value === "SUCCESS" ? 2 : value === "FAILED" ? 0 : 1;
+  return [...keys].sort((left, right) => {
+    const healthDifference =
+      healthRank(right.lastCheckStatus) - healthRank(left.lastCheckStatus);
+    if (healthDifference !== 0) {
+      return healthDifference;
+    }
+    if (left.priority !== right.priority) {
+      return left.priority - right.priority;
+    }
+    return (
+      (right.lastUsedAt?.getTime() ?? 0) - (left.lastUsedAt?.getTime() ?? 0)
+    );
+  });
+}
+
+async function loadProductionEvidence() {
+  const since = new Date(
+    Date.now() - productionWindowDays * 24 * 60 * 60 * 1000,
+  );
+  const rows = await prisma.apiRequest.groupBy({
+    by: ["upstreamProvider", "model", "status"],
+    where: {
+      createdAt: { gte: since },
+      endpoint: "/v1/responses",
+      userAgent: { contains: "Codex", mode: "insensitive" },
+    },
+    _count: { _all: true },
+    _max: { createdAt: true },
+  });
+  const evidence = new Map<string, AuditResult["productionEvidence"]>();
+  for (const row of rows) {
+    const key = targetKey(row.upstreamProvider, row.model);
+    const current = evidence.get(key) ?? emptyProductionEvidence();
+    const count = row._count._all;
+    const latestAt = row._max.createdAt?.toISOString() ?? null;
+    if (row.status === "SUCCESS") {
+      current.successCount += count;
+      current.latestSuccessAt = laterIso(current.latestSuccessAt, latestAt);
+    } else if (row.status === "FAILED") {
+      current.failedCount += count;
+      current.latestFailureAt = laterIso(current.latestFailureAt, latestAt);
+    } else {
+      current.pendingCount += count;
+    }
+    evidence.set(key, current);
+  }
+  return evidence;
+}
+
+function emptyProductionEvidence(): AuditResult["productionEvidence"] {
+  return {
+    windowDays: productionWindowDays,
+    successCount: 0,
+    failedCount: 0,
+    pendingCount: 0,
+    latestSuccessAt: null,
+    latestFailureAt: null,
+  };
+}
+
+function laterIso(left: string | null, right: string | null) {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  return left > right ? left : right;
+}
+
+async function runRoundtrip(input: {
+  baseUrl: string;
   apiKey: string;
   keyName: string;
   model: string;
 }): Promise<Attempt> {
-  const trigger = await postResponses({
-    provider: input.provider,
+  const firstTurn = await postResponses({
+    baseUrl: input.baseUrl,
     apiKey: input.apiKey,
-    body: buildCompactionTriggerBody(input.model),
+    body: buildFirstTurnBody(input.model),
   });
-  if (!trigger.ok) {
-    const basicCheck = await postResponses({
-      provider: input.provider,
-      apiKey: input.apiKey,
-      body: buildBasicResponsesBody(input.model),
-    });
+  if (!firstTurn.ok) {
     return {
       keyName: input.keyName,
-      classification: classifyTriggerFailure(trigger, basicCheck),
-      emittedCompactTypes: trigger.compactItems.map((item) =>
-        String(item.item.type ?? "unknown"),
-      ),
-      workingReplayType: null,
-      trigger: redactTurn(trigger),
-      replayAttempts: [],
-      basicCheck: redactTurn(basicCheck),
+      classification: "FIRST_TURN_FAILED",
+      firstTurn: redactTurn(firstTurn),
+      secondTurn: null,
     };
   }
 
-  if (trigger.compactItems.length === 0) {
+  const replayItems = firstTurn.outputItems
+    .map(normalizeCodexReplayItem)
+    .filter((item): item is JsonRecord => item !== null);
+  const continuation = buildContinuation(replayItems);
+  const secondTurn = await postResponses({
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    body: buildSecondTurnBody(input.model, replayItems, continuation),
+  });
+  if (!secondTurn.ok) {
     return {
       keyName: input.keyName,
-      classification: "TRIGGER_NO_COMPACT_ITEM",
-      emittedCompactTypes: [],
-      workingReplayType: null,
-      trigger: redactTurn(trigger),
-      replayAttempts: [],
-      basicCheck: null,
+      classification: "SECOND_TURN_FAILED",
+      firstTurn: redactTurn(firstTurn),
+      secondTurn: redactTurn(secondTurn),
     };
   }
 
-  const sourceItem = trigger.compactItems[0];
-  const replayAttempts: ReplayAttempt[] = [];
-  const replayTypes: CompactItemType[] = ["compaction", "compaction_summary"];
-  for (const itemType of replayTypes) {
-    const replay = await postResponses({
-      provider: input.provider,
-      apiKey: input.apiKey,
-      body: buildReplayBody(
-        input.model,
-        normalizeCompactItem(sourceItem.item, itemType),
-      ),
-    });
-    replayAttempts.push({ itemType, result: redactTurn(replay) });
-    if (replay.ok) {
-      return {
-        keyName: input.keyName,
-        classification:
-          itemType === "compaction" ? "PASS" : "PASS_ALTERNATE_TYPE",
-        emittedCompactTypes: trigger.compactItems.map((item) =>
-          String(item.item.type ?? "unknown"),
-        ),
-        workingReplayType: itemType,
-        trigger: redactTurn(trigger),
-        replayAttempts,
-        basicCheck: null,
-      };
-    }
-  }
+  const reasoningItemCount =
+    firstTurn.reasoningItemCount + secondTurn.reasoningItemCount;
+  const encryptedReasoningItemCount =
+    firstTurn.encryptedReasoningItemCount +
+    secondTurn.encryptedReasoningItemCount;
+  const classification: AttemptClassification =
+    reasoningItemCount === 0
+      ? "PASS_WITHOUT_REASONING"
+      : encryptedReasoningItemCount < reasoningItemCount
+        ? "PASS_WITH_MALFORMED_REASONING"
+        : "PASS";
 
   return {
     keyName: input.keyName,
-    classification: replayAttempts.some((attempt) =>
-      isTransientTurn(attempt.result),
-    )
-      ? "TRANSIENT_FAILURE"
-      : "REPLAY_FAILED",
-    emittedCompactTypes: trigger.compactItems.map((item) =>
-      String(item.item.type ?? "unknown"),
-    ),
-    workingReplayType: null,
-    trigger: redactTurn(trigger),
-    replayAttempts,
-    basicCheck: null,
+    classification,
+    firstTurn: redactTurn(firstTurn),
+    secondTurn: redactTurn(secondTurn),
   };
 }
 
-function buildCompactionTriggerBody(model: string): ProxyBody {
-  const historyText = Array.from(
-    { length: 28 },
-    (_, index) =>
-      `Context line ${index + 1}: preserve the audit marker ${auditMarker}, channel switching behavior, cached migration semantics, and prior conversation facts.`,
-  ).join("\n");
-
+function buildFirstTurnBody(model: string) {
   return {
     model,
     instructions:
-      "Preserve the supplied conversation faithfully when the protocol requests compaction.",
+      "You are a protocol health check. Call gateway_codex_roundtrip_probe exactly once. Do not answer before calling the tool.",
     input: [
       {
         role: "user",
-        content: [{ type: "input_text", text: historyText }],
-      },
-      {
-        role: "assistant",
         content: [
           {
-            type: "output_text",
-            text: `Acknowledged ${auditMarker}. The conversation facts are retained.`,
+            type: "input_text",
+            text: `Call ${probeToolName} with marker ${auditMarker}.`,
           },
         ],
       },
-      { type: "compaction_trigger" },
     ],
+    tools: [buildProbeTool()],
+    tool_choice: "auto",
+    parallel_tool_calls: false,
     include: [],
     reasoning: null,
     store: false,
@@ -471,17 +468,19 @@ function buildCompactionTriggerBody(model: string): ProxyBody {
   };
 }
 
-function buildReplayBody(model: string, compactItem: JsonRecord): ProxyBody {
+function buildSecondTurnBody(
+  model: string,
+  replayItems: JsonRecord[],
+  continuation: JsonRecord,
+) {
   return {
     model,
-    instructions: "Reply with exactly OK.",
-    input: [
-      compactItem,
-      {
-        role: "user",
-        content: [{ type: "input_text", text: "Reply with exactly OK." }],
-      },
-    ],
+    instructions:
+      "You are a protocol health check. After receiving the tool output or continuation, reply with exactly OK.",
+    input: [...replayItems, continuation],
+    tools: [buildProbeTool()],
+    tool_choice: "auto",
+    parallel_tool_calls: false,
     include: [],
     reasoning: null,
     store: false,
@@ -489,59 +488,76 @@ function buildReplayBody(model: string, compactItem: JsonRecord): ProxyBody {
   };
 }
 
-function buildBasicResponsesBody(model: string): ProxyBody {
+function buildProbeTool() {
   return {
-    model,
-    instructions: "Reply with exactly OK.",
-    input: [
+    type: "function",
+    name: probeToolName,
+    description: "Return the protocol audit marker.",
+    parameters: {
+      type: "object",
+      properties: {
+        marker: { type: "string" },
+      },
+      required: ["marker"],
+      additionalProperties: false,
+    },
+    strict: true,
+  };
+}
+
+function buildContinuation(replayItems: JsonRecord[]) {
+  const functionCall = replayItems.find(
+    (item) =>
+      item.type === "function_call" &&
+      typeof item.call_id === "string" &&
+      item.call_id,
+  );
+  if (functionCall && typeof functionCall.call_id === "string") {
+    return {
+      type: "function_call_output",
+      call_id: functionCall.call_id,
+      output: JSON.stringify({ marker: auditMarker, value: "ok" }),
+    };
+  }
+
+  return {
+    role: "user",
+    content: [
       {
-        role: "user",
-        content: [{ type: "input_text", text: "Reply with exactly OK." }],
+        type: "input_text",
+        text: `Continue the ${auditMarker} protocol check and reply with exactly OK.`,
       },
     ],
-    include: [],
-    reasoning: null,
-    store: false,
-    stream: true,
   };
 }
 
 async function postResponses(input: {
-  provider: { name: string; baseUrl: string };
+  baseUrl: string;
   apiKey: string;
-  body: ProxyBody;
+  body: unknown;
 }): Promise<TurnResult> {
   const startedAt = performance.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const upstreamBody = await applyReasoningEffortTransform(
-      buildUpstreamBody(
-        "/v1/responses",
-        input.body,
-        input.provider,
-        "/v1/responses",
-      ),
-      { endpoint: "/v1/responses" },
-    );
     const response = await fetch(
-      buildUpstreamUrl(input.provider.baseUrl, "/v1/responses"),
+      buildUpstreamUrl(input.baseUrl, "/v1/responses"),
       {
         method: "POST",
         headers: {
           Authorization: `Bearer ${input.apiKey}`,
           "Content-Type": "application/json",
           Accept: "text/event-stream, application/json",
-          "User-Agent": auditUserAgent,
         },
-        body: JSON.stringify(upstreamBody),
+        body: JSON.stringify(input.body),
         signal: controller.signal,
       },
     );
     const contentType = response.headers.get("content-type") ?? "";
     const text = await readUntilTerminal(response, controller.signal);
     const parsed = parseResponsesPayload(text, contentType);
-    const ok = response.ok && parsed.completed && !parsed.failedEvent;
+    const httpOk = response.ok;
+    const ok = httpOk && parsed.completed && !parsed.failedEvent;
     return {
       ok,
       status: response.status,
@@ -553,7 +569,16 @@ async function postResponses(input: {
       outputItemTypes: parsed.outputItems.map((item) =>
         isRecord(item) ? String(item.type ?? "unknown") : typeof item,
       ),
-      compactItems: extractCompactItems(parsed.outputItems),
+      reasoningItemCount: parsed.outputItems.filter(
+        (item) => isRecord(item) && item.type === "reasoning",
+      ).length,
+      encryptedReasoningItemCount: parsed.outputItems.filter(
+        (item) =>
+          isRecord(item) &&
+          item.type === "reasoning" &&
+          typeof item.encrypted_content === "string" &&
+          item.encrypted_content.length > 0,
+      ).length,
       outputItems: parsed.outputItems,
     };
   } catch (error) {
@@ -568,7 +593,8 @@ async function postResponses(input: {
       ),
       eventTypes: [],
       outputItemTypes: [],
-      compactItems: [],
+      reasoningItemCount: 0,
+      encryptedReasoningItemCount: 0,
       outputItems: [],
     };
   } finally {
@@ -577,7 +603,9 @@ async function postResponses(input: {
 }
 
 async function readUntilTerminal(response: Response, signal: AbortSignal) {
-  if (!response.body) return "";
+  if (!response.body) {
+    return "";
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let text = "";
@@ -587,15 +615,16 @@ async function readUntilTerminal(response: Response, signal: AbortSignal) {
       Buffer.byteLength(text, "utf8") < maxResponseBytes
     ) {
       const next = await reader.read();
-      if (next.done) break;
+      if (next.done) {
+        break;
+      }
       text += decoder.decode(next.value, { stream: true });
       if (
-        (text.includes('"type":"response.completed"') ||
-          text.includes('"type":"response.failed"') ||
-          text.includes("event: response.completed") ||
-          text.includes("event: response.failed") ||
-          text.includes("[DONE]")) &&
-        (/\r?\n\r?\n$/.test(text) || text.endsWith("[DONE]"))
+        text.includes("response.completed") ||
+        text.includes("response.failed") ||
+        text.includes('"status":"completed"') ||
+        text.includes('"status":"failed"') ||
+        text.includes("[DONE]")
       ) {
         break;
       }
@@ -619,19 +648,27 @@ function parseResponsesPayload(text: string, contentType: string) {
   let error: string | null = null;
 
   for (const payload of payloads) {
-    if (!isRecord(payload)) continue;
+    if (!isRecord(payload)) {
+      continue;
+    }
     const type = typeof payload.type === "string" ? payload.type : "";
-    if (type) eventTypes.push(type);
-    if (type === "response.completed") completed = true;
+    if (type) {
+      eventTypes.push(type);
+    }
+    if (type === "response.completed") {
+      completed = true;
+    }
     if (type === "response.failed" || type === "error") {
       failedEvent = true;
       error = extractError(JSON.stringify(payload));
     }
-    if (payload.item !== undefined && type.includes("output_item")) {
+    if (type === "response.output_item.done" && payload.item !== undefined) {
       outputItems.push(payload.item);
     }
     const response = isRecord(payload.response) ? payload.response : payload;
-    if (response.status === "completed") completed = true;
+    if (response.status === "completed") {
+      completed = true;
+    }
     if (response.status === "failed") {
       failedEvent = true;
       error = extractError(JSON.stringify(response));
@@ -652,328 +689,106 @@ function parseResponsesPayload(text: string, contentType: string) {
 
 function parseSsePayloads(text: string) {
   const payloads: unknown[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .join("\n");
+    if (!data || data === "[DONE]") {
+      continue;
+    }
     const parsed = parseJson(data);
-    if (parsed !== null) payloads.push(parsed);
+    if (parsed !== null) {
+      payloads.push(parsed);
+    }
   }
   return payloads;
 }
 
-function extractCompactItems(items: unknown[]) {
-  const output: Array<{ encryptedContent: string; item: JsonRecord }> = [];
+function deduplicateOutputItems(items: unknown[]) {
+  const output: unknown[] = [];
   const seen = new Set<string>();
   for (const item of items) {
-    if (!isRecord(item) || !isCompactItemType(item.type)) continue;
-    if (typeof item.encrypted_content !== "string" || !item.encrypted_content) {
+    const key = JSON.stringify(item);
+    if (seen.has(key)) {
       continue;
     }
-    const hash = sha256(item.encrypted_content);
-    if (seen.has(hash)) continue;
-    seen.add(hash);
-    output.push({
-      encryptedContent: item.encrypted_content,
-      item,
-    });
+    seen.add(key);
+    output.push(item);
   }
   return output;
 }
 
-function normalizeCompactItem(
-  item: JsonRecord,
-  itemType: CompactItemType,
-): JsonRecord {
-  const encryptedContent = item.encrypted_content;
-  if (typeof encryptedContent !== "string" || !encryptedContent) {
-    return item;
+function normalizeCodexReplayItem(value: unknown): JsonRecord | null {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    return null;
   }
-  if (itemType === "compaction") {
+  if (value.type === "reasoning") {
     return {
-      type: "compaction",
-      encrypted_content: encryptedContent,
+      type: "reasoning",
+      summary: Array.isArray(value.summary) ? value.summary : [],
+      ...(typeof value.encrypted_content === "string"
+        ? { encrypted_content: value.encrypted_content }
+        : {}),
+      ...(Array.isArray(value.content) ? { content: value.content } : {}),
     };
   }
-  return {
-    id:
-      typeof item.id === "string" && item.id
-        ? item.id
-        : `compact_${sha256(encryptedContent).slice(0, 24)}`,
-    type: "compaction_summary",
-    encrypted_content: encryptedContent,
-  };
-}
-
-function redactTurn(turn: TurnResult): SafeTurnResult {
-  return {
-    ok: turn.ok,
-    status: turn.status,
-    latencyMs: turn.latencyMs,
-    completed: turn.completed,
-    failedEvent: turn.failedEvent,
-    error: turn.error,
-    eventTypes: turn.eventTypes,
-    outputItemTypes: turn.outputItemTypes,
-    compactItems: turn.compactItems.map((item) => ({
-      type: String(item.item.type ?? "unknown"),
-      encryptedContentLength: item.encryptedContent.length,
-      hasId: typeof item.item.id === "string" && Boolean(item.item.id),
-    })),
-  };
-}
-
-function classifyTriggerFailure(
-  trigger: TurnResult,
-  basicCheck: TurnResult,
-): AttemptClassification {
-  if (isTransientTurn(redactTurn(trigger))) return "TRANSIENT_FAILURE";
-  if (!basicCheck.ok) {
-    return isTransientTurn(redactTurn(basicCheck))
-      ? "TRANSIENT_FAILURE"
-      : "RESPONSES_FAILED";
-  }
-  if (isCompactionTriggerRejection(trigger.error)) return "TRIGGER_REJECTED";
-  return "TRIGGER_FAILED";
-}
-
-function isCompactionTriggerRejection(error: string | null) {
-  const text = (error ?? "").toLowerCase();
-  return (
-    (text.includes("compaction_trigger") &&
-      (text.includes("unsupported") ||
-        text.includes("unknown") ||
-        text.includes("invalid") ||
-        text.includes("not allowed") ||
-        text.includes("unexpected"))) ||
-    (text.includes("encrypted_content") &&
-      (text.includes("missing") || text.includes("required")))
-  );
-}
-
-function isTransientTurn(turn: SafeTurnResult) {
-  if (turn.status === null) return true;
-  if ([408, 409, 425, 429, 500, 502, 503, 504].includes(turn.status)) {
-    return true;
-  }
-  const text = (turn.error ?? "").toLowerCase();
-  return (
-    text.includes("timeout") ||
-    text.includes("temporarily unavailable") ||
-    text.includes("concurrency limit") ||
-    text.includes("rate limit") ||
-    text.includes("too many requests")
-  );
-}
-
-async function loadProductionEvidence() {
-  const triggerRows = await prisma.$queryRaw<ProductionCountRow[]>`
-    SELECT r."upstreamProvider" AS provider,
-           r."model",
-           r."status"::text AS status,
-           COUNT(*)::bigint AS count,
-           MAX(r."createdAt") AS latest
-    FROM "ApiRequest" r
-    WHERE r."userAgent" ILIKE 'Codex%'
-      AND r."createdAt" >= NOW() - (${productionWindowDays} * INTERVAL '1 day')
-      AND r."endpoint" = '/v1/responses'
-      AND jsonb_path_exists(
-        CASE
-          WHEN jsonb_typeof(r."requestBody"->'input') = 'array'
-            THEN r."requestBody"->'input'
-          ELSE '[]'::jsonb
-        END,
-        '$[*] ? (@.type == "compaction_trigger")'
-      )
-    GROUP BY r."upstreamProvider", r."model", r."status"
-  `;
-  const replayRows = await prisma.$queryRaw<ProductionReplayRow[]>`
-    SELECT r."upstreamProvider" AS provider,
-           r."model",
-           r."status"::text AS status,
-           item->>'type' AS "itemType",
-           COUNT(DISTINCT r."id")::bigint AS count,
-           MAX(r."createdAt") AS latest
-    FROM "ApiRequest" r
-    CROSS JOIN LATERAL jsonb_array_elements(
-      CASE
-        WHEN jsonb_typeof(r."requestBody"->'input') = 'array'
-          THEN r."requestBody"->'input'
-        ELSE '[]'::jsonb
-      END
-    ) item
-    WHERE r."userAgent" ILIKE 'Codex%'
-      AND r."createdAt" >= NOW() - (${productionWindowDays} * INTERVAL '1 day')
-      AND r."endpoint" = '/v1/responses'
-      AND item->>'type' IN ('compaction', 'compaction_summary')
-      AND COALESCE(item->>'encrypted_content', '') <> ''
-    GROUP BY r."upstreamProvider", r."model", r."status", item->>'type'
-  `;
-
-  const evidence = new Map<string, ProductionEvidence>();
-  for (const row of triggerRows) {
-    const key = targetKey(row.provider, row.model);
-    const current = evidence.get(key) ?? emptyProductionEvidence();
-    applyProductionCount(current, "trigger", row);
-    evidence.set(key, current);
-  }
-  for (const row of replayRows) {
-    const key = targetKey(row.provider, row.model);
-    const current = evidence.get(key) ?? emptyProductionEvidence();
-    applyProductionCount(current, "replay", row);
-    if (!current.observedReplayTypes.includes(row.itemType)) {
-      current.observedReplayTypes.push(row.itemType);
-      current.observedReplayTypes.sort();
+  if (value.type === "function_call") {
+    if (typeof value.name !== "string" || typeof value.call_id !== "string") {
+      return null;
     }
-    evidence.set(key, current);
+    return {
+      type: "function_call",
+      name: value.name,
+      call_id: value.call_id,
+      arguments:
+        typeof value.arguments === "string"
+          ? value.arguments
+          : JSON.stringify(value.arguments ?? {}),
+    };
   }
-  return evidence;
-}
-
-function applyProductionCount(
-  evidence: ProductionEvidence,
-  kind: "trigger" | "replay",
-  row: ProductionCountRow,
-) {
-  const count = Number(row.count);
-  const latest = row.latest?.toISOString() ?? null;
-  if (kind === "trigger") {
-    if (row.status === "SUCCESS") {
-      evidence.triggerSuccessCount += count;
-      evidence.latestTriggerSuccessAt = laterIso(
-        evidence.latestTriggerSuccessAt,
-        latest,
-      );
-    } else if (row.status === "FAILED") {
-      evidence.triggerFailedCount += count;
-      evidence.latestTriggerFailureAt = laterIso(
-        evidence.latestTriggerFailureAt,
-        latest,
-      );
-    } else {
-      evidence.triggerPendingCount += count;
+  if (value.type === "custom_tool_call") {
+    if (typeof value.name !== "string" || typeof value.call_id !== "string") {
+      return null;
     }
-    return;
+    return {
+      type: "custom_tool_call",
+      name: value.name,
+      call_id: value.call_id,
+      input: typeof value.input === "string" ? value.input : "",
+    };
   }
-
-  if (row.status === "SUCCESS") {
-    evidence.replaySuccessCount += count;
-    evidence.latestReplaySuccessAt = laterIso(
-      evidence.latestReplaySuccessAt,
-      latest,
-    );
-  } else if (row.status === "FAILED") {
-    evidence.replayFailedCount += count;
-    evidence.latestReplayFailureAt = laterIso(
-      evidence.latestReplayFailureAt,
-      latest,
-    );
-  } else {
-    evidence.replayPendingCount += count;
+  if (value.type === "message") {
+    return {
+      type: "message",
+      role: "assistant",
+      content: Array.isArray(value.content) ? value.content : [],
+      ...(typeof value.phase === "string" ? { phase: value.phase } : {}),
+    };
   }
+  return null;
 }
 
-function emptyProductionEvidence(): ProductionEvidence {
-  return {
-    windowDays: productionWindowDays,
-    triggerSuccessCount: 0,
-    triggerFailedCount: 0,
-    triggerPendingCount: 0,
-    replaySuccessCount: 0,
-    replayFailedCount: 0,
-    replayPendingCount: 0,
-    observedReplayTypes: [],
-    latestTriggerSuccessAt: null,
-    latestTriggerFailureAt: null,
-    latestReplaySuccessAt: null,
-    latestReplayFailureAt: null,
-  };
+function redactTurn(turn: TurnResult): Omit<TurnResult, "outputItems"> {
+  const { outputItems: _outputItems, ...safe } = turn;
+  return safe;
 }
 
-function assessOperationalState(
-  classification: AuditClassification,
-  evidence: ProductionEvidence,
-): OperationalAssessment {
-  const livePass = isPass(classification);
-  const productionPass =
-    evidence.triggerSuccessCount > 0 && evidence.replaySuccessCount > 0;
-  if (livePass && productionPass) return "LIVE_AND_PRODUCTION_CONFIRMED";
-  if (livePass) return "LIVE_ROUNDTRIP_PASS";
-  if (productionPass) return "PRODUCTION_CONFIRMED";
-  if (evidence.triggerSuccessCount > 0 || evidence.replaySuccessCount > 0) {
-    return "PARTIAL_PRODUCTION_EVIDENCE";
+function readConfiguredTargets() {
+  const value = process.env.AUDIT_TARGETS_JSON;
+  if (!value) {
+    return null;
   }
-  return "UNVERIFIED_OR_UNAVAILABLE";
+  const parsed = JSON.parse(value) as Array<{
+    provider: string;
+    model: string;
+  }>;
+  return new Set(parsed.map((item) => targetKey(item.provider, item.model)));
 }
 
-function summarizeKeyHealth(
-  keys: Array<{ lastCheckStatus: string | null; lastCheckedAt: Date | null }>,
-): AuditResult["keyHealth"] {
-  let successfulHealthChecks = 0;
-  let failedHealthChecks = 0;
-  let unknownHealthChecks = 0;
-  let latestCheckedAt: string | null = null;
-  for (const key of keys) {
-    if (key.lastCheckStatus === "SUCCESS") successfulHealthChecks += 1;
-    else if (key.lastCheckStatus === "FAILED") failedHealthChecks += 1;
-    else unknownHealthChecks += 1;
-    latestCheckedAt = laterIso(
-      latestCheckedAt,
-      key.lastCheckedAt?.toISOString() ?? null,
-    );
-  }
-  return {
-    activeKeyCount: keys.length,
-    successfulHealthChecks,
-    failedHealthChecks,
-    unknownHealthChecks,
-    latestCheckedAt,
-  };
-}
-
-function sortProviderKeys<
-  T extends {
-    priority: number;
-    lastUsedAt: Date | null;
-    lastCheckStatus: string | null;
-    lastCheckedAt: Date | null;
-  },
->(keys: T[]) {
-  const healthRank = (value: string | null) =>
-    value === "SUCCESS" ? 2 : value === "FAILED" ? 0 : 1;
-  return [...keys].sort((left, right) => {
-    const healthDifference =
-      healthRank(right.lastCheckStatus) - healthRank(left.lastCheckStatus);
-    if (healthDifference !== 0) return healthDifference;
-    const checkDifference =
-      (right.lastCheckedAt?.getTime() ?? 0) -
-      (left.lastCheckedAt?.getTime() ?? 0);
-    if (checkDifference !== 0) return checkDifference;
-    if (left.priority !== right.priority) return left.priority - right.priority;
-    return (
-      (right.lastUsedAt?.getTime() ?? 0) - (left.lastUsedAt?.getTime() ?? 0)
-    );
-  });
-}
-
-function chooseBetterClassification(
-  current: AuditClassification,
-  next: AttemptClassification,
-): AuditClassification {
-  const rank: Record<AuditClassification, number> = {
-    PASS: 100,
-    PASS_ALTERNATE_TYPE: 95,
-    TRIGGER_NO_COMPACT_ITEM: 60,
-    REPLAY_FAILED: 55,
-    TRIGGER_REJECTED: 50,
-    TRIGGER_FAILED: 40,
-    TRANSIENT_FAILURE: 30,
-    RESPONSES_FAILED: 20,
-    NO_ACTIVE_KEY: 10,
-    PROVIDER_DISABLED: 5,
-    LIVE_NOT_RUN: 0,
-  };
-  return rank[next] > rank[current] ? next : current;
+function targetKey(provider: string, model: string) {
+  return `${provider}\u0000${model}`;
 }
 
 function summarizeResults(results: AuditResult[]) {
@@ -993,80 +808,53 @@ function summarizeOperationalAssessments(results: AuditResult[]) {
   return summary;
 }
 
-function isPass(classification: AuditClassification) {
-  return classification === "PASS" || classification === "PASS_ALTERNATE_TYPE";
-}
-
-function normalizeCompactItemType(value: unknown): CompactItemType {
-  return value === "compaction" ? "compaction" : "compaction_summary";
-}
-
-function isCompactItemType(value: unknown) {
+function isPass(classification: AttemptClassification) {
   return (
-    value === "compaction" ||
-    value === "compaction_summary" ||
-    value === "response.compaction_summary"
+    classification === "PASS" ||
+    classification === "PASS_WITHOUT_REASONING" ||
+    classification === "PASS_WITH_MALFORMED_REASONING"
   );
 }
 
-function readConfiguredTargets() {
-  const value = process.env.AUDIT_TARGETS_JSON;
-  if (!value) return null;
-  const parsed = JSON.parse(value) as Array<{
-    provider: string;
-    model: string;
-  }>;
-  return new Set(parsed.map((item) => targetKey(item.provider, item.model)));
-}
-
-function targetKey(provider: string, model: string) {
-  return `${provider}\u0000${model}`;
-}
-
-function laterIso(left: string | null, right: string | null) {
-  if (!left) return right;
-  if (!right) return left;
-  return left > right ? left : right;
-}
-
-function deduplicateOutputItems(items: unknown[]) {
-  const output: unknown[] = [];
-  const seen = new Set<string>();
-  for (const item of items) {
-    const key = JSON.stringify(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    output.push(item);
-  }
-  return output;
+function chooseBetterClassification(
+  current: AuditResult["classification"],
+  next: AttemptClassification,
+): AuditResult["classification"] {
+  const rank: Record<AuditResult["classification"], number> = {
+    PASS: 6,
+    PASS_WITHOUT_REASONING: 5,
+    PASS_WITH_MALFORMED_REASONING: 4,
+    SECOND_TURN_FAILED: 3,
+    FIRST_TURN_FAILED: 2,
+    NO_ACTIVE_KEY: 1,
+    NO_HEALTHY_KEY: 1,
+    LIVE_NOT_RUN: 0,
+  };
+  return rank[next] > rank[current] ? next : current;
 }
 
 function extractError(text: string) {
   const parsed = parseJson(text);
-  let message = "";
-  visit(parsed, (record) => {
-    if (!message && typeof record.message === "string") {
-      message = record.message;
+  if (parsed !== null) {
+    const values: string[] = [];
+    visit(parsed, (record) => {
+      if (typeof record.message === "string") {
+        values.push(record.message);
+      }
+      if (typeof record.code === "string") {
+        values.push(record.code);
+      }
+    });
+    if (values.length > 0) {
+      return sanitizeText([...new Set(values)].join(" | "));
     }
-  });
-  if (message) return sanitizeText(message);
-  const dataMessages = parseSsePayloads(text)
-    .map((payload) => {
-      let candidate = "";
-      visit(payload, (record) => {
-        if (!candidate && typeof record.message === "string") {
-          candidate = record.message;
-        }
-      });
-      return candidate;
-    })
-    .filter(Boolean);
-  return sanitizeText(dataMessages[0] ?? text);
+  }
+  return sanitizeText(text);
 }
 
 function parseJson(value: string): unknown | null {
   try {
-    return JSON.parse(value);
+    return JSON.parse(value) as unknown;
   } catch {
     return null;
   }
@@ -1074,29 +862,30 @@ function parseJson(value: string): unknown | null {
 
 function visit(value: unknown, callback: (record: JsonRecord) => void) {
   if (Array.isArray(value)) {
-    for (const item of value) visit(item, callback);
+    for (const item of value) {
+      visit(item, callback);
+    }
     return;
   }
-  if (!isRecord(value)) return;
+  if (!isRecord(value)) {
+    return;
+  }
   callback(value);
-  for (const item of Object.values(value)) visit(item, callback);
+  for (const item of Object.values(value)) {
+    visit(item, callback);
+  }
 }
 
 function isRecord(value: unknown): value is JsonRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return Object.prototype.toString.call(value) === "[object Object]";
 }
 
 function sanitizeText(value: string) {
   return value
-    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
-    .replace(/sk-[A-Za-z0-9_-]+/g, "[redacted]")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1000);
-}
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
+    .replace(/sk-[A-Za-z0-9_-]+/g, "sk-***")
+    .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/[A-Za-z0-9+/=_-]{200,}/g, "[opaque-content-redacted]")
+    .slice(0, 1200);
 }
 
 main()
@@ -1104,4 +893,6 @@ main()
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => prisma.$disconnect());
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
