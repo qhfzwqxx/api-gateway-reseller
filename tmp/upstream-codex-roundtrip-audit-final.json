@@ -1,0 +1,76 @@
+{
+  "generatedAt": "2026-07-20T09:34:56.748Z",
+  "methodology": {
+    "purpose": "Codex-style Responses API session roundtrip; this does not use /v1/responses/compact and does not treat foreign encrypted blobs as provider capability tests.",
+    "liveProbeEnabled": true,
+    "requireHealthyKey": false,
+    "firstTurn": "Send a small streaming Responses request with store=false, reasoning=null, include=[], and a function tool.",
+    "secondTurn": "Replay the first provider's own output items using the minimal item fields emitted by current Codex clients, add the tool output or a user continuation, and require response.completed.",
+    "interpretation": {
+      "PASS": "Two turns completed and every reasoning item carried encrypted_content.",
+      "PASS_WITHOUT_REASONING": "Two turns completed, but the probe did not produce a reasoning item, so encrypted reasoning replay was not exercised.",
+      "PASS_WITH_MALFORMED_REASONING": "Two turns completed, but at least one reasoning item lacked encrypted_content; same-provider use may work, while switching to a stricter upstream is unsafe without gateway sanitization.",
+      "FIRST_TURN_FAILED": "The initial Codex-style Responses request failed.",
+      "SECOND_TURN_FAILED": "The provider created a response but failed when its own output items were replayed.",
+      "PRODUCTION_CONFIRMED": "At least one real Codex request completed successfully on this exact provider-model pair during the production evidence window; this takes precedence over a transient live probe failure."
+    }
+  },
+  "scope": {
+    "providerModelPairs": 1,
+    "timeoutMs": 90000,
+    "concurrency": 1,
+    "keyPolicy": "Try up to 1 active keys, prioritizing the latest successful health check, until a two-turn pass classification is found."
+  },
+  "summary": {
+    "FIRST_TURN_FAILED": 1
+  },
+  "operationalSummary": {
+    "PRODUCTION_CONFIRMED": 1
+  },
+  "results": [
+    {
+      "provider": "pro分组 https://sub.hookai.shop",
+      "providerStatus": "ACTIVE",
+      "baseUrl": "https://sub.hookai.shop",
+      "model": "gpt-5.6-sol",
+      "classification": "FIRST_TURN_FAILED",
+      "workingKeyName": null,
+      "attemptedKeyCount": 1,
+      "attempts": [
+        {
+          "keyName": "key-2",
+          "classification": "FIRST_TURN_FAILED",
+          "firstTurn": {
+            "ok": false,
+            "status": 503,
+            "latencyMs": 944,
+            "completed": false,
+            "failedEvent": false,
+            "error": "Service temporarily unavailable",
+            "eventTypes": [],
+            "outputItemTypes": [],
+            "reasoningItemCount": 0,
+            "encryptedReasoningItemCount": 0
+          },
+          "secondTurn": null
+        }
+      ],
+      "keyHealth": {
+        "activeKeyCount": 10,
+        "successfulHealthChecks": 0,
+        "failedHealthChecks": 10,
+        "unknownHealthChecks": 0,
+        "latestCheckedAt": "2026-07-20T09:34:55.414Z"
+      },
+      "productionEvidence": {
+        "windowDays": 30,
+        "successCount": 1411,
+        "failedCount": 527,
+        "pendingCount": 7,
+        "latestSuccessAt": "2026-07-20T08:36:41.623Z",
+        "latestFailureAt": "2026-07-20T09:27:17.306Z"
+      },
+      "operationalAssessment": "PRODUCTION_CONFIRMED"
+    }
+  ]
+}

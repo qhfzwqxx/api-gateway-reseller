@@ -35,6 +35,7 @@ import {
   syncUserSubscriptionState,
 } from "../services/subscriptions.js";
 import { recordRoutingFeedback } from "../services/routing/feedback.js";
+import { getStickyModelPoolRoute } from "../services/model-pool-stickiness.js";
 import {
   getLoggedUpstreamProviderKeyId,
   routeUpstreamRequest,
@@ -145,8 +146,12 @@ import {
   createCompactChannelFingerprint,
   extractEncryptedItems,
   findCachedCompactForBody,
+  findCachedCompactsForBody,
   hashEncryptedContent,
+  normalizeCrossChannelResponsesInput,
   readTargetCompactItems,
+  removeMalformedEncryptedInputItems,
+  removeReasoningInputItems,
   replaceCompactionItemsByEncryptedContentHashes,
   saveCompactCache,
   saveTargetCompactItems,
@@ -191,6 +196,8 @@ type CompactFallbackTrace = {
   sourceFingerprint?: string;
   targetFingerprint?: string;
   targetCacheHit?: boolean;
+  malformedItemsRemoved?: number;
+  normalizedReasoningItems?: number;
   error?: string;
 };
 
@@ -506,9 +513,16 @@ export async function proxyRoutes(app: FastifyInstance) {
       if (
         whitelistFilterSettings.enabled &&
         (whitelistFilterSettings.applyToAdmins || user.role !== "ADMIN") &&
-        !(await isWhitelistFilterUnlocked(app, user.id, whitelistFilterSettings))
+        !(await isWhitelistFilterUnlocked(
+          app,
+          user.id,
+          whitelistFilterSettings,
+        ))
       ) {
-        const noticeReturned = shouldReturnApiKeyNotice(endpoint, request.method);
+        const noticeReturned = shouldReturnApiKeyNotice(
+          endpoint,
+          request.method,
+        );
         await createGatewayRejectedRequest({
           body,
           endpoint,
@@ -739,9 +753,13 @@ export async function proxyRoutes(app: FastifyInstance) {
         const subscriptionCanStart =
           activeSubscription &&
           hasAvailableSubscriptionQuota(activeSubscription);
-        const walletCheck = subscriptionCanStart || !accessRoutePolicy.walletRequired
-          ? { ok: true as const, balance: new Decimal(0) }
-          : await ensureWalletCanStart(user.id, accessRoutePolicy.minimumWalletBalanceUsd);
+        const walletCheck =
+          subscriptionCanStart || !accessRoutePolicy.walletRequired
+            ? { ok: true as const, balance: new Decimal(0) }
+            : await ensureWalletCanStart(
+                user.id,
+                accessRoutePolicy.minimumWalletBalanceUsd,
+              );
         if (!walletCheck.ok) {
           await createGatewayRejectedRequest({
             body,
@@ -834,12 +852,19 @@ export async function proxyRoutes(app: FastifyInstance) {
         );
       }
 
-      const stickyIdentity =
-        clientIp || getGatewaySessionIdentity(request, body, apiKey.id);
+      const stickyIdentity = getGatewaySessionIdentity(
+        request,
+        body,
+        apiKey.id,
+      );
       const scopedStickyIdentity = scopeModelPoolCallerIdentity(
         stickyIdentity,
         accessRoutePolicy.tierId,
       );
+      const previousStickyRoute =
+        billable && model
+          ? await getStickyModelPoolRoute(scopedStickyIdentity, model)
+          : null;
       let initialRoute: UpstreamAttemptRoute;
       try {
         initialRoute = await routeUpstreamRequest({
@@ -946,6 +971,9 @@ export async function proxyRoutes(app: FastifyInstance) {
           startedAt: start,
           attempt,
           compactFallbackContext,
+          foreignReasoningState:
+            attempt > 1 ||
+            hasModelPoolRouteChanged(previousStickyRoute, activeRoute),
           multipartRawBody,
           multipartContentType: Array.isArray(requestContentType)
             ? requestContentType[0]
@@ -1029,6 +1057,26 @@ export async function proxyRoutes(app: FastifyInstance) {
       }
     });
   }
+}
+
+function hasModelPoolRouteChanged(
+  previousRoute: Awaited<ReturnType<typeof getStickyModelPoolRoute>>,
+  route: UpstreamAttemptRoute,
+) {
+  if (!previousRoute || !route.channelId) {
+    return false;
+  }
+
+  if (previousRoute.channelId !== route.channelId) {
+    return true;
+  }
+
+  const routeKeyId = getLoggedUpstreamProviderKeyId(route);
+  return Boolean(
+    previousRoute.upstreamProviderKeyId &&
+      routeKeyId &&
+      previousRoute.upstreamProviderKeyId !== routeKeyId,
+  );
 }
 
 function bindConcurrencyRelease(
@@ -1138,8 +1186,32 @@ async function applyCompactFallback(params: {
     return body;
   }
 
+  const targetFingerprint = getCompactChannelFingerprint(route);
+  const isCrossChannel =
+    cachedCompact?.matchedFingerprint !== undefined &&
+    cachedCompact.matchedFingerprint !== targetFingerprint;
+  const sanitized = isCrossChannel
+    ? removeMalformedEncryptedInputItems(body)
+    : { value: body, removed: 0 };
+  const safeBody = sanitized.value;
+  if (sanitized.removed > 0) {
+    app.log.warn(
+      { apiRequestId, removed: sanitized.removed, targetFingerprint },
+      "Removed malformed encrypted Responses input items during cross-channel migration",
+    );
+  }
+
   if (!cachedCompact) {
-    return body;
+    if (sanitized.removed > 0) {
+      compactFallbackContext.trace = {
+        gatewayCompactFallback: true,
+        fallbackAttempted: false,
+        fallbackSucceeded: true,
+        malformedItemsRemoved: sanitized.removed,
+        targetFingerprint: getCompactChannelFingerprint(route),
+      };
+    }
+    return safeBody;
   }
 
   if (
@@ -1154,12 +1226,11 @@ async function applyCompactFallback(params: {
       },
       "Responses compact cache ownership mismatch; continuing original request",
     );
-    return body;
+    return safeBody;
   }
 
-  const targetFingerprint = getCompactChannelFingerprint(route);
-  if (cachedCompact.cache.sourceFingerprint === targetFingerprint) {
-    return body;
+  if (cachedCompact.matchedFingerprint === targetFingerprint) {
+    return safeBody;
   }
 
   if (isCompactFallbackDisabledForUser(userId)) {
@@ -1170,7 +1241,7 @@ async function applyCompactFallback(params: {
       },
       "Responses compact fallback disabled for user; continuing original request",
     );
-    return body;
+    return safeBody;
   }
 
   const targetCacheHit = await readTargetCompactItems({
@@ -1184,7 +1255,7 @@ async function applyCompactFallback(params: {
       getTargetCompactItemType(route),
     );
     const replaced = replaceCompactionItemsByEncryptedContentHashes(
-      body,
+      safeBody,
       replacementsByHash,
     );
     if (replaced.replacements > 0) {
@@ -1196,9 +1267,10 @@ async function applyCompactFallback(params: {
         replacements: replaced.replacements,
         compactCacheId: cachedCompact.compactCacheId,
         encryptedContentHash: cachedCompact.encryptedContentHash,
-        sourceFingerprint: cachedCompact.cache.sourceFingerprint,
+        sourceFingerprint: cachedCompact.matchedFingerprint,
         targetFingerprint,
         targetCacheHit: true,
+        malformedItemsRemoved: sanitized.removed || undefined,
       };
       return replaced.value;
     }
@@ -1211,8 +1283,9 @@ async function applyCompactFallback(params: {
     fallbackSucceeded: false,
     compactCacheId: cachedCompact.compactCacheId,
     encryptedContentHash: cachedCompact.encryptedContentHash,
-    sourceFingerprint: cachedCompact.cache.sourceFingerprint,
+    sourceFingerprint: cachedCompact.matchedFingerprint,
     targetFingerprint,
+    malformedItemsRemoved: sanitized.removed || undefined,
   };
   compactFallbackContext.trace = trace;
   await prisma.apiRequest.updateMany({
@@ -1244,13 +1317,13 @@ async function applyCompactFallback(params: {
       getTargetCompactItemType(route),
     );
     const replaced = replaceCompactionItemsByEncryptedContentHashes(
-      body,
+      safeBody,
       replacementsByHash,
     );
     trace.replacements = replaced.replacements;
     trace.fallbackSucceeded = replaced.replacements > 0;
 
-    return replaced.replacements > 0 ? replaced.value : body;
+    return replaced.replacements > 0 ? replaced.value : safeBody;
   } catch (error) {
     trace.error =
       error instanceof Error ? error.message : "compact fallback failed";
@@ -1263,7 +1336,7 @@ async function applyCompactFallback(params: {
       },
       "Responses compact fallback failed; continuing original request",
     );
-    return body;
+    return safeBody;
   }
 
   function isCompactFallbackDisabledForUser(userId: string) {
@@ -1275,6 +1348,145 @@ async function applyCompactFallback(params: {
       .filter(Boolean);
     return disabledUserIds.includes(userId);
   }
+}
+
+async function applyAllCompactFallbacks(params: {
+  app: FastifyInstance;
+  endpoint: string;
+  method: string;
+  body: ProxyBody;
+  route: UpstreamAttemptRoute;
+  apiRequestId: string;
+  userId: string;
+  apiKeyId: string;
+  model?: string;
+  compactFallbackContext: CompactFallbackContext;
+}): Promise<ProxyBody> {
+  const {
+    app,
+    endpoint,
+    method,
+    body,
+    route,
+    apiRequestId,
+    userId,
+    apiKeyId,
+    model,
+    compactFallbackContext,
+  } = params;
+  if (endpoint !== "/v1/responses" || method !== "POST") {
+    return body;
+  }
+
+  const malformedSanitized = removeMalformedEncryptedInputItems(body);
+  let safeBody = malformedSanitized.value;
+  if (malformedSanitized.removed > 0) {
+    app.log.warn(
+      {
+        apiRequestId,
+        removed: malformedSanitized.removed,
+        targetFingerprint: getCompactChannelFingerprint(route),
+      },
+      "Removed malformed encrypted Responses input items before upstream streaming",
+    );
+  }
+
+  let cachedCompacts: Awaited<ReturnType<typeof findCachedCompactsForBody>>;
+  try {
+    cachedCompacts = await findCachedCompactsForBody(safeBody);
+  } catch (error) {
+    app.log.warn(
+      { error },
+      "Responses compact cache batch lookup failed; continuing original request",
+    );
+    return safeBody;
+  }
+
+  const targetFingerprint = getCompactChannelFingerprint(route);
+  const crossChannelCompacts = cachedCompacts.filter(
+    (cachedCompact) =>
+      cachedCompact.matchedFingerprint !== targetFingerprint &&
+      cachedCompact.cache.userId === userId &&
+      cachedCompact.cache.apiKeyId === apiKeyId &&
+      cachedCompact.cache.model === model,
+  );
+  const sanitized =
+    crossChannelCompacts.length > 0
+      ? normalizeCrossChannelResponsesInput(safeBody)
+      : { value: safeBody, removed: 0, normalizedReasoningItems: 0 };
+  let migratedBody = sanitized.value;
+
+  if (crossChannelCompacts.length === 0) {
+    return migratedBody;
+  }
+
+  compactFallbackContext.attempted = true;
+  const trace: CompactFallbackTrace = {
+    gatewayCompactFallback: true,
+    fallbackAttempted: false,
+    fallbackSucceeded: true,
+    replacements: 0,
+    sourceFingerprint: crossChannelCompacts
+      .map((item) => item.matchedFingerprint)
+      .join(","),
+    targetFingerprint,
+    malformedItemsRemoved:
+      malformedSanitized.removed + sanitized.removed || undefined,
+    normalizedReasoningItems: sanitized.normalizedReasoningItems || undefined,
+  };
+  compactFallbackContext.trace = trace;
+
+  for (const cachedCompact of crossChannelCompacts) {
+    try {
+      let targetItems = await readTargetCompactItems({
+        compactCacheId: cachedCompact.compactCacheId,
+        targetFingerprint,
+      });
+      if (!targetItems) {
+        trace.fallbackAttempted = true;
+        targetItems = await requestTargetCompact({
+          route,
+          requestBody: cachedCompact.cache.requestBody,
+        });
+        await saveTargetCompactItems({
+          compactCacheId: cachedCompact.compactCacheId,
+          targetFingerprint,
+          targetItems,
+        });
+      }
+
+      const replacementsByHash = buildCompactFallbackReplacements(
+        cachedCompact.matchedEncryptedContentHashes,
+        targetItems,
+        getTargetCompactItemType(route),
+      );
+      const replaced = replaceCompactionItemsByEncryptedContentHashes(
+        migratedBody,
+        replacementsByHash,
+      );
+      migratedBody = replaced.value;
+      trace.replacements = (trace.replacements ?? 0) + replaced.replacements;
+    } catch (error) {
+      trace.fallbackSucceeded = false;
+      trace.error =
+        error instanceof Error
+          ? error.message
+          : "compact batch migration failed";
+      app.log.warn(
+        {
+          error,
+          compactCacheId: cachedCompact.compactCacheId,
+          sourceFingerprint: cachedCompact.matchedFingerprint,
+          targetFingerprint,
+        },
+        "Responses compact generation migration failed",
+      );
+    }
+  }
+
+  trace.fallbackSucceeded =
+    trace.fallbackSucceeded && (trace.replacements ?? 0) > 0;
+  return migratedBody;
 }
 
 async function recoverInvalidEncryptedContentWithCompact(params: {
@@ -1336,7 +1548,7 @@ async function recoverInvalidEncryptedContentWithCompact(params: {
     fallbackSucceeded: false,
     compactCacheId: cachedCompact.compactCacheId,
     encryptedContentHash: cachedCompact.encryptedContentHash,
-    sourceFingerprint: cachedCompact.cache.sourceFingerprint,
+    sourceFingerprint: cachedCompact.matchedFingerprint,
     targetFingerprint,
   };
   compactFallbackContext.trace = trace;
@@ -1456,6 +1668,57 @@ function normalizeCompactItemForTarget(
         : `compact_${hashEncryptedContent(encryptedContent).slice(0, 24)}`,
     type: "compaction_summary",
     encrypted_content: encryptedContent,
+  };
+}
+
+function rewriteCompactionItemsForTargetType<T>(
+  value: T,
+  targetItemType: CompactItemType,
+) {
+  const rewrite = (
+    current: unknown,
+  ): { value: unknown; replacements: number } => {
+    if (Array.isArray(current)) {
+      let replacements = 0;
+      const items = current.map((item) => {
+        const rewritten = rewrite(item);
+        replacements += rewritten.replacements;
+        return rewritten.value;
+      });
+      return { value: replacements > 0 ? items : current, replacements };
+    }
+
+    if (!isPlainObject(current)) {
+      return { value: current, replacements: 0 };
+    }
+
+    if (
+      (current.type === "compaction" ||
+        current.type === "compaction_summary" ||
+        current.type === "response.compaction_summary") &&
+      typeof current.encrypted_content === "string" &&
+      current.encrypted_content
+    ) {
+      return {
+        value: normalizeCompactItemForTarget(current, targetItemType),
+        replacements: 1,
+      };
+    }
+
+    let replacements = 0;
+    const record: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(current)) {
+      const rewritten = rewrite(item);
+      replacements += rewritten.replacements;
+      record[key] = rewritten.value;
+    }
+    return { value: replacements > 0 ? record : current, replacements };
+  };
+
+  const rewritten = rewrite(value);
+  return {
+    value: rewritten.value as T,
+    replacements: rewritten.replacements,
   };
 }
 
@@ -1598,6 +1861,8 @@ async function runUpstreamAttempt(params: {
   attempt: number;
   compactFallbackContext: CompactFallbackContext;
   invalidCompactRetryAttempted?: boolean;
+  compactTypeRetryAttempted?: boolean;
+  foreignReasoningState?: boolean;
   multipartRawBody?: Buffer;
   multipartContentType?: string;
 }): Promise<UpstreamAttemptResult> {
@@ -1620,6 +1885,8 @@ async function runUpstreamAttempt(params: {
     startedAt,
     compactFallbackContext,
     invalidCompactRetryAttempted,
+    compactTypeRetryAttempted,
+    foreignReasoningState,
     multipartRawBody,
     multipartContentType,
   } = params;
@@ -1643,11 +1910,25 @@ async function runUpstreamAttempt(params: {
   const resolvedUpstreamEndpoint = resolveUpstreamEndpoint(
     resolvedUpstreamRequestUrl,
   );
-  const fallbackBody = await applyCompactFallback({
+  const reasoningSanitized = foreignReasoningState
+    ? removeReasoningInputItems(body)
+    : { value: body, removed: 0 };
+  if (reasoningSanitized.removed > 0) {
+    app.log.warn(
+      {
+        apiRequestId,
+        removed: reasoningSanitized.removed,
+        channelId,
+        upstreamProviderKeyId,
+      },
+      "Removed foreign reasoning input items before switched-channel request",
+    );
+  }
+  const fallbackBody = await applyAllCompactFallbacks({
     app,
     endpoint,
     method: request.method,
-    body,
+    body: reasoningSanitized.value,
     route,
     apiRequestId,
     userId,
@@ -1774,9 +2055,57 @@ async function runUpstreamAttempt(params: {
       if (
         endpoint === "/v1/responses" &&
         request.method === "POST" &&
+        !compactTypeRetryAttempted &&
+        isCompactItemTypeCompatibilityError(text)
+      ) {
+        const configuredType = getTargetCompactItemType(route);
+        const alternateType: CompactItemType =
+          configuredType === "compaction" ? "compaction_summary" : "compaction";
+        const rewritten = rewriteCompactionItemsForTargetType(
+          fallbackBody,
+          alternateType,
+        );
+        if (rewritten.replacements > 0) {
+          app.log.warn(
+            {
+              apiRequestId,
+              configuredType,
+              alternateType,
+              replacements: rewritten.replacements,
+            },
+            "Retrying Responses request with alternate compact item type",
+          );
+          return runUpstreamAttempt({
+            ...params,
+            body: rewritten.value,
+            compactTypeRetryAttempted: true,
+          });
+        }
+      }
+
+      if (
+        endpoint === "/v1/responses" &&
+        request.method === "POST" &&
         !invalidCompactRetryAttempted &&
         isInvalidEncryptedContentError(text)
       ) {
+        const sanitized = removeMalformedEncryptedInputItems(fallbackBody);
+        if (sanitized.removed > 0) {
+          app.log.warn(
+            {
+              apiRequestId,
+              removed: sanitized.removed,
+              upstreamStatusCode: statusCode,
+            },
+            "Retrying Responses request without malformed encrypted input items",
+          );
+          return runUpstreamAttempt({
+            ...params,
+            body: sanitized.value,
+            invalidCompactRetryAttempted: true,
+          });
+        }
+
         const recoveredBody = await recoverInvalidEncryptedContentWithCompact({
           app,
           body: fallbackBody,
@@ -1792,6 +2121,23 @@ async function runUpstreamAttempt(params: {
           return runUpstreamAttempt({
             ...params,
             body: recoveredBody,
+            invalidCompactRetryAttempted: true,
+          });
+        }
+
+        const withoutReasoning = removeReasoningInputItems(fallbackBody);
+        if (withoutReasoning.removed > 0) {
+          app.log.warn(
+            {
+              apiRequestId,
+              removed: withoutReasoning.removed,
+              upstreamStatusCode: statusCode,
+            },
+            "Retrying Responses request without incompatible reasoning input items",
+          );
+          return runUpstreamAttempt({
+            ...params,
+            body: withoutReasoning.value,
             invalidCompactRetryAttempted: true,
           });
         }
@@ -2290,8 +2636,27 @@ function isInvalidEncryptedContentError(value: unknown) {
   const normalized = text.toLowerCase();
   return (
     normalized.includes("invalid_encrypted_content") ||
-    normalized.includes("encrypted content could not be decrypted or parsed")
+    normalized.includes("encrypted content could not be decrypted or parsed") ||
+    ((normalized.includes("missing_required_parameter") ||
+      normalized.includes("missing required parameter")) &&
+      normalized.includes("encrypted_content"))
   );
+}
+
+function isCompactItemTypeCompatibilityError(value: unknown) {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const normalized = text.toLowerCase();
+  const mentionsCompactType =
+    normalized.includes("compaction_summary") ||
+    normalized.includes("compaction");
+  const rejectsType =
+    normalized.includes("invalid_value") ||
+    normalized.includes("invalid value") ||
+    normalized.includes("unsupported") ||
+    normalized.includes("unknown") ||
+    normalized.includes("not allowed") ||
+    normalized.includes("unexpected");
+  return mentionsCompactType && rejectsType;
 }
 
 async function markRecoveryNoticeReturned(

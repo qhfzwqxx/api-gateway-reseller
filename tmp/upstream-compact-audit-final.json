@@ -1,0 +1,905 @@
+{
+  "generatedAt": "2026-07-20T05:33:40.576Z",
+  "scope": {
+    "providerCount": 31,
+    "modelPairCount": 61,
+    "keyPolicy": "each provider-model tries active keys until a complete pass; passes may not test every key",
+    "models": "Codex text models only; image-only models excluded"
+  },
+  "summary": {
+    "RESPONSES_FAILED": 43,
+    "PASS": 11,
+    "COMPACT_FAILED": 7
+  },
+  "providers": [
+    {
+      "provider": "http://43.153.88.103:8080",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 502,
+          "basicError": "Upstream authentication failed, please contact administrator | upstream_error"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 502,
+          "basicError": "Upstream authentication failed, please contact administrator | upstream_error"
+        }
+      ]
+    },
+    {
+      "provider": "http://82.157.186.24:3000",
+      "status": "DISABLED",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        }
+      ]
+    },
+    {
+      "provider": "https://ai-pixel.online",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        }
+      ]
+    },
+    {
+      "provider": "https://api.deepseek.com",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 404,
+          "basicError": ""
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 404,
+          "basicError": ""
+        }
+      ]
+    },
+    {
+      "provider": "https://api.freemodel.dev",
+      "status": "DISABLED",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 401,
+          "basicError": null
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 401,
+          "basicError": null
+        }
+      ]
+    },
+    {
+      "provider": "https://api.ggboys.xyz",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        }
+      ]
+    },
+    {
+      "provider": "https://api.proxy-ai.tech",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "用户额度不足, 剩余额度: ＄-0.010728 (request id: 202607200512469055423618268d9d6Om4ULEW0) | insufficient_user_quota | new_api_error"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "用户额度不足, 剩余额度: ＄-0.010728 (request id: 202607200512470699802528268d9d6hiup1Sxl) | insufficient_user_quota | new_api_error"
+        }
+      ]
+    },
+    {
+      "provider": "https://business.newcli.com",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | reasoning | response.output_item.done | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "COMPACT_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": 503,
+          "compactError": "No available channel for model gpt-5.6-sol-openai-compact under group codex (distributor) (request id: 202607200525513114536658268d9d61Vvb0k5N) | model_not_found | new_api_error",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "https://catcats.net",
+      "status": "DISABLED",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 404,
+          "basicError": "Model \"gpt-5.5\" is not supported by any configured account in this group | model_not_found"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 404,
+          "basicError": "Model \"gpt-5.6-sol\" is not supported by any configured account in this group | model_not_found"
+        }
+      ]
+    },
+    {
+      "provider": "https://dev.nextopenai.com",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 503,
+          "basicError": null
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 503,
+          "basicError": "No available channel for model gpt-5.6-sol under group OpenAI_Codex (distributor) (request id: 202607200512485851366518268d9d6D8Zo7J08) | model_not_found | new_api_error"
+        }
+      ]
+    },
+    {
+      "provider": "https://img.baofu.eu.cc 画图专线",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 20,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 20,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        }
+      ]
+    },
+    {
+      "provider": "https://mdkj.lol",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 5,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 5,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "https://new.lucky0625.qzz.io",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        }
+      ]
+    },
+    {
+      "provider": "https://new.sharedchat.cc/codex",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": null,
+          "basicError": "fetch failed"
+        }
+      ]
+    },
+    {
+      "provider": "https://nyue.cc",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 503,
+          "basicError": "No available channel for model gpt-5.5 under group codex-pro (distributor) (request id: 202607200512590092770548268d9d66oBoNk1r) | model_not_found | new_api_error"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 503,
+          "basicError": "No available channel for model gpt-5.6-sol under group codex-pro (distributor) (request id: 202607200512590160292478268d9d6B7Jqutdp) | model_not_found | new_api_error"
+        }
+      ]
+    },
+    {
+      "provider": "https://ppsubapi.com",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "无权访问 gpt plus（个人稳定分组） 分组 (request id: 202607200513003669534228268d9d6xANbaPid) |  | new_api_error"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "无权访问 gpt plus（个人稳定分组） 分组 (request id: 202607200513005773549458268d9d6FWyMezTX) |  | new_api_error"
+        }
+      ]
+    },
+    {
+      "provider": "https://ppsubapi.com Pro专线",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "无权访问 gpt pro（救急分组2) 分组 (request id: 202607200513007659069378268d9d6g39iaKLG) |  | new_api_error"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "无权访问 gpt pro（救急分组2) 分组 (request id: 2026072005130128357198268d9d6jxhv9VTH) |  | new_api_error"
+        }
+      ]
+    },
+    {
+      "provider": "https://ppsubapi.com 画图专线",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 20,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "无权访问 企业级image 2 分组 (request id: 20260720051301422683478268d9d6M6PLCmAv) |  | new_api_error"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 20,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "无权访问 企业级image 2 分组 (request id: 202607200513012028177168268d9d6uZHedc6E) |  | new_api_error"
+        }
+      ]
+    },
+    {
+      "provider": "https://sub.flyshop.chat",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 405,
+          "basicError": "<html> <head><title>405 Not Allowed</title></head> <body> <center><h1>405 Not Allowed</h1></center> <hr><center>nginx/1.18.0 (Ubuntu)</center> </body> </html> "
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 405,
+          "basicError": "<html> <head><title>405 Not Allowed</title></head> <body> <center><h1>405 Not Allowed</h1></center> <hr><center>nginx/1.18.0 (Ubuntu)</center> </body> </html> "
+        }
+      ]
+    },
+    {
+      "provider": "https://superapi.buzz",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "用户额度不足, 剩余额度: ＄-0.000152 (request id: 202607200513020657487408268d9d6ku1R5EuM) | insufficient_user_quota | new_api_error"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "用户额度不足, 剩余额度: ＄-0.000152 (request id: 202607200513021783298548268d9d6PcUKiGI7) | insufficient_user_quota | new_api_error"
+        }
+      ]
+    },
+    {
+      "provider": "https://toltol.me",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        }
+      ]
+    },
+    {
+      "provider": "https://www.lnmbq.icu",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 5,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 403,
+          "basicError": "Insufficient account balance | INSUFFICIENT_BALANCE"
+        }
+      ]
+    },
+    {
+      "provider": "https://www.skk.mom",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | image_generation | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | image_generation | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "https://www.sub3api.com",
+      "status": "DISABLED",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 401,
+          "basicError": "Invalid API key | INVALID_API_KEY"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 1,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 401,
+          "basicError": "Invalid API key | INVALID_API_KEY"
+        }
+      ]
+    },
+    {
+      "provider": "plus分组 https://niuwa88.vip",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "COMPACT_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": 503,
+          "compactError": "No available channel for model gpt-5.5-openai-compact under group ChatGPT-Plus（稳定） (distributor) (request id: 202607200528078075288648268d9d6ViFwVl4m) | model_not_found | new_api_error",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | reasoning | response.output_item.done | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "COMPACT_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": 503,
+          "compactError": "No available channel for model gpt-5.6-sol-openai-compact under group ChatGPT-Plus（稳定） (distributor) (request id: 202607200527220140204318268d9d6iULKTaxm) | model_not_found | new_api_error",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "plus分组 https://share-api.com",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | reasoning | response.output_item.done | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "plus分组 https://www.codexapis.com",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "compaction",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | reasoning | response.output_item.done | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "COMPACT_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": 503,
+          "compactError": "No available channel for model gpt-5.6-sol-openai-compact under group gptplus (distributor) (request id: 20260720052605150762438268d9d69UvYCwXF) | model_not_found | new_api_error",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | reasoning | response.output_item.done | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "pro分组 https://niuwa88.vip",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "COMPACT_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": 503,
+          "compactError": "No available channel for model gpt-5.5-openai-compact under group ChatGPT-Pro20x (distributor) (request id: 202607200526234914206178268d9d6VIo0TU5U) | model_not_found | new_api_error",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | reasoning | response.output_item.done | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "COMPACT_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": 503,
+          "compactError": "No available channel for model gpt-5.6-sol-openai-compact under group ChatGPT-Pro20x (distributor) (request id: 202607200526336311213778268d9d6kZkFzp5n) | model_not_found | new_api_error",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "pro分组 https://sub.hookai.shop",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.failed | Concurrency limit exceeded for account, please retry later | rate_limit_exceeded"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 4,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.failed | Concurrency limit exceeded for account, please retry later | rate_limit_exceeded"
+        }
+      ]
+    },
+    {
+      "provider": "pro分组 https://tkapi.xyz",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction_summary"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "PASS",
+          "workingCompactItemType": "compaction_summary",
+          "attemptedKeyCount": 1,
+          "compactStatus": 200,
+          "compactError": "message | input_text | compaction_summary",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.output_text.delta | response.in_progress | response.output_item.added | message | response.content_part.added | output_text | response.output_text.done | response.content_part.done | response.output_item.done | response.completed"
+        }
+      ]
+    },
+    {
+      "provider": "pro分组 https://www.codexapis.com",
+      "status": "ACTIVE",
+      "configuredTypes": [
+        "compaction"
+      ],
+      "models": [
+        {
+          "model": "gpt-5.5",
+          "classification": "COMPACT_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": 503,
+          "compactError": "error compact_unavailable | internal_server_error | server_error",
+          "basicStatus": 200,
+          "basicError": "response.created | text | response.in_progress | response.metadata | response.output_item.added | reasoning | response.output_item.done | message | response.content_part.added | output_text | response.output_text.delta | response.output_text.done | response.content_part.done | response.completed"
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "classification": "RESPONSES_FAILED",
+          "workingCompactItemType": null,
+          "attemptedKeyCount": 10,
+          "compactStatus": null,
+          "compactError": null,
+          "basicStatus": 503,
+          "basicError": null
+        }
+      ]
+    }
+  ]
+}

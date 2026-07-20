@@ -14,6 +14,7 @@
     "build": "/usr/local/bin/api-gateway-resource-guard.sh --preflight-build && npm run db:generate && npm run build --workspace packages/db && npm run build --workspace apps/api && npm run build --workspace apps/web",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run db:generate && npm run build --workspace packages/db && npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
+    "audit:codex-upstreams": "dotenv -e .env -- tsx scripts/audit-upstream-codex-roundtrip.ts",
     "load:saturation": "node scripts/saturation-load-test.mjs",
     "db:generate": "npm run db:generate --workspace packages/db",
     "db:migrate": "npm run db:migrate --workspace packages/db",

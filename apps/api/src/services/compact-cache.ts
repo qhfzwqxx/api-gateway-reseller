@@ -26,6 +26,11 @@ const encryptedIndexPrefix = "gateway:compact:encrypted:";
 const cachePrefix = "gateway:compact:cache:";
 const targetPrefix = "gateway:compact:target:";
 
+type EncryptedContentIndexEntry = {
+  compactCacheId: string;
+  fingerprint?: string;
+};
+
 export function createCompactRouteFingerprint(
   input: CompactRouteFingerprintInput,
 ) {
@@ -116,6 +121,122 @@ export function extractEncryptedItems(value: unknown) {
   return items;
 }
 
+export function removeMalformedEncryptedInputItems<T>(value: T) {
+  if (!isPlainRecord(value) || !Array.isArray(value.input)) {
+    return { value, removed: 0 };
+  }
+
+  let removed = 0;
+  const input = value.input.filter((item) => {
+    if (!isPlainRecord(item) || !requiresEncryptedContent(item)) {
+      return true;
+    }
+
+    if (
+      typeof item.encrypted_content === "string" &&
+      item.encrypted_content.length > 0
+    ) {
+      return true;
+    }
+
+    removed += 1;
+    return false;
+  });
+
+  if (removed === 0) {
+    return { value, removed };
+  }
+
+  return {
+    value: { ...value, input } as T,
+    removed,
+  };
+}
+
+export function removeReasoningInputItems<T>(value: T) {
+  if (!isPlainRecord(value) || !Array.isArray(value.input)) {
+    return { value, removed: 0 };
+  }
+
+  let removed = 0;
+  const input = value.input.filter((item) => {
+    if (!isPlainRecord(item) || item.type !== "reasoning") {
+      return true;
+    }
+
+    removed += 1;
+    return false;
+  });
+
+  if (removed === 0) {
+    return { value, removed };
+  }
+
+  return {
+    value: { ...value, input } as T,
+    removed,
+  };
+}
+
+export function normalizeCrossChannelResponsesInput<T>(value: T) {
+  if (!isPlainRecord(value) || !Array.isArray(value.input)) {
+    return { value, removed: 0, normalizedReasoningItems: 0 };
+  }
+
+  let removed = 0;
+  let normalizedReasoningItems = 0;
+  const input: unknown[] = [];
+
+  for (const item of value.input) {
+    if (!isPlainRecord(item)) {
+      input.push(item);
+      continue;
+    }
+
+    if (requiresEncryptedContent(item)) {
+      const encryptedContent = item.encrypted_content;
+      if (typeof encryptedContent !== "string" || !encryptedContent) {
+        removed += 1;
+        continue;
+      }
+    }
+
+    if (item.type !== "reasoning") {
+      input.push(item);
+      continue;
+    }
+
+    const normalized = { ...item };
+    let changed = false;
+    if (Object.prototype.hasOwnProperty.call(normalized, "id")) {
+      delete normalized.id;
+      changed = true;
+    }
+    if (!Array.isArray(normalized.summary)) {
+      normalized.summary = [];
+      changed = true;
+    }
+    if (normalized.content === null) {
+      delete normalized.content;
+      changed = true;
+    }
+    if (changed) {
+      normalizedReasoningItems += 1;
+    }
+    input.push(normalized);
+  }
+
+  if (removed === 0 && normalizedReasoningItems === 0) {
+    return { value, removed, normalizedReasoningItems };
+  }
+
+  return {
+    value: { ...value, input } as T,
+    removed,
+    normalizedReasoningItems,
+  };
+}
+
 export async function saveCompactCache(params: {
   requestBody: unknown;
   responseBody: unknown;
@@ -157,7 +278,10 @@ export async function saveCompactCache(params: {
   for (const hash of encryptedContentHashes) {
     operations.set(
       encryptedIndexKey(hash),
-      compactCacheId,
+      serializeEncryptedContentIndex({
+        compactCacheId,
+        fingerprint: params.sourceFingerprint,
+      }),
       "EX",
       compactCacheTtlSeconds,
     );
@@ -172,40 +296,67 @@ export async function saveCompactCache(params: {
 }
 
 export async function findCachedCompactForBody(value: unknown) {
+  const matches = await findCachedCompactsForBody(value);
+  return matches[0] ?? null;
+}
+
+export async function findCachedCompactsForBody(value: unknown) {
   const encryptedContents = collectEncryptedContents(value);
   if (encryptedContents.length === 0) {
-    return null;
+    return [];
   }
 
   const candidates = encryptedContents.map((encryptedContent) => ({
     encryptedContent,
     hash: hashEncryptedContent(encryptedContent),
   }));
-  const compactCacheIds = await redis.mget(
+  const encryptedIndexes = await redis.mget(
     ...candidates.map((candidate) => encryptedIndexKey(candidate.hash)),
   );
 
+  const matches: Array<{
+    encryptedContent: string;
+    encryptedContentHash: string;
+    matchedEncryptedContentHashes: string[];
+    compactCacheId: string;
+    matchedFingerprint: string;
+    cache: CompactCacheEntry;
+  }> = [];
+  const seenCacheIds = new Set<string>();
+
   for (let index = 0; index < candidates.length; index += 1) {
-    const compactCacheId = compactCacheIds[index];
+    const encryptedIndex = parseEncryptedContentIndex(encryptedIndexes[index]);
     const candidate = candidates[index];
-    if (!compactCacheId || !candidate) {
+    if (!encryptedIndex || !candidate) {
       continue;
     }
 
-    const entry = await readCompactCache(compactCacheId);
+    const entry = await readCompactCache(encryptedIndex.compactCacheId);
     if (!entry) {
       continue;
     }
 
-    return {
+    const existingMatch = matches.find(
+      (match) => match.compactCacheId === encryptedIndex.compactCacheId,
+    );
+    if (existingMatch) {
+      existingMatch.matchedEncryptedContentHashes.push(candidate.hash);
+      continue;
+    }
+    seenCacheIds.add(encryptedIndex.compactCacheId);
+
+    matches.push({
       encryptedContent: candidate.encryptedContent,
       encryptedContentHash: candidate.hash,
-      compactCacheId,
+      matchedEncryptedContentHashes: [candidate.hash],
+      compactCacheId: encryptedIndex.compactCacheId,
+      matchedFingerprint:
+        encryptedIndex.fingerprint ?? entry.sourceFingerprint,
       cache: entry,
-    };
+    });
   }
 
-  return null;
+  return matches;
 }
 
 export async function readTargetCompactItems(params: {
@@ -232,12 +383,25 @@ export async function saveTargetCompactItems(params: {
   targetFingerprint: string;
   targetItems: Array<{ encryptedContent: string; item: unknown }>;
 }) {
-  await redis.set(
+  const operations = redis.multi();
+  operations.set(
     targetKey(params.compactCacheId, params.targetFingerprint),
     JSON.stringify(params.targetItems),
     "EX",
     compactCacheTtlSeconds,
   );
+  for (const targetItem of params.targetItems) {
+    operations.set(
+      encryptedIndexKey(hashEncryptedContent(targetItem.encryptedContent)),
+      serializeEncryptedContentIndex({
+        compactCacheId: params.compactCacheId,
+        fingerprint: params.targetFingerprint,
+      }),
+      "EX",
+      compactCacheTtlSeconds,
+    );
+  }
+  await operations.exec();
 }
 
 export function replaceCompactionItemByEncryptedContentHash<T>(
@@ -359,6 +523,35 @@ function encryptedIndexKey(hash: string) {
   return `${encryptedIndexPrefix}${hash}`;
 }
 
+function serializeEncryptedContentIndex(entry: EncryptedContentIndexEntry) {
+  return JSON.stringify(entry);
+}
+
+function parseEncryptedContentIndex(
+  value: string | null | undefined,
+): EncryptedContentIndexEntry | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Partial<EncryptedContentIndexEntry>;
+    if (typeof parsed.compactCacheId === "string" && parsed.compactCacheId) {
+      return {
+        compactCacheId: parsed.compactCacheId,
+        fingerprint:
+          typeof parsed.fingerprint === "string"
+            ? parsed.fingerprint
+            : undefined,
+      };
+    }
+  } catch {
+    return { compactCacheId: value };
+  }
+
+  return null;
+}
+
 function cacheKey(compactCacheId: string) {
   return `${cachePrefix}${compactCacheId}`;
 }
@@ -390,6 +583,16 @@ function visitJson(
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function requiresEncryptedContent(value: Record<string, unknown>) {
+  return (
+    value.type === "reasoning" ||
+    value.type === "compaction" ||
+    value.type === "compaction_summary" ||
+    value.type === "response.compaction_summary" ||
+    value.object === "compaction_summary"
+  );
 }
 
 function cloneJson<T>(value: T): T {
