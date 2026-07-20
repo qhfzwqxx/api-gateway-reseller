@@ -454,12 +454,22 @@ function createKeyReservation(key: UpstreamProviderKey) {
       clearInterval(refreshTtl);
 
       try {
-        const current = await redis.decr(redisKey);
-        if (current <= 0) {
-          await redis.del(redisKey);
-        } else {
-          await redis.expire(redisKey, keyInflightTtlSeconds);
-        }
+        await redis.eval(
+          `
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+if current <= 1 then
+  redis.call("DEL", KEYS[1])
+  return 0
+end
+
+local next = redis.call("DECR", KEYS[1])
+redis.call("EXPIRE", KEYS[1], ARGV[1])
+return next
+`,
+          1,
+          redisKey,
+          String(keyInflightTtlSeconds),
+        );
       } catch {
         // TTL handles stale counters if Redis release fails.
       }

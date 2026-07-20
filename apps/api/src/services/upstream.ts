@@ -166,7 +166,8 @@ export async function getProviderForModel(
   decisionTrace.candidates = routeCandidates.map((route) => ({
     channelId: route.channelId,
     provider: route.provider.name,
-    speedScoreMs: route.entropyScore,
+    speedScoreMs: route.speedScoreMs,
+    entropyScoreMs: route.entropyScore,
     stickyOccupancy: route.stickyOccupancy,
     available: true,
   }));

@@ -53,6 +53,13 @@ const inFlightChannelChecks = new Map<
     promise: Promise<ModelPoolChannel | null>;
   }
 >();
+const scheduledPenalizedRecoveries = new Map<
+  string,
+  {
+    penalizedUntilMs: number;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
 let cachedHealthCheckIntervalSeconds = defaultModelPoolHealthCheckIntervalSeconds;
 let cachedHealthCheckIntervalLoadedAtMs = 0;
 let cachedPenaltySeconds = defaultModelPoolPenaltySeconds;
@@ -312,13 +319,41 @@ export function schedulePenalizedChannelRecovery(
   penalizedUntil: Date,
   logger?: Pick<HealthLogger, "warn" | "info">,
 ) {
-  const delayMs = Math.max(0, penalizedUntil.getTime() - Date.now());
+  const penalizedUntilMs = penalizedUntil.getTime();
+  const previous = scheduledPenalizedRecoveries.get(channelId);
+  if (previous && previous.penalizedUntilMs >= penalizedUntilMs) {
+    return;
+  }
 
-  setTimeout(() => {
+  if (previous) {
+    clearTimeout(previous.timer);
+  }
+
+  const delayMs = Math.max(0, penalizedUntilMs - Date.now());
+  const timer = setTimeout(() => {
+    const scheduled = scheduledPenalizedRecoveries.get(channelId);
+    if (!scheduled || scheduled.timer !== timer) {
+      return;
+    }
+    scheduledPenalizedRecoveries.delete(channelId);
+
     void runChannelHealthCheck(channelId, {
       allowPenalizedRecovery: true,
     })
       .then((channel) => {
+        if (
+          channel?.status === "PENALIZED" &&
+          channel.penalizedUntil &&
+          channel.penalizedUntil.getTime() > Date.now()
+        ) {
+          schedulePenalizedChannelRecovery(
+            channelId,
+            channel.penalizedUntil,
+            logger,
+          );
+          return;
+        }
+
         logger?.info?.(
           {
             channelId,
@@ -335,6 +370,11 @@ export function schedulePenalizedChannelRecovery(
         );
       });
   }, delayMs);
+
+  scheduledPenalizedRecoveries.set(channelId, {
+    penalizedUntilMs,
+    timer,
+  });
 }
 
 async function performModelPoolChannelCheck(

@@ -126,12 +126,22 @@ function createReservation(channelId: string) {
       clearInterval(refreshTtl);
 
       try {
-        const current = await redis.decr(key);
-        if (current <= 0) {
-          await redis.del(key);
-        } else {
-          await redis.expire(key, inflightTtlSeconds);
-        }
+        await redis.eval(
+          `
+local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+if current <= 1 then
+  redis.call("DEL", KEYS[1])
+  return 0
+end
+
+local next = redis.call("DECR", KEYS[1])
+redis.call("EXPIRE", KEYS[1], ARGV[1])
+return next
+`,
+          1,
+          key,
+          String(inflightTtlSeconds),
+        );
       } catch {
         // Best-effort cleanup. TTL keeps stale counters from living forever.
       }
