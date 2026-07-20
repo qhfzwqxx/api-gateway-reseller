@@ -610,8 +610,8 @@ function ChannelCard({
         <Fact label="优先级" value={String(channel.priority)} />
         <Fact label="连续失败" value={String(channel.consecutiveFailures)} />
         <Fact label="恢复" value={`${channel.recoverySuccesses}/2`} />
-        <Fact label="平均首字" value={secondsText(channel.lastFirstTokenLatencyMs)} />
-        <Fact label="平均总耗" value={secondsText(channel.lastLatencyMs)} />
+        <Fact label="平均首 token" value={secondsText(channel.lastFirstTokenLatencyMs)} />
+        <Fact label="赢家总耗" value={secondsText(channel.lastLatencyMs)} />
       </div>
 
       {errorText ? <div className="mt-1.5 line-clamp-2 rounded-md border border-red-100 bg-red-50 px-2 py-1 text-[11px] text-red-700"><span className="font-semibold">错误：</span>{errorText}</div> : null}

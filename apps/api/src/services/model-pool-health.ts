@@ -45,7 +45,7 @@ export const minModelPoolPenaltySeconds = 1;
 export const maxModelPoolPenaltySeconds = 86400;
 export const modelPoolPenaltySettingKey = "model_pool_penalty_seconds";
 const schedulerTickMs = 1_000;
-const maxCheckMs = 30_000;
+const maxFirstTokenCheckMs = 30_000;
 const inFlightChannelChecks = new Map<
   string,
   {
@@ -461,6 +461,7 @@ async function performModelPoolChannelCheck(
   }
 
   const healthCheckEndpoint = normalizeModelPoolHealthCheckEndpoint(channel.modelPool.healthCheckEndpoint);
+  let winnerKeyId: string | null = null;
   const keyResults = await Promise.all(
     resolvedActiveKeys.map((key) =>
       probeProviderKey({
@@ -469,6 +470,14 @@ async function performModelPoolChannelCheck(
         timeoutMs: provider.timeoutMs,
         model: channel.modelPool.model,
         endpoint: healthCheckEndpoint,
+        onFirstToken: () => {
+          if (winnerKeyId === null) {
+            winnerKeyId = key.id;
+            return "continue";
+          }
+
+          return "stop";
+        },
       }).then(async (result) => {
         await prisma.upstreamProviderKey.update({
           where: { id: key.id },
@@ -484,6 +493,9 @@ async function performModelPoolChannelCheck(
     ),
   );
   const failedKey = keyResults.find(({ result }) => !result.ok);
+  const winnerResult = winnerKeyId
+    ? keyResults.find(({ key }) => key.id === winnerKeyId)
+    : undefined;
 
   if (failedKey && !failedKey.result.ok) {
     const message = `${formatUpstreamKeyLabel(failedKey.key)}: ${failedKey.result.message}`;
@@ -491,9 +503,20 @@ async function performModelPoolChannelCheck(
     return markChannelFailure(channel, message, latencyMs, options);
   }
 
-  const latencyMs = averageNumbers(keyResults.map(({ result }) => result.latencyMs)) ?? 0;
+  if (!winnerResult || !winnerResult.result.ok) {
+    return markChannelFailure(
+      channel,
+      "No active upstream key returned a valid output token",
+      undefined,
+      options,
+    );
+  }
+
+  const latencyMs = winnerResult.result.latencyMs;
   const firstTokenLatencyMs = averageNullableNumbers(
-    keyResults.map(({ result }) => (result.ok ? result.firstTokenLatencyMs : null)),
+    keyResults.map(({ result }) =>
+      result.ok ? result.firstTokenLatencyMs : null,
+    ),
   );
 
   return markChannelSuccess(channel, latencyMs, firstTokenLatencyMs);
@@ -811,17 +834,32 @@ async function forceUnavailableAfterFailedCheck(channel: ModelPoolChannel | null
   });
 }
 
+type ProbeFirstTokenAction = "continue" | "stop";
+
 type ProbeInput = {
   baseUrl: string;
   apiKey: string;
   model: string;
   endpoint: ModelPoolHealthCheckEndpoint;
   signal: AbortSignal;
+  onFirstToken?: (latencyMs: number) => ProbeFirstTokenAction;
 };
 
 type ProbeResult =
-  | { ok: true; mode: ModelPoolHealthCheckEndpoint; firstTokenLatencyMs: number | null; latencyMs: number }
-  | { ok: false; message: string; latencyMs: number };
+  | {
+      ok: true;
+      mode: ModelPoolHealthCheckEndpoint;
+      firstTokenLatencyMs: number;
+      latencyMs: number;
+      completed: boolean;
+      stoppedAfterFirstToken: boolean;
+    }
+  | {
+      ok: false;
+      message: string;
+      latencyMs: number;
+      firstTokenLatencyMs: number | null;
+    };
 
 async function probeProviderKey(input: {
   baseUrl: string;
@@ -829,14 +867,39 @@ async function probeProviderKey(input: {
   timeoutMs: number;
   model: string;
   endpoint: ModelPoolHealthCheckEndpoint;
+  onFirstToken?: (latencyMs: number) => ProbeFirstTokenAction;
 }) {
   const startedAt = performance.now();
   const controller = new AbortController();
-  const timeoutMs = Math.min(input.timeoutMs, maxCheckMs);
-  const timeout = setTimeout(
+  const totalTimeoutMs = Number.isFinite(input.timeoutMs)
+    ? Math.max(1, Math.round(input.timeoutMs))
+    : maxFirstTokenCheckMs;
+  const firstTokenTimeoutMs = Math.min(totalTimeoutMs, maxFirstTokenCheckMs);
+  let timeoutPhase: "first-token" | "completion" = "first-token";
+  let firstTokenLatencyMs: number | null = null;
+  let firstTokenAction: ProbeFirstTokenAction | null = null;
+  let timeout = setTimeout(
     () => controller.abort(),
-    timeoutMs,
+    firstTokenTimeoutMs,
   );
+
+  const onFirstToken = (latencyMs: number): ProbeFirstTokenAction => {
+    firstTokenLatencyMs = latencyMs;
+    const action = input.onFirstToken?.(latencyMs) ?? "continue";
+    firstTokenAction = action;
+
+    if (action === "continue") {
+      timeoutPhase = "completion";
+      clearTimeout(timeout);
+      const remainingTimeoutMs = Math.max(
+        1,
+        totalTimeoutMs - (performance.now() - startedAt),
+      );
+      timeout = setTimeout(() => controller.abort(), remainingTimeoutMs);
+    }
+
+    return action;
+  };
 
   try {
     return await probeUpstream({
@@ -845,19 +908,40 @@ async function probeProviderKey(input: {
       model: input.model,
       endpoint: input.endpoint,
       signal: controller.signal,
+      onFirstToken,
     });
   } catch (error) {
+    if (firstTokenAction === "stop" && firstTokenLatencyMs !== null) {
+      return {
+        ok: true as const,
+        mode: input.endpoint,
+        firstTokenLatencyMs,
+        latencyMs: Math.round(performance.now() - startedAt),
+        completed: false,
+        stoppedAfterFirstToken: true,
+      };
+    }
+
     return {
       ok: false as const,
-      message: formatHealthProbeError(error, timeoutMs),
+      message: formatHealthProbeError(
+        error,
+        timeoutPhase === "first-token" ? firstTokenTimeoutMs : totalTimeoutMs,
+        timeoutPhase,
+      ),
       latencyMs: Math.round(performance.now() - startedAt),
+      firstTokenLatencyMs,
     };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-function formatHealthProbeError(error: unknown, timeoutMs: number) {
+function formatHealthProbeError(
+  error: unknown,
+  timeoutMs: number,
+  timeoutPhase: "first-token" | "completion",
+) {
   const message = error instanceof Error ? error.message : "Health check failed";
   const name = typeof error === "object" && error !== null && "name" in error
     ? String((error as { name?: unknown }).name ?? "")
@@ -865,10 +949,21 @@ function formatHealthProbeError(error: unknown, timeoutMs: number) {
   const normalized = `${name} ${message}`.toLowerCase();
 
   if (normalized.includes("abort")) {
-    return `健康检测超时：上游在 ${Math.max(1, Math.round(timeoutMs / 1000))} 秒内没有返回，网关主动中止了检测。`;
+    const timeoutText = formatHealthProbeTimeout(timeoutMs);
+    if (timeoutPhase === "completion") {
+      return `健康检测超时：上游已返回首个有效输出 token，但在 ${timeoutText} 内未完成完整响应，网关主动中止了检测。`;
+    }
+
+    return `健康检测超时：上游在 ${timeoutText} 内没有返回首个有效输出 token，网关主动中止了检测。`;
   }
 
   return message;
+}
+
+function formatHealthProbeTimeout(timeoutMs: number) {
+  return timeoutMs < 1_000
+    ? `${Math.max(1, Math.round(timeoutMs))} 毫秒`
+    : `${Math.max(1, Math.round(timeoutMs / 1_000))} 秒`;
 }
 
 async function probeUpstream(input: ProbeInput): Promise<ProbeResult> {
@@ -930,36 +1025,82 @@ async function postHealthProbe(input: PostHealthProbeInput): Promise<ProbeResult
       ok: false,
       message: `${input.mode}: ${response.status} ${text}`.slice(0, 1000),
       latencyMs: Math.round(performance.now() - startedAt),
+      firstTokenLatencyMs: null,
     };
   }
 
-  const firstTokenLatencyMs = await readHealthProbeResponse(response, startedAt);
-  if (firstTokenLatencyMs === null) {
+  const readResult = await readHealthProbeResponse(
+    response,
+    startedAt,
+    input.onFirstToken,
+  );
+  if (readResult.firstTokenLatencyMs === null) {
     return {
       ok: false,
       message: `${input.mode}: no output token received`,
       latencyMs: Math.round(performance.now() - startedAt),
+      firstTokenLatencyMs: null,
     };
   }
 
   return {
     ok: true,
     mode: input.mode,
-    firstTokenLatencyMs,
+    firstTokenLatencyMs: readResult.firstTokenLatencyMs,
     latencyMs: Math.round(performance.now() - startedAt),
+    completed: readResult.completed,
+    stoppedAfterFirstToken: readResult.stoppedAfterFirstToken,
   };
 }
 
-async function readHealthProbeResponse(response: Response, startedAt: number) {
+type HealthProbeReadResult = {
+  firstTokenLatencyMs: number | null;
+  completed: boolean;
+  stoppedAfterFirstToken: boolean;
+};
+
+async function readHealthProbeResponse(
+  response: Response,
+  startedAt: number,
+  onFirstToken?: (latencyMs: number) => ProbeFirstTokenAction,
+): Promise<HealthProbeReadResult> {
   if (!response.body) {
-    await response.arrayBuffer().catch(() => undefined);
-    return null;
+    const bodyText = await response.text().catch(() => "");
+    const firstTokenLatencyMs = findOutputTokenInBody(
+      bodyText,
+      response.headers.get("content-type"),
+      startedAt,
+    );
+    const stoppedAfterFirstToken = firstTokenLatencyMs !== null &&
+      onFirstToken?.(firstTokenLatencyMs) === "stop";
+    return {
+      firstTokenLatencyMs,
+      completed: true,
+      stoppedAfterFirstToken,
+    };
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let firstTokenLatencyMs: number | null = null;
   let pending = "";
+  let rawResponseText = "";
+  let stoppedAfterFirstToken = false;
+
+  const recordFirstToken = async (buffer: string) => {
+    if (firstTokenLatencyMs !== null || !sseBufferHasOutputToken(buffer)) {
+      return false;
+    }
+
+    firstTokenLatencyMs = Math.round(performance.now() - startedAt);
+    if (onFirstToken?.(firstTokenLatencyMs) !== "stop") {
+      return false;
+    }
+
+    stoppedAfterFirstToken = true;
+    await reader.cancel().catch(() => undefined);
+    return true;
+  };
 
   try {
     while (true) {
@@ -970,10 +1111,12 @@ async function readHealthProbeResponse(response: Response, startedAt: number) {
       }
 
       if (value.length > 0) {
-        pending += decoder.decode(value, { stream: true });
+        const decoded = decoder.decode(value, { stream: true });
+        rawResponseText += decoded;
+        pending += decoded;
 
-        if (firstTokenLatencyMs === null && sseBufferHasOutputToken(pending)) {
-          firstTokenLatencyMs = Math.round(performance.now() - startedAt);
+        if (await recordFirstToken(pending)) {
+          break;
         }
 
         const lastEventBoundary = pending.lastIndexOf("\n\n");
@@ -985,17 +1128,67 @@ async function readHealthProbeResponse(response: Response, startedAt: number) {
 
     const trailing = decoder.decode();
     if (trailing) {
+      rawResponseText += trailing;
       pending += trailing;
 
-      if (firstTokenLatencyMs === null && sseBufferHasOutputToken(pending)) {
-        firstTokenLatencyMs = Math.round(performance.now() - startedAt);
+      if (await recordFirstToken(pending)) {
+        return {
+          firstTokenLatencyMs,
+          completed: false,
+          stoppedAfterFirstToken,
+        };
       }
     }
   } finally {
     reader.releaseLock();
   }
 
-  return firstTokenLatencyMs;
+  if (firstTokenLatencyMs === null) {
+    firstTokenLatencyMs = findOutputTokenInBody(
+      rawResponseText,
+      response.headers.get("content-type"),
+      startedAt,
+    );
+    if (
+      firstTokenLatencyMs !== null &&
+      onFirstToken?.(firstTokenLatencyMs) === "stop"
+    ) {
+      stoppedAfterFirstToken = true;
+    }
+  }
+
+  return {
+    firstTokenLatencyMs,
+    completed: !stoppedAfterFirstToken,
+    stoppedAfterFirstToken,
+  };
+}
+
+function findOutputTokenInBody(
+  bodyText: string,
+  contentType: string | null,
+  startedAt: number,
+) {
+  const payloads = contentType?.includes("text/event-stream") || bodyText.includes("data:")
+    ? parseSseJsonPayloads(bodyText)
+    : parseJsonBody(bodyText);
+
+  return payloads.some(streamChunkHasOutputToken)
+    ? Math.round(performance.now() - startedAt)
+    : null;
+}
+
+function parseJsonBody(bodyText: string) {
+  if (!bodyText.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(bodyText) as unknown;
+    return [parsed];
+  } catch {
+    return [];
+  }
 }
 
 function sseBufferHasOutputToken(buffer: string) {
@@ -1004,8 +1197,9 @@ function sseBufferHasOutputToken(buffer: string) {
 
 function parseSseJsonPayloads(buffer: string) {
   const payloads: unknown[] = [];
+  const normalizedBuffer = buffer.replace(/\r\n/g, "\n");
 
-  for (const event of buffer.split("\n\n")) {
+  for (const event of normalizedBuffer.split("\n\n")) {
     const dataLines = event
       .split("\n")
       .filter((line) => line.startsWith("data:"))
@@ -1039,6 +1233,10 @@ function streamChunkHasOutputToken(chunk: unknown): boolean {
   }
 
   if (typeof event.text === "string" && event.text.length > 0) {
+    return true;
+  }
+
+  if (typeof event.output_text === "string" && event.output_text.length > 0) {
     return true;
   }
 
