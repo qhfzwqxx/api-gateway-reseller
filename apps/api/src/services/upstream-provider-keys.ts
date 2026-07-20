@@ -236,15 +236,29 @@ export async function reserveProviderKey(
         })),
       };
       if (!options.dryRun) {
-        await prisma.upstreamProviderKey.update({
-          where: { id: preferredKey.id },
-          data: { lastUsedAt: new Date() },
-        });
+        try {
+          await reservePreferredKeyAtomically(preferredKey.id);
+          await prisma.upstreamProviderKey.update({
+            where: { id: preferredKey.id },
+            data: { lastUsedAt: new Date() },
+          }).catch(() => undefined);
+          return {
+            ...createKeyReservation(preferredKey),
+            decisionTrace: preferredTrace,
+          };
+        } catch {
+          await prisma.upstreamProviderKey.update({
+            where: { id: preferredKey.id },
+            data: { lastUsedAt: new Date() },
+          }).catch(() => undefined);
+          return {
+            ...createUntrackedKeyReservation(preferredKey),
+            decisionTrace: preferredTrace,
+          };
+        }
       }
       return {
-        ...(options.dryRun
-          ? createDryRunKeyReservation(preferredKey)
-          : createKeyReservation(preferredKey)),
+        ...createUntrackedKeyReservation(preferredKey),
         decisionTrace: preferredTrace,
       };
     }
@@ -267,7 +281,7 @@ export async function reserveProviderKey(
     );
     return fallbackKey
       ? {
-          ...createDryRunKeyReservation(fallbackKey),
+          ...createUntrackedKeyReservation(fallbackKey),
           decisionTrace: {
             selectedBy: "fallback",
             candidates: keyCandidates,
@@ -282,22 +296,16 @@ export async function reserveProviderKey(
       stickyOccupancies,
       dispatchSettings.stickyHitPenalty,
     );
-    const selectedKey =
-      keys.find((key) => key.id === selectedKeyId) ??
-      chooseFallbackKey(
-        keys,
-        stickyOccupancies,
-        dispatchSettings.stickyHitPenalty,
-      );
+    const selectedKey = keys.find((key) => key.id === selectedKeyId);
 
     if (!selectedKey) {
-      return null;
+      throw new Error("Redis selected an unknown upstream provider key");
     }
 
     await prisma.upstreamProviderKey.update({
       where: { id: selectedKey.id },
       data: { lastUsedAt: new Date() },
-    });
+    }).catch(() => undefined);
 
     return {
       ...createKeyReservation(selectedKey),
@@ -319,17 +327,29 @@ export async function reserveProviderKey(
     await prisma.upstreamProviderKey.update({
       where: { id: fallbackKey.id },
       data: { lastUsedAt: new Date() },
-    });
+    }).catch(() => undefined);
 
     return {
-      key: fallbackKey,
-      release: async () => {},
+      ...createUntrackedKeyReservation(fallbackKey),
       decisionTrace: {
         selectedBy: "fallback",
         candidates: keyCandidates,
       },
     };
   }
+}
+
+async function reservePreferredKeyAtomically(keyId: string) {
+  await redis.eval(
+    `
+local value = redis.call("INCR", KEYS[1])
+redis.call("EXPIRE", KEYS[1], ARGV[1])
+return value
+`,
+    1,
+    upstreamKeyInflightKey(keyId),
+    String(keyInflightTtlSeconds),
+  );
 }
 
 async function reserveKeyAtomically(
@@ -362,7 +382,7 @@ for index = 1, #KEYS do
   local entropy = tonumber(ARGV[argIndex + 1])
   local priority = tonumber(ARGV[argIndex + 2])
   local lastUsed = tonumber(ARGV[argIndex + 3])
-  local inflight = tonumber(redis.call("GET", KEYS[index]) or "0")
+  local inflight = math.max(0, tonumber(redis.call("GET", KEYS[index]) or "0"))
 
   if bestEntropy == nil
     or entropy < bestEntropy
@@ -447,7 +467,7 @@ function createKeyReservation(key: UpstreamProviderKey) {
   };
 }
 
-function createDryRunKeyReservation(key: UpstreamProviderKey) {
+function createUntrackedKeyReservation(key: UpstreamProviderKey) {
   return {
     key: {
       ...key,

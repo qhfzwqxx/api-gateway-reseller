@@ -6,8 +6,10 @@ import {
   getStickyModelPoolRoute,
 } from "./model-pool-stickiness.js";
 import {
+  getInflightPenaltyMs,
   getSpeedScoreMs,
   reserveBalancedModelPoolChannel,
+  reserveModelPoolChannel,
 } from "./routing/channel-selector.js";
 import { readDispatchSettings } from "./dispatch-settings.js";
 import {
@@ -316,7 +318,9 @@ async function getBalancedRoute(
     return null;
   }
 
-  const fastestScoreMs = routes[0]?.speedScoreMs ?? 0;
+  const fastestScoreMs = Math.min(
+    ...routes.map((route) => route.speedScoreMs),
+  );
   const reservation = options.dryRun
     ? null
     : await reserveBalancedModelPoolChannel(
@@ -325,6 +329,7 @@ async function getBalancedRoute(
           speedScoreMs: route.entropyScore,
           stickyOccupancy: route.stickyOccupancy,
         })),
+        getInflightPenaltyMs(fastestScoreMs),
       );
 
   if (reservation) {
@@ -426,12 +431,28 @@ async function getRouteForChannelWithKey(
     return null;
   }
 
-  const preparedRoute = await prepareRoute(route, preferredKeyId, dryRun);
-  if (!preparedRoute) {
-    return null;
-  }
+  const channelReservation = dryRun
+    ? null
+    : await reserveModelPoolChannel(route.channelId);
 
-  return preparedRoute;
+  try {
+    const preparedRoute = await prepareRoute(
+      channelReservation
+        ? { ...route, release: channelReservation.release }
+        : route,
+      preferredKeyId,
+      dryRun,
+    );
+    if (!preparedRoute) {
+      await channelReservation?.release();
+      return null;
+    }
+
+    return preparedRoute;
+  } catch (error) {
+    await channelReservation?.release();
+    throw error;
+  }
 }
 
 async function prepareRoute(
