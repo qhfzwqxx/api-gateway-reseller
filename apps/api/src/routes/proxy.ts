@@ -142,6 +142,10 @@ import {
 import { createSafeStreamController } from "../services/proxy-stream-controller.js";
 import { createProxyStreamTransformer } from "../services/proxy-stream-transform.js";
 import {
+  filterProxyResponseContent,
+  loadProxyResponseContentFilterSettings,
+} from "../services/proxy-response-content-filter.js";
+import {
   collectEncryptedContents,
   createCompactChannelFingerprint,
   extractEncryptedItems,
@@ -445,6 +449,9 @@ async function routeImageGenerationToolRequest(params: {
 }
 
 export async function proxyRoutes(app: FastifyInstance) {
+  app.addHook("onRequest", loadProxyResponseContentFilterSettings);
+  app.addHook("onSend", filterProxyResponseContent);
+
   for (const pattern of proxyRoutePatterns) {
     app.all(pattern, async (request: ApiRequestWithUser, reply) => {
       const rawEndpoint = request.url.split("?")[0] ?? request.url;
@@ -981,7 +988,7 @@ export async function proxyRoutes(app: FastifyInstance) {
         });
 
         if (result.kind === "sent") {
-          return;
+          return reply;
         }
 
         if (

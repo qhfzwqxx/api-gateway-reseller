@@ -94,6 +94,20 @@ export interface RequestBodyRetentionSettings {
   retentionDays: number;
 }
 
+export interface ResponseContentFilterSettings {
+  enabled: boolean;
+  blockedTerms: string[];
+  replacement: string;
+  caseSensitive: boolean;
+  includeUpstreamBaseUrls: boolean;
+}
+
+export interface ResponseContentFilterLimits {
+  maxTerms: number;
+  maxTermLength: number;
+  maxReplacementLength: number;
+}
+
 export interface ImageGenerationToolSettings {
   routingModel: string;
 }
@@ -175,6 +189,9 @@ export interface RiskCenterData {
   globalCircuitBreakerSettings: GlobalCircuitBreakerSettings;
   whitelistFilterSettings: WhitelistFilterSettings;
   bannedUserNoticeSettings: BannedUserNoticeSettings;
+  responseContentFilterSettings: ResponseContentFilterSettings;
+  responseContentFilterLimits: ResponseContentFilterLimits;
+  upstreamBaseUrlBlockedTerms: string[];
   bannedUsers: BannedUserSummary[];
   charityAnnouncementSettings: CharityAnnouncementSettings;
   reasoningEffortTransformSettings: ReasoningEffortTransformSettings;
@@ -356,6 +373,28 @@ export async function updateRequestBodyRetentionSettings(
       maxRetentionDays: number;
     };
   }>("/admin/request-body-retention-settings", input);
+  return response.data.settings;
+}
+
+export async function getResponseContentFilterSettings() {
+  const response = await http.get<{
+    settings: ResponseContentFilterSettings;
+    defaults: ResponseContentFilterSettings;
+    limits: ResponseContentFilterLimits;
+    upstreamBaseUrlBlockedTerms: string[];
+  }>("/admin/response-content-filter-settings");
+  return response.data;
+}
+
+export async function updateResponseContentFilterSettings(
+  input: ResponseContentFilterSettings,
+) {
+  const response = await http.put<{
+    settings: ResponseContentFilterSettings;
+    defaults: ResponseContentFilterSettings;
+    limits: ResponseContentFilterLimits;
+    upstreamBaseUrlBlockedTerms: string[];
+  }>("/admin/response-content-filter-settings", input);
   return response.data.settings;
 }
 

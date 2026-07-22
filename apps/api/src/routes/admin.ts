@@ -41,6 +41,17 @@ import {
   saveRequestBodyRetentionSettings,
 } from "../services/request-body-retention-settings.js";
 import {
+  defaultResponseContentFilterSettings,
+  invalidateResponseContentFilterUpstreamCache,
+  isSafeResponseContentFilterReplacement,
+  maxResponseContentFilterReplacementLength,
+  maxResponseContentFilterTermLength,
+  maxResponseContentFilterTerms,
+  readResponseContentFilterSettings,
+  readUpstreamBaseUrlBlockedTerms,
+  saveResponseContentFilterSettings,
+} from "../services/response-content-filter-settings.js";
+import {
   reasoningEffortValues,
   getReasoningEffortFromBody,
   readReasoningEffortTransformSettings,
@@ -399,6 +410,24 @@ const requestBodyRetentionSettingsSchema = z.object({
     .min(minRequestBodyRetentionDays)
     .max(maxRequestBodyRetentionDays),
 });
+const responseContentFilterSettingsSchema = z
+  .object({
+    enabled: z.boolean(),
+    blockedTerms: z
+      .array(
+        z.string().trim().min(1).max(maxResponseContentFilterTermLength),
+      )
+      .max(maxResponseContentFilterTerms),
+    replacement: z
+      .string()
+      .max(maxResponseContentFilterReplacementLength)
+      .refine(isSafeResponseContentFilterReplacement, {
+        message: "Replacement cannot contain quotes, backslashes, or control characters",
+      }),
+    caseSensitive: z.boolean(),
+    includeUpstreamBaseUrls: z.boolean(),
+  })
+  .partial();
 const adminCreateApiKeySchema = z.object({
   name: z.string().min(1).max(80),
   tierId: optionalTierIdSchema,
@@ -2066,6 +2095,8 @@ export async function adminRoutes(app: FastifyInstance) {
       globalCircuitBreakerSettings,
       whitelistFilterSettings,
       bannedUserNoticeSettings,
+      responseContentFilterSettings,
+      upstreamBaseUrlBlockedTerms,
       bannedUsers,
       externalAlertSettings,
       charityAnnouncementSettings,
@@ -2083,6 +2114,8 @@ export async function adminRoutes(app: FastifyInstance) {
       readGlobalCircuitBreakerSettings(),
       readWhitelistFilterSettings(),
       readBannedUserNoticeSettings(),
+      readResponseContentFilterSettings(),
+      readUpstreamBaseUrlBlockedTerms(),
       prisma.user.findMany({
         where: { status: "BANNED" },
         orderBy: { updatedAt: "desc" },
@@ -2149,6 +2182,13 @@ export async function adminRoutes(app: FastifyInstance) {
       globalCircuitBreakerSettings,
       whitelistFilterSettings,
       bannedUserNoticeSettings,
+      responseContentFilterSettings,
+      upstreamBaseUrlBlockedTerms,
+      responseContentFilterLimits: {
+        maxTerms: maxResponseContentFilterTerms,
+        maxTermLength: maxResponseContentFilterTermLength,
+        maxReplacementLength: maxResponseContentFilterReplacementLength,
+      },
       bannedUsers,
       externalAlertSettings,
       charityAnnouncementSettings: {
@@ -2467,6 +2507,38 @@ export async function adminRoutes(app: FastifyInstance) {
       limits: {
         minRetentionDays: minRequestBodyRetentionDays,
         maxRetentionDays: maxRequestBodyRetentionDays,
+      },
+    };
+  });
+
+  app.get("/admin/response-content-filter-settings", async () => {
+    const [settings, upstreamBaseUrlBlockedTerms] = await Promise.all([
+      readResponseContentFilterSettings(),
+      readUpstreamBaseUrlBlockedTerms(),
+    ]);
+    return {
+      settings,
+      upstreamBaseUrlBlockedTerms,
+      defaults: defaultResponseContentFilterSettings,
+      limits: {
+        maxTerms: maxResponseContentFilterTerms,
+        maxTermLength: maxResponseContentFilterTermLength,
+        maxReplacementLength: maxResponseContentFilterReplacementLength,
+      },
+    };
+  });
+
+  app.put("/admin/response-content-filter-settings", async (request) => {
+    const body = responseContentFilterSettingsSchema.parse(request.body);
+    const settings = await saveResponseContentFilterSettings(body);
+    return {
+      settings,
+      upstreamBaseUrlBlockedTerms: await readUpstreamBaseUrlBlockedTerms(),
+      defaults: defaultResponseContentFilterSettings,
+      limits: {
+        maxTerms: maxResponseContentFilterTerms,
+        maxTermLength: maxResponseContentFilterTermLength,
+        maxReplacementLength: maxResponseContentFilterReplacementLength,
       },
     };
   });
@@ -5519,6 +5591,7 @@ export async function adminRoutes(app: FastifyInstance) {
     });
 
     await ensureDefaultProviderKey(provider);
+    invalidateResponseContentFilterUpstreamCache();
 
     return { provider: maskProviderKey(provider) };
   });
@@ -5601,6 +5674,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (body.apiKey && body.apiKey.trim().length > 0) {
       await ensureDefaultProviderKey(provider);
     }
+    invalidateResponseContentFilterUpstreamCache();
 
     return { provider: maskProviderKey(provider) };
   });
@@ -5808,6 +5882,7 @@ export async function adminRoutes(app: FastifyInstance) {
         where: { id: params.id },
       }),
     ]);
+    invalidateResponseContentFilterUpstreamCache();
 
     return { ok: true, provider: maskProviderKey(provider) };
   });

@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CircleStop, FileText, Flame, KeyRound, RadioTower, Save, Search, ShieldAlert, Trash2, UserX } from "lucide-react";
+import { Ban, CircleStop, FileText, Flame, KeyRound, RadioTower, Save, Search, ShieldAlert, ShieldCheck, Trash2, UserX } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -18,6 +18,7 @@ import {
   updateIpBanRule,
   updatePendingAutoTerminateSettings,
   updateRedisFailurePolicySettings,
+  updateResponseContentFilterSettings,
   updateTemporaryIpNoticeBanSettings,
   updateWhitelistFilterSettings,
   updateBannedUserNoticeSettings,
@@ -27,6 +28,7 @@ import {
   type GlobalCircuitBreakerSettings,
   type IpBanRule,
   type RedisFailurePolicySettings,
+  type ResponseContentFilterSettings,
   type WhitelistFilterSettings,
 } from "../../../lib/api/settings";
 
@@ -61,6 +63,26 @@ const whitelistSchema = z.object({
 const bannedUserNoticeSchema = z.object({
   noticeText: z.string().trim().min(1),
 });
+const responseContentFilterSchema = z.object({
+  enabled: z.boolean(),
+  blockedTermsText: z.string().superRefine((value, context) => {
+    const terms = parseBlockedTerms(value);
+    if (terms.length > 200) {
+      context.addIssue({ code: "custom", message: "自定义屏蔽词最多 200 条" });
+    }
+    if (terms.some((term) => term.length > 2048)) {
+      context.addIssue({ code: "custom", message: "单条屏蔽词最多 2048 个字符" });
+    }
+  }),
+  replacement: z
+    .string()
+    .max(200, "替换文本最多 200 个字符")
+    .refine((value) => !/["\\\u0000-\u001f\u007f]/.test(value), {
+      message: "替换文本不能包含引号、反斜杠或换行等控制字符",
+    }),
+  caseSensitive: z.boolean(),
+  includeUpstreamBaseUrls: z.boolean(),
+});
 const ipBanRuleSchema = z.object({
   ip: z.string().trim().min(1, "请输入 IP"),
   mode: z.enum(["notice", "error"]),
@@ -79,6 +101,7 @@ type WhitelistInput = z.input<typeof whitelistSchema>;
 type WhitelistValues = z.infer<typeof whitelistSchema>;
 type BannedUserNoticeInput = z.input<typeof bannedUserNoticeSchema>;
 type BannedUserNoticeValues = z.infer<typeof bannedUserNoticeSchema>;
+type ResponseContentFilterValues = z.output<typeof responseContentFilterSchema>;
 type IpBanRuleInput = z.input<typeof ipBanRuleSchema>;
 type IpBanRuleValues = z.output<typeof ipBanRuleSchema>;
 
@@ -161,7 +184,7 @@ export default function AdminRiskControlPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState("");
   const [confirmAction, setConfirmAction] = useState<null | "redis" | "circuit">(null);
-  const [activeModal, setActiveModal] = useState<null | "auto" | "gateway" | "redis" | "circuit" | "ip-ban" | "whitelist" | "banned-users">(null);
+  const [activeModal, setActiveModal] = useState<null | "auto" | "gateway" | "redis" | "circuit" | "ip-ban" | "whitelist" | "banned-users" | "response-filter">(null);
   const [editingIpRule, setEditingIpRule] = useState<IpBanRule | null>(null);
   const [ipBanSearch, setIpBanSearch] = useState("");
   const [bannedUserSearch, setBannedUserSearch] = useState("");
@@ -173,6 +196,16 @@ export default function AdminRiskControlPage() {
   const circuitForm = useForm<CircuitInput, unknown, CircuitValues>({ resolver: zodResolver(circuitSchema) });
   const whitelistForm = useForm<WhitelistInput, unknown, WhitelistValues>({ resolver: zodResolver(whitelistSchema) });
   const bannedUserNoticeForm = useForm<BannedUserNoticeInput, unknown, BannedUserNoticeValues>({ resolver: zodResolver(bannedUserNoticeSchema) });
+  const responseContentFilterForm = useForm<ResponseContentFilterValues>({
+    resolver: zodResolver(responseContentFilterSchema),
+    defaultValues: {
+      enabled: false,
+      blockedTermsText: "",
+      replacement: "[内容已屏蔽]",
+      caseSensitive: false,
+      includeUpstreamBaseUrls: false,
+    },
+  });
   const ipBanForm = useForm<IpBanRuleInput, unknown, IpBanRuleValues>({
     resolver: zodResolver(ipBanRuleSchema),
     defaultValues: { ip: "", mode: "notice", message: "当前 IP 已被网关封禁，请联系管理员。", reason: "" },
@@ -206,7 +239,10 @@ export default function AdminRiskControlPage() {
       noticeText: data.whitelistFilterSettings.noticeText,
     });
     bannedUserNoticeForm.reset(data.bannedUserNoticeSettings);
-  }, [autoTerminateForm, bannedUserNoticeForm, circuitForm, gatewayForm, redisForm, whitelistForm, riskQuery.data]);
+    responseContentFilterForm.reset(
+      toResponseContentFilterValues(data.responseContentFilterSettings),
+    );
+  }, [autoTerminateForm, bannedUserNoticeForm, circuitForm, gatewayForm, redisForm, responseContentFilterForm, whitelistForm, riskQuery.data]);
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["admin", "risk-center"] });
   const autoTerminateMutation = useMutation({
@@ -247,6 +283,18 @@ export default function AdminRiskControlPage() {
     onSuccess: () => { setNotice("封禁用户返回文案已保存"); refresh(); },
     onError: (error) => setNotice(errorToText(error)),
   });
+  const responseContentFilterMutation = useMutation({
+    mutationFn: (values: ResponseContentFilterValues) =>
+      updateResponseContentFilterSettings(
+        fromResponseContentFilterValues(values),
+      ),
+    onSuccess: () => {
+      setActiveModal(null);
+      setNotice("响应内容脱敏设置已保存");
+      refresh();
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
   const ipBanMutation = useMutation({
     mutationFn: async (values: IpBanRuleValues) => {
       const payload = { mode: values.mode, message: values.message || null, reason: values.reason || null };
@@ -276,6 +324,11 @@ export default function AdminRiskControlPage() {
   const circuitSettings = riskQuery.data?.globalCircuitBreakerSettings;
   const whitelistSettings = riskQuery.data?.whitelistFilterSettings;
   const bannedUserNoticeSettings = riskQuery.data?.bannedUserNoticeSettings;
+  const responseContentFilterSettings = riskQuery.data?.responseContentFilterSettings;
+  const upstreamBaseUrlBlockedTerms = riskQuery.data?.upstreamBaseUrlBlockedTerms ?? [];
+  const responseContentFilterTermCount = parseBlockedTerms(
+    responseContentFilterForm.watch("blockedTermsText"),
+  ).length;
   const bannedUsers = riskQuery.data?.bannedUsers ?? [];
   const filteredBannedUsers = bannedUsers.filter((user) => {
     const keyword = bannedUserSearch.trim().toLowerCase();
@@ -302,7 +355,7 @@ export default function AdminRiskControlPage() {
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-sm font-medium text-blue-700">Risk Control</p>
         <h2 className="mt-1 text-2xl font-semibold text-slate-950">风控与公告</h2>
-        <p className="mt-2 text-sm text-slate-500">集中管理熔断、Redis 失败策略、网关提示和 IP 临时封禁。</p>
+        <p className="mt-2 text-sm text-slate-500">集中管理熔断、Redis 失败策略、响应内容脱敏、网关提示和 IP 临时封禁。</p>
       </section>
       {notice ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">{notice}</div> : null}
       <section className="grid gap-4 md:grid-cols-4">
@@ -326,6 +379,17 @@ export default function AdminRiskControlPage() {
           <RiskActionCard icon={ShieldAlert} title="Redis 失败策略" description="控制 Redis 异常时网关放行、拒绝或降级。" status={redisSettings?.policy ?? "未加载"} onClick={() => setActiveModal("redis")} />
           <RiskActionCard icon={Flame} title="全局熔断" description="紧急维护或故障隔离时阻断普通 API 调用。" status={circuitSettings?.enabled ? "已开启" : "未开启"} danger={Boolean(circuitSettings?.enabled)} onClick={() => setActiveModal("circuit")} />
           <RiskActionCard icon={KeyRound} title="白名单过滤" description="开启后所有账号先公告封禁，输入当前密钥后自动解封。" status={whitelistSettings?.enabled ? "已开启" : "未开启"} danger={Boolean(whitelistSettings?.enabled)} onClick={() => setActiveModal("whitelist")} />
+          <RiskActionCard
+            icon={ShieldCheck}
+            title="响应内容脱敏"
+            description="屏蔽自定义敏感词，并可自动纳管全部上游 Base URL。"
+            status={
+              responseContentFilterSettings?.enabled
+                ? `${responseContentFilterSettings.blockedTerms.length} 条自定义${responseContentFilterSettings.includeUpstreamBaseUrls ? ` · ${upstreamBaseUrlBlockedTerms.length} 个自动项` : ""}`
+                : "未开启"
+            }
+            onClick={() => setActiveModal("response-filter")}
+          />
         </section>
       )}
 
@@ -485,6 +549,112 @@ export default function AdminRiskControlPage() {
         </Modal>
       ) : null}
 
+      {activeModal === "response-filter" ? (
+        <Modal
+          title="响应内容脱敏"
+          description="在所有代理响应离开网关前统一过滤，覆盖正常输出、错误信息、网关提示和 SSE 流式分片。"
+          onClose={() => setActiveModal(null)}
+          formId="risk-response-filter-form"
+          loading={responseContentFilterMutation.isPending}
+          wide
+        >
+          <SettingCard
+            formId="risk-response-filter-form"
+            hideActions
+            title="响应屏蔽词设置"
+            description="自定义词与自动提取的上游 Base URL 会在运行时合并，不会把自动项写进手工列表。"
+            form={responseContentFilterForm}
+            loading={responseContentFilterMutation.isPending}
+            onSubmit={(values) => responseContentFilterMutation.mutate(values)}
+          >
+            <Toggle
+              label="启用响应内容脱敏"
+              register={responseContentFilterForm.register("enabled")}
+            />
+            <Toggle
+              label="自动屏蔽上游管理中的全部 Base URL（去除 http:// 和 https://）"
+              register={responseContentFilterForm.register("includeUpstreamBaseUrls")}
+            />
+            <section className="grid gap-3 rounded-lg border border-blue-200 bg-blue-50/60 p-4">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-950">自动纳管预览</h4>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  当前上游管理中可生成 {upstreamBaseUrlBlockedTerms.length} 个屏蔽项，包括去协议完整地址、主机名和必要的父域名。新建、修改或删除上游也会自动同步。
+                </p>
+              </div>
+              {upstreamBaseUrlBlockedTerms.length ? (
+                <div className="max-h-44 overflow-y-auto rounded-md border border-blue-100 bg-white p-3">
+                  <div className="grid gap-2">
+                    {upstreamBaseUrlBlockedTerms.map((term) => (
+                      <code key={term} className="break-all font-mono text-xs leading-5 text-slate-700">
+                        {term}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-md border border-dashed border-blue-200 bg-white px-4 py-6 text-center text-sm text-slate-500">
+                  当前没有可自动纳管的上游 Base URL。
+                </div>
+              )}
+            </section>
+            <label className="grid gap-2">
+              <span className={labelClass}>自定义屏蔽词</span>
+              <textarea
+                rows={8}
+                className={textareaClass}
+                placeholder={"渠道品牌名\n额外域名\n需要隐藏的错误提示片段"}
+                aria-describedby="risk-response-filter-terms-help"
+                aria-invalid={Boolean(responseContentFilterForm.formState.errors.blockedTermsText)}
+                {...responseContentFilterForm.register("blockedTermsText")}
+              />
+              <div className="flex flex-wrap items-start justify-between gap-2 text-xs leading-5">
+                <p
+                  id="risk-response-filter-terms-help"
+                  className={responseContentFilterForm.formState.errors.blockedTermsText ? "text-red-600" : "text-slate-500"}
+                >
+                  {responseContentFilterForm.formState.errors.blockedTermsText?.message ?? "每行一个词，按子串匹配；空行和重复项会自动忽略。"}
+                </p>
+                <span className="shrink-0 font-medium text-slate-500">
+                  {responseContentFilterTermCount}/{riskQuery.data?.responseContentFilterLimits.maxTerms ?? 200}
+                </span>
+              </div>
+            </label>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <label className="grid gap-2">
+                <span className={labelClass}>命中后的替换文本</span>
+                <input
+                  className={inputClass}
+                  placeholder="[内容已屏蔽]"
+                  aria-describedby="risk-response-filter-replacement-help"
+                  aria-invalid={Boolean(responseContentFilterForm.formState.errors.replacement)}
+                  {...responseContentFilterForm.register("replacement")}
+                />
+                <p
+                  id="risk-response-filter-replacement-help"
+                  className={responseContentFilterForm.formState.errors.replacement ? "text-xs leading-5 text-red-600" : "text-xs leading-5 text-slate-500"}
+                >
+                  {responseContentFilterForm.formState.errors.replacement?.message ?? "可留空以直接删除。为保证 JSON 与 SSE 有效，不能包含引号、反斜杠或换行。"}
+                </p>
+              </label>
+              <div className="grid content-start gap-2">
+                <span className={labelClass}>匹配方式</span>
+                <Toggle
+                  label="区分大小写"
+                  register={responseContentFilterForm.register("caseSensitive")}
+                />
+                <p className="text-xs leading-5 text-slate-500">
+                  默认不区分大小写，更适合域名与渠道名称。
+                </p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+              请避免使用 api、http、error 等过短常用词，以免误伤模型正常回答。自动规则还会纳管上游主机名及一级父域名，防止 Cloudflare 错误页只显示根域名时泄露渠道。
+            </div>
+          </SettingCard>
+        </Modal>
+      ) : null}
+
       {activeModal === "redis" ? (
         <Modal title="Redis 失败策略" description="从 fail-open 切换到 fail-closed 或 degraded 会改变请求放行策略，属于高危操作。" onClose={() => setActiveModal(null)} formId="risk-redis-form" loading={redisMutation.isPending}>
           <SettingCard formId="risk-redis-form" hideActions title="Redis 失败策略" description="保存前会要求二次确认。" form={redisForm} loading={redisMutation.isPending} onSubmit={() => setConfirmAction("redis")}>
@@ -582,9 +752,28 @@ function GatewayNoticeField({ title, trigger, placeholders, register }: { title:
     </div>
   );
 }
-function Toggle({ label, register }: { label: string; register: object }) { return <label className="flex h-10 items-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-medium text-slate-700"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" {...register} />{label}</label>; }
+function Toggle({ label, register }: { label: string; register: object }) { return <label className="flex min-h-10 items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700"><input type="checkbox" className="h-4 w-4 shrink-0 rounded border-slate-300" {...register} />{label}</label>; }
 function SkeletonGrid() { return <div className="grid gap-5 xl:grid-cols-2">{Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-80 animate-pulse rounded-lg bg-slate-100" />)}</div>; }
 function lines(value: string) { return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean); }
+function parseBlockedTerms(value: string) { return [...new Set(lines(value))]; }
+function toResponseContentFilterValues(settings: ResponseContentFilterSettings): ResponseContentFilterValues {
+  return {
+    enabled: settings.enabled,
+    blockedTermsText: settings.blockedTerms.join("\n"),
+    replacement: settings.replacement,
+    caseSensitive: settings.caseSensitive,
+    includeUpstreamBaseUrls: settings.includeUpstreamBaseUrls,
+  };
+}
+function fromResponseContentFilterValues(values: ResponseContentFilterValues): ResponseContentFilterSettings {
+  return {
+    enabled: values.enabled,
+    blockedTerms: parseBlockedTerms(values.blockedTermsText),
+    replacement: values.replacement,
+    caseSensitive: values.caseSensitive,
+    includeUpstreamBaseUrls: values.includeUpstreamBaseUrls,
+  };
+}
 function formatDateTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
