@@ -6,6 +6,41 @@ export const clientStreamClosedMessage =
 export const missingUsageMessage =
   "Upstream response did not include billable token usage";
 
+const upstreamBalanceInsufficientMarkers = [
+  "insufficient_user_quota",
+  "insufficient_quota",
+  "insufficient_balance",
+  "insufficient_account_balance",
+  "account_balance_insufficient",
+  "balance_not_enough",
+  "insufficient balance",
+  "insufficient account balance",
+  "account balance insufficient",
+  "balance is insufficient",
+  "insufficient credits",
+  "not enough balance",
+  "not enough credits",
+  "out of credits",
+  "credit balance",
+  "credits exhausted",
+  "credits_exhausted",
+  "billing hard limit",
+  "billing_hard_limit",
+  "billing limit reached",
+  "payment required",
+  "payment_required",
+  "prepaid balance",
+  "exceeded your current quota",
+  "check your plan and billing details",
+  "预扣费额度失败",
+  "余额不足",
+  "额度不足",
+  "用户额度不足",
+  "账户余额不足",
+  "剩余额度",
+  "欠费",
+];
+
 export function isClosedControllerError(error: unknown) {
   if (!(error instanceof TypeError)) {
     return false;
@@ -56,28 +91,14 @@ export function isRetryableUpstreamFailure(
 }
 
 export function isUpstreamQuotaExhaustedError(value: unknown) {
-  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
-  const normalized = text.toLowerCase();
-  return (
-    normalized.includes("insufficient_user_quota") ||
-    normalized.includes("预扣费额度失败")
-  );
+  return isUpstreamBalanceInsufficientError(value);
 }
 
 export function isUpstreamBalanceInsufficientError(value: unknown) {
   const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
   const normalized = text.toLowerCase();
-  return (
-    normalized.includes("insufficient_user_quota") ||
-    normalized.includes("insufficient balance") ||
-    normalized.includes("insufficient credits") ||
-    normalized.includes("credit balance") ||
-    normalized.includes("quota exceeded") ||
-    normalized.includes("billing hard limit") ||
-    normalized.includes("payment required") ||
-    normalized.includes("预扣费额度失败") ||
-    normalized.includes("余额不足") ||
-    normalized.includes("额度不足")
+  return upstreamBalanceInsufficientMarkers.some((marker) =>
+    normalized.includes(marker),
   );
 }
 

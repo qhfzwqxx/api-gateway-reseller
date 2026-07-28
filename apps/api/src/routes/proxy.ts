@@ -170,6 +170,7 @@ type UpstreamAttemptResult =
       statusCode: number;
       message: string;
       retryableFailure: boolean;
+      upstreamBalanceInsufficient?: boolean;
       responseBody?: string;
       responseContentType?: string;
     };
@@ -1831,6 +1832,10 @@ async function sendFinalAttemptFailure(
     "UPSTREAM_ERROR",
   );
 
+  if (result.upstreamBalanceInsufficient) {
+    return sendUpstreamBalanceUnavailableError(reply);
+  }
+
   if (result.responseBody !== undefined) {
     reply.status(result.statusCode);
     reply.header(
@@ -2057,6 +2062,8 @@ async function runUpstreamAttempt(params: {
     if (!upstreamResponse.ok) {
       const text = await upstreamResponse.text();
       const statusCode = upstreamResponse.status;
+      const upstreamBalanceInsufficient =
+        isUpstreamBalanceInsufficientError(text);
       const retryableFailure = isRetryableUpstreamFailure(statusCode, text);
 
       if (
@@ -2165,6 +2172,10 @@ async function runUpstreamAttempt(params: {
           channelId,
           upstreamProviderKeyId,
           retryableFailure,
+          immediatePenalty: upstreamBalanceInsufficient,
+          penaltyReason: upstreamBalanceInsufficient
+            ? "Upstream balance insufficient; immediate penalty after first failure"
+            : undefined,
           startedAt,
           logger: app.log,
         });
@@ -2173,13 +2184,16 @@ async function runUpstreamAttempt(params: {
           statusCode,
           message: text.slice(0, 2000),
           retryableFailure,
+          upstreamBalanceInsufficient,
           responseBody: text,
           responseContentType:
             upstreamResponse.headers.get("content-type") ?? "application/json",
         };
       }
 
-      const recoveryNotice = await getGatewayRecoveryNotice(text);
+      const recoveryNotice = upstreamBalanceInsufficient
+        ? null
+        : await getGatewayRecoveryNotice(text);
       await markRequestFailed(
         { id: apiRequestId },
         text.slice(0, 2000),
@@ -2193,6 +2207,27 @@ async function runUpstreamAttempt(params: {
           : undefined,
         "UPSTREAM_ERROR",
       );
+      if (billable && model) {
+        await recordFailedChannelAttempt({
+          userId,
+          apiKeyId,
+          callerIdentity,
+          model,
+          channelId,
+          upstreamProviderKeyId,
+          retryableFailure,
+          immediatePenalty: upstreamBalanceInsufficient,
+          penaltyReason: upstreamBalanceInsufficient
+            ? "Upstream balance insufficient; immediate penalty after first failure"
+            : undefined,
+          startedAt,
+          logger: app.log,
+        });
+      }
+      if (upstreamBalanceInsufficient) {
+        await sendUpstreamBalanceUnavailableError(reply);
+        return { kind: "sent" };
+      }
       if (
         recoveryNotice &&
         shouldReturnApiKeyNotice(endpoint, request.method)
@@ -2215,19 +2250,6 @@ async function runUpstreamAttempt(params: {
           request.headers.accept,
         );
         return { kind: "sent" };
-      }
-      if (billable && model) {
-        await recordFailedChannelAttempt({
-          userId,
-          apiKeyId,
-          callerIdentity,
-          model,
-          channelId,
-          upstreamProviderKeyId,
-          retryableFailure,
-          startedAt,
-          logger: app.log,
-        });
       }
       reply.status(statusCode);
       reply.header(
@@ -2561,6 +2583,8 @@ async function recordFailedChannelAttempt(params: {
   channelId?: string;
   upstreamProviderKeyId?: string | null;
   retryableFailure: boolean;
+  immediatePenalty?: boolean;
+  penaltyReason?: string;
   startedAt: number;
   ignoreSlowPenalty?: boolean;
   logger?: {
@@ -2585,8 +2609,20 @@ async function recordFailedChannelAttempt(params: {
     latencyMs,
     ignoreSlowPenalty: params.ignoreSlowPenalty,
     retryableFailure: params.retryableFailure,
+    immediatePenalty: params.immediatePenalty,
+    penaltyReason: params.penaltyReason,
     logger: params.logger,
   });
+}
+
+async function sendUpstreamBalanceUnavailableError(reply: FastifyReply) {
+  const settings = await readGatewayNoticeSettings();
+  return sendApiError(
+    reply,
+    503,
+    settings.upstreamBalanceInsufficientMessage,
+    "service_unavailable",
+  );
 }
 
 async function getGatewayRecoveryNotice(error: unknown) {

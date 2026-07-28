@@ -32,7 +32,7 @@ export const defaultGatewayNoticeSettings: GatewayNoticeSettings = {
     "当前会话的上下文已失效，请新建对话或清空当前会话上下文后重试。",
   invalidEncryptedContentMessage:
     "当前会话包含无法继续使用的上下文，请新建对话或清空当前会话上下文后重试。",
-  upstreamBalanceInsufficientMessage: "当前服务临时繁忙，请稍后重试。",
+  upstreamBalanceInsufficientMessage: "当前请求暂时无法完成，请稍后重试。",
 };
 
 const settingKey = "gateway_notice_settings";

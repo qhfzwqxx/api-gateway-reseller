@@ -38,6 +38,8 @@ export type RoutingFeedbackInput = {
   failed?: boolean;
   streamed?: boolean;
   retryableFailure?: boolean;
+  immediatePenalty?: boolean;
+  penaltyReason?: string;
   firstTokenLatencyMs?: number | null;
   latencyMs?: number | null;
   ignoreSlowPenalty?: boolean;

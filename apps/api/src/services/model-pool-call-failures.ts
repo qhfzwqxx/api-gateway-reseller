@@ -32,11 +32,13 @@ export async function recordModelPoolUserCallResult(params: {
   upstreamProviderKeyId?: string | null;
   failed?: boolean;
   retryableFailure?: boolean;
+  immediatePenalty?: boolean;
+  penaltyReason?: string;
   firstTokenLatencyMs?: number | null;
   latencyMs?: number | null;
   logger?: Logger;
 }) {
-  const { userId, apiKeyId, callerIdentity, model, channelId, upstreamProviderKeyId, failed, retryableFailure, firstTokenLatencyMs, latencyMs, logger } = params;
+  const { userId, apiKeyId, callerIdentity, model, channelId, upstreamProviderKeyId, failed, retryableFailure, immediatePenalty, penaltyReason, logger } = params;
 
   if (!channelId) {
     return;
@@ -56,6 +58,21 @@ export async function recordModelPoolUserCallResult(params: {
     }
 
     if (!retryableFailure) {
+      return;
+    }
+
+    if (immediatePenalty) {
+      await redis.del(key).catch(() => undefined);
+      await penalizeChannel({
+        userId,
+        apiKeyId,
+        callerIdentity,
+        model,
+        channelId,
+        immediatePenalty: true,
+        penaltyReason,
+        logger,
+      });
       return;
     }
 
@@ -98,9 +115,12 @@ async function penalizeChannel(params: {
   callerIdentity: string;
   model: string;
   channelId: string;
+  immediatePenalty?: boolean;
+  penaltyReason?: string;
   logger?: Logger;
 }) {
-  const { userId, apiKeyId, callerIdentity, model, channelId, logger } = params;
+  const { userId, apiKeyId, callerIdentity, model, channelId, immediatePenalty, logger } = params;
+  await clearStickyModelPoolChannel(callerIdentity, model, channelId);
   const [penaltySeconds, settings] = await Promise.all([
     getModelPoolPenaltySeconds(),
     readDispatchSettings(),
@@ -111,13 +131,15 @@ async function penalizeChannel(params: {
   });
   if (
     !currentChannel ||
-    currentChannel.status === "FORCED_ACTIVE" ||
-    currentChannel.status === "DISABLED"
+    currentChannel.status === "DISABLED" ||
+    (currentChannel.status === "FORCED_ACTIVE" && !immediatePenalty)
   ) {
     return;
   }
   const penalizedUntil = new Date(Date.now() + penaltySeconds * 1000);
-  const penaltyReason = `IP ${callerIdentity} failed this channel ${settings.penaltyFailureThreshold} times`;
+  const penaltyReason =
+    params.penaltyReason?.trim() ||
+    `IP ${callerIdentity} failed this channel ${settings.penaltyFailureThreshold} times`;
 
   const channel = await prisma.modelPoolChannel.update({
     where: { id: channelId },
@@ -131,8 +153,6 @@ async function penalizeChannel(params: {
       lastError: penaltyReason.slice(0, 1000),
     },
   }).catch(() => null);
-
-  await clearStickyModelPoolChannel(callerIdentity, model, channelId);
 
   if (!channel) {
     logger?.warn(
@@ -151,6 +171,7 @@ async function penalizeChannel(params: {
       channelId,
       penalizedUntil: penalizedUntil.toISOString(),
       penaltySeconds,
+      immediatePenalty: immediatePenalty === true,
     },
     "Model pool channel entered penalty period after caller failures",
   );
