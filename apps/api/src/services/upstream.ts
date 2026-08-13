@@ -38,6 +38,7 @@ type PreparedModelRoute = {
   keyDecisionTrace?: UpstreamKeyReservation["decisionTrace"];
   release?: ReleaseModelPoolReservation;
   decisionTrace?: RoutingDecisionTrace;
+  policyRecoveryEnabled?: boolean;
 };
 type RouteCandidate = {
   provider: Provider;
@@ -147,7 +148,10 @@ export async function getProviderForModel(
           stickyRoute.upstreamProviderKeyId ?? null;
         decisionTrace.keyCandidates =
           stickyRoute.keyDecisionTrace?.candidates ?? [];
-        return stickyRoute;
+        return {
+          ...stickyRoute,
+          policyRecoveryEnabled: modelPool.policyRecoveryEnabled,
+        };
       }
     }
 
@@ -207,7 +211,10 @@ export async function getProviderForModel(
         preparedRoute.upstreamProviderKeyId ?? null;
       decisionTrace.keyCandidates =
         preparedRoute.keyDecisionTrace?.candidates ?? [];
-      return preparedRoute;
+      return {
+        ...preparedRoute,
+        policyRecoveryEnabled: modelPool.policyRecoveryEnabled,
+      };
     }
 
     await balancedRoute.release?.();

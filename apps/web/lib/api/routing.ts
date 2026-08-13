@@ -90,6 +90,7 @@ export interface ModelPool {
   status: ModelPoolStatus;
   autoHealthCheckEnabled: boolean;
   healthCheckEndpoint: HealthCheckEndpoint;
+  policyRecoveryEnabled: boolean;
   createdAt: string;
   updatedAt: string;
   tier: AccessTierSummary | null;
@@ -149,6 +150,40 @@ export interface ModelPoolInput {
   status: ModelPoolStatus;
   autoHealthCheckEnabled: boolean;
   healthCheckEndpoint: HealthCheckEndpoint;
+  policyRecoveryEnabled: boolean;
+}
+
+export interface PolicyRecoverySettings {
+  masterEnabled: boolean;
+  layers: PolicyRecoveryLayer[];
+  baseInstructions: string;
+  mergedSha256: string;
+  mergedBytes: number;
+  estimatedTokens: number;
+  retryInstructionsTemplate: string;
+  maxRecoveries: number;
+  sseProbeBytes: number;
+  maxInspectableResponseBytes: number;
+  version: number;
+}
+
+export interface PolicyRecoveryLayer {
+  id: string;
+  name: string;
+  source: "exe" | "seagull" | "custom";
+  enabled: boolean;
+  content: string;
+  builtinSha256: string;
+}
+
+export interface PolicyRecoveryLimits {
+  maxInstructionsLength: number;
+  maxLayerBytes: number;
+  maxMergedBytes: number;
+  minSseProbeBytes: number;
+  maxSseProbeBytes: number;
+  minInspectableResponseBytes: number;
+  maxInspectableResponseBytes: number;
 }
 
 export interface PoolChannelInput {
@@ -245,6 +280,66 @@ export async function deleteModelPool(id: string) {
 export async function updateModelPoolHealthCheck(input: Partial<ModelPoolsResponse["healthCheck"]>) {
   const response = await http.patch<{ healthCheck: ModelPoolsResponse["healthCheck"] }>("/admin/model-pools/health-check", input);
   return response.data.healthCheck;
+}
+
+export async function getPolicyRecoverySettings() {
+  const response = await http.get<{
+    settings: PolicyRecoverySettings;
+    defaults: PolicyRecoverySettings;
+    limits: PolicyRecoveryLimits;
+  }>("/admin/policy-recovery-settings");
+  return response.data;
+}
+
+export async function updatePolicyRecoverySettings(input: Pick<PolicyRecoverySettings, "masterEnabled" | "layers" | "retryInstructionsTemplate" | "maxRecoveries" | "sseProbeBytes" | "maxInspectableResponseBytes">) {
+  const response = await http.put<{
+    settings: PolicyRecoverySettings;
+    defaults: PolicyRecoverySettings;
+    limits: PolicyRecoveryLimits;
+  }>("/admin/policy-recovery-settings", input);
+  return response.data;
+}
+
+export async function previewPolicyRecovery(input: {
+  endpoint: "/v1/responses" | "/v1/responses/compact" | "/v1/chat/completions";
+  requestBody: Record<string, unknown>;
+  responseStatus?: number;
+  responseHeaders?: Record<string, string>;
+  responseBody?: unknown;
+}) {
+  return (await http.post<{ preview: Record<string, unknown> }>("/admin/policy-recovery-settings/preview", input)).data.preview;
+}
+
+export async function resetPolicyRecoveryLayer(layerId: string) {
+  return (await http.post<{ settings: PolicyRecoverySettings }>("/admin/policy-recovery-settings/reset-layer", { layerId })).data.settings;
+}
+
+export async function resetAllPolicyRecoverySettings() {
+  return (await http.post<{ settings: PolicyRecoverySettings }>("/admin/policy-recovery-settings/reset-all")).data.settings;
+}
+
+export interface PolicyRecoveryLibraryEntry {
+  path: string;
+  kind: "reference" | "script";
+  content: string;
+  sha256: string;
+  bytes: number;
+}
+
+export async function getPolicyRecoveryLibrary() {
+  return (await http.get<{ entries: PolicyRecoveryLibraryEntry[] }>("/admin/policy-recovery-library")).data.entries;
+}
+
+export async function getPolicyRecoveryStats() {
+  return (await http.get<{ stats: {
+    enabledPools: number;
+    totalRequests: number;
+    recovered: number;
+    exhausted: number;
+    recoveryRate: number;
+    exhaustedRate: number;
+    recentRequests: Array<Record<string, unknown>>;
+  } }>("/admin/policy-recovery-stats")).data.stats;
 }
 
 export async function copyStandardPools(input: { targetTierId: string; overwriteExisting: boolean }) {

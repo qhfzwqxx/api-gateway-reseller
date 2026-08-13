@@ -418,6 +418,7 @@ model ApiRequest {
   userAgent                    String?
   requestBody                  Json?
   responseUsage                Json?
+  policyRecoveryAudit          Json?
   accessTierId                 String?
   createdAt                    DateTime              @default(now())
   updatedAt                    DateTime              @updatedAt
@@ -525,6 +526,7 @@ model ModelPool {
   status                 String   @default("ACTIVE")
   autoHealthCheckEnabled Boolean  @default(true)
   healthCheckEndpoint    String   @default("responses")
+  policyRecoveryEnabled  Boolean  @default(false)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @default(now()) @updatedAt
 

@@ -24,6 +24,7 @@ export async function routeUpstreamRequest(
       upstreamProviderKeyId: getLoggedUpstreamProviderKeyId(modelRoute),
       release: modelRoute.release,
       decisionTrace: modelRoute.decisionTrace,
+      policyRecoveryEnabled: modelRoute.policyRecoveryEnabled,
     };
   }
 

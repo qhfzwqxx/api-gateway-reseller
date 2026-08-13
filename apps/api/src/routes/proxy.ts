@@ -145,6 +145,19 @@ import {
   filterProxyResponseContent,
   loadProxyResponseContentFilterSettings,
 } from "../services/proxy-response-content-filter.js";
+import { readPolicyRecoverySettings } from "../services/policy-recovery-settings.js";
+import {
+  buildPolicyRecoveryBody,
+  createPolicySseSanitizer,
+  createPolicyRecoveryContext,
+  detectPolicyBlock,
+  probePolicyRecoveryStream,
+  sanitizePolicyResponseBody,
+  sanitizePolicyResponseHeaders,
+  supportsPolicyRecovery,
+  type PolicyBlockSignal,
+  type PolicyRecoveryContext,
+} from "../services/policy-recovery.js";
 import {
   collectEncryptedContents,
   createCompactChannelFingerprint,
@@ -958,6 +971,23 @@ export async function proxyRoutes(app: FastifyInstance) {
       const compactFallbackContext: CompactFallbackContext = {
         attempted: false,
       };
+      const policyRecoverySettings = activeRoute.policyRecoveryEnabled === true
+        ? await readPolicyRecoverySettings()
+        : undefined;
+      const policyRecoveryContext =
+        policyRecoverySettings?.masterEnabled === true &&
+        supportsPolicyRecovery(endpoint, request.method, Boolean(multipartRawBody))
+          ? createPolicyRecoveryContext(body, policyRecoverySettings)
+          : undefined;
+
+      if (policyRecoveryContext) {
+        await prisma.apiRequest.update({
+          where: { id: apiRequest.id },
+          data: {
+            policyRecoveryAudit: policyRecoveryContext.audit as Prisma.InputJsonValue,
+          },
+        });
+      }
 
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         const result = await runUpstreamAttempt({
@@ -986,6 +1016,7 @@ export async function proxyRoutes(app: FastifyInstance) {
           multipartContentType: Array.isArray(requestContentType)
             ? requestContentType[0]
             : requestContentType,
+          policyRecoveryContext,
         });
 
         if (result.kind === "sent") {
@@ -1877,6 +1908,9 @@ async function runUpstreamAttempt(params: {
   foreignReasoningState?: boolean;
   multipartRawBody?: Buffer;
   multipartContentType?: string;
+  policyRecoveryContext?: PolicyRecoveryContext;
+  policyRecoveryAttempt?: number;
+  policyRecoverySignal?: PolicyBlockSignal | null;
 }): Promise<UpstreamAttemptResult> {
   const {
     app,
@@ -1901,6 +1935,9 @@ async function runUpstreamAttempt(params: {
     foreignReasoningState,
     multipartRawBody,
     multipartContentType,
+    policyRecoveryContext,
+    policyRecoveryAttempt = 0,
+    policyRecoverySignal,
   } = params;
   const { provider, price, channelId } = route;
   const imageToolBridge = "imageToolBridge" in route;
@@ -1922,9 +1959,19 @@ async function runUpstreamAttempt(params: {
   const resolvedUpstreamEndpoint = resolveUpstreamEndpoint(
     resolvedUpstreamRequestUrl,
   );
+  const attemptBody = policyRecoveryContext
+    ? buildPolicyRecoveryBody({
+        context: policyRecoveryContext,
+        endpoint,
+        recoveryAttempt: policyRecoveryAttempt,
+        signal: policyRecoverySignal,
+        provider: provider.name,
+        model: model ?? inferModelFromBody(body) ?? "unknown",
+      })
+    : body;
   const reasoningSanitized = foreignReasoningState
-    ? removeReasoningInputItems(body)
-    : { value: body, removed: 0 };
+    ? removeReasoningInputItems(attemptBody)
+    : { value: attemptBody, removed: 0 };
   if (reasoningSanitized.removed > 0) {
     app.log.warn(
       {
@@ -2062,6 +2109,46 @@ async function runUpstreamAttempt(params: {
     if (!upstreamResponse.ok) {
       const text = await upstreamResponse.text();
       const statusCode = upstreamResponse.status;
+      const parsedErrorBody = parseJsonOrText(text);
+      const policySignal = policyRecoveryContext
+        ? detectPolicyBlock({
+            statusCode,
+            headers: upstreamResponse.headers,
+            body: parsedErrorBody,
+            source: "json",
+          })
+        : null;
+      if (policyRecoveryContext && policySignal) {
+        await recordPolicyRecoveryAttempt({
+          apiRequestId,
+          context: policyRecoveryContext,
+          route,
+          recoveryAttempt: policyRecoveryAttempt,
+          signal: policySignal,
+          statusCode,
+          responseBody: parsedErrorBody,
+          latencyMs: Math.round(performance.now() - upstreamRequestStartedAt),
+        });
+        if (policyRecoveryAttempt < policyRecoveryContext.settings.maxRecoveries) {
+          policyRecoveryContext.audit.totalRecoveries += 1;
+          return runUpstreamAttempt({
+            ...params,
+            policyRecoveryAttempt: policyRecoveryAttempt + 1,
+            policyRecoverySignal: policySignal,
+          });
+        }
+        policyRecoveryContext.audit.finalOutcome = "exhausted";
+        await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
+        return {
+          kind: "failed",
+          statusCode,
+          message: text.slice(0, 2000),
+          retryableFailure: true,
+          responseBody: text,
+          responseContentType:
+            upstreamResponse.headers.get("content-type") ?? "application/json",
+        };
+      }
       const upstreamBalanceInsufficient =
         isUpstreamBalanceInsufficientError(text);
       const retryableFailure = isRetryableUpstreamFailure(statusCode, text);
@@ -2266,11 +2353,47 @@ async function runUpstreamAttempt(params: {
       upstreamRequestUrl,
       endpoint,
     );
+    let effectiveUpstreamResponse = upstreamResponse;
+    if (shouldStream && policyRecoveryContext) {
+      const probed = await probePolicyRecoveryStream(
+        upstreamResponse,
+        policyRecoveryContext.settings.sseProbeBytes,
+      );
+      if (probed.signal) {
+        await recordPolicyRecoveryAttempt({
+          apiRequestId,
+          context: policyRecoveryContext,
+          route,
+          recoveryAttempt: policyRecoveryAttempt,
+          signal: probed.signal,
+          statusCode: upstreamResponse.status,
+          responseBody: parseSseJsonPayloads(probed.text),
+          latencyMs: Math.round(performance.now() - upstreamRequestStartedAt),
+        });
+        if (policyRecoveryAttempt < policyRecoveryContext.settings.maxRecoveries) {
+          policyRecoveryContext.audit.totalRecoveries += 1;
+          return runUpstreamAttempt({
+            ...params,
+            policyRecoveryAttempt: policyRecoveryAttempt + 1,
+            policyRecoverySignal: probed.signal,
+          });
+        }
+        policyRecoveryContext.audit.finalOutcome = "exhausted";
+        await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
+        return {
+          kind: "failed",
+          statusCode: 403,
+          message: probed.signal.summary,
+          retryableFailure: true,
+        };
+      }
+      effectiveUpstreamResponse = probed.response;
+    }
     if (shouldStream && billable && price) {
       activeControllerHandedOff = true;
       await proxyStream({
         reply,
-        upstreamResponse,
+        upstreamResponse: effectiveUpstreamResponse,
         activeController: controller,
         apiRequestId,
         endpoint,
@@ -2296,6 +2419,9 @@ async function runUpstreamAttempt(params: {
             ? getCompactChannelFingerprint(route)
             : undefined,
         gatewayAbortReason,
+        policyRecoveryContext,
+        policyRecoveryAttempt,
+        providerName: provider.name,
       });
       return { kind: "sent" };
     }
@@ -2304,7 +2430,7 @@ async function runUpstreamAttempt(params: {
       activeControllerHandedOff = true;
       await proxyPassthroughStream({
         reply,
-        upstreamResponse,
+        upstreamResponse: effectiveUpstreamResponse,
         activeController: controller,
         apiRequestId,
         endpoint,
@@ -2340,6 +2466,42 @@ async function runUpstreamAttempt(params: {
       : contentType.includes("text/event-stream")
         ? parseSseJsonPayloads(rawBody.text)
         : rawBody.text;
+    const nonStreamPolicySignal = policyRecoveryContext
+      ? detectPolicyBlock({
+          statusCode: upstreamResponse.status,
+          headers: upstreamResponse.headers,
+          body: upstreamResponseBody,
+          source: contentType.includes("text/event-stream") ? "sse" : "json",
+        })
+      : null;
+    if (policyRecoveryContext && nonStreamPolicySignal) {
+      await recordPolicyRecoveryAttempt({
+        apiRequestId,
+        context: policyRecoveryContext,
+        route,
+        recoveryAttempt: policyRecoveryAttempt,
+        signal: nonStreamPolicySignal,
+        statusCode: upstreamResponse.status,
+        responseBody: upstreamResponseBody,
+        latencyMs: Math.round(performance.now() - upstreamRequestStartedAt),
+      });
+      if (policyRecoveryAttempt < policyRecoveryContext.settings.maxRecoveries) {
+        policyRecoveryContext.audit.totalRecoveries += 1;
+        return runUpstreamAttempt({
+          ...params,
+          policyRecoveryAttempt: policyRecoveryAttempt + 1,
+          policyRecoverySignal: nonStreamPolicySignal,
+        });
+      }
+      policyRecoveryContext.audit.finalOutcome = "exhausted";
+      await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
+      return {
+        kind: "failed",
+        statusCode: upstreamResponse.status,
+        message: nonStreamPolicySignal.summary,
+        retryableFailure: true,
+      };
+    }
     const responseBody = imageToolBridge
       ? await buildImageToolBridgeResponse({
           requestModel: model,
@@ -2349,7 +2511,9 @@ async function runUpstreamAttempt(params: {
       : transformProxyResponseBody(
           endpoint,
           resolvedUpstreamEndpoint,
-          upstreamResponseBody,
+          policyRecoveryContext
+            ? sanitizePolicyResponseBody(upstreamResponseBody)
+            : upstreamResponseBody,
           transformContext,
         );
     let normalCompactUsageMetadata:
@@ -2421,6 +2585,24 @@ async function runUpstreamAttempt(params: {
         : normalCompactUsageMetadata;
     }
     usage = withCompactFallbackUsage(usage, compactFallbackContext.trace);
+    usage = withPolicyRecoveryUsage(usage, policyRecoveryContext);
+    if (policyRecoveryContext) {
+      await recordPolicyRecoveryAttempt({
+        apiRequestId,
+        context: policyRecoveryContext,
+        route,
+        recoveryAttempt: policyRecoveryAttempt,
+        signal: null,
+        statusCode: upstreamResponse.status,
+        responseBody: upstreamResponseBody,
+        latencyMs: Math.round(performance.now() - upstreamRequestStartedAt),
+      });
+      policyRecoveryContext.audit.recovered = policyRecoveryContext.audit.totalRecoveries > 0;
+      policyRecoveryContext.audit.finalOutcome = policyRecoveryContext.audit.recovered
+        ? "recovered"
+        : "not_triggered";
+      await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
+    }
     try {
       await chargeForRequest({
         requestId: apiRequestId,
@@ -2460,6 +2642,11 @@ async function runUpstreamAttempt(params: {
     });
 
     reply.status(upstreamResponse.status);
+    for (const [name, value] of responseHeadersEntries(
+      policyRecoveryContext
+        ? sanitizePolicyResponseHeaders(upstreamResponse.headers)
+        : upstreamResponse.headers,
+    )) reply.header(name, value);
     reply.header("content-type", contentType || "application/json");
     reply.send(responseBody);
     return { kind: "sent" };
@@ -2872,6 +3059,88 @@ function compactFallbackUsageFields(
   };
 }
 
+function parseJsonOrText(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+async function recordPolicyRecoveryAttempt(params: {
+  apiRequestId: string;
+  context: PolicyRecoveryContext;
+  route: UpstreamAttemptRoute;
+  recoveryAttempt: number;
+  signal: PolicyBlockSignal | null;
+  statusCode: number | null;
+  responseBody: unknown;
+  latencyMs: number;
+}) {
+  const usage = usageFromOpenAIResponse(params.responseBody);
+  params.context.accumulatedInputTokens += usage.inputTokens;
+  params.context.accumulatedCachedInputTokens += usage.cachedInputTokens;
+  params.context.accumulatedOutputTokens += usage.outputTokens;
+  params.context.audit.attempts.push({
+    channelId: params.route.channelId ?? null,
+    provider: params.route.provider.name,
+    upstreamProviderKeyId: getLoggedUpstreamProviderKeyId(params.route) ?? null,
+    recoveryAttempt: params.recoveryAttempt,
+    signal: params.signal,
+    httpStatus: params.statusCode,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    latencyMs: params.latencyMs,
+  });
+  await persistPolicyRecoveryAudit(params.apiRequestId, params.context);
+}
+
+function withPolicyRecoveryUsage(
+  usage: Usage,
+  context?: PolicyRecoveryContext,
+): Usage {
+  if (!context) return usage;
+  const result = {
+    ...usage,
+    inputTokens: usage.inputTokens + context.accumulatedInputTokens,
+    cachedInputTokens:
+      usage.cachedInputTokens + context.accumulatedCachedInputTokens,
+    outputTokens: usage.outputTokens + context.accumulatedOutputTokens,
+    billableRequestCount: context.audit.attempts.length + 1,
+  };
+  result.totalTokens =
+    result.inputTokens + result.cachedInputTokens + result.outputTokens;
+  result.raw = {
+    ...(isPlainObject(usage.raw) ? usage.raw : { upstreamUsage: usage.raw }),
+    policyRecovery: context.audit,
+  };
+  return result;
+}
+
+async function persistPolicyRecoveryAudit(
+  apiRequestId: string,
+  context: PolicyRecoveryContext,
+) {
+  await prisma.apiRequest.update({
+    where: { id: apiRequestId },
+    data: {
+      policyRecoveryAudit: sanitizeJsonForPostgres(
+        context.audit,
+      ) as Prisma.InputJsonValue,
+    },
+  });
+}
+
+function responseHeadersEntries(headers: Headers) {
+  const entries: Array<[string, string]> = [];
+  headers.forEach((value, name) => {
+    if (!["content-length", "transfer-encoding", "connection"].includes(name.toLowerCase())) {
+      entries.push([name, value]);
+    }
+  });
+  return entries;
+}
+
 async function cacheCompactResponse(params: {
   logger?: {
     warn: (value: unknown, message?: string) => void;
@@ -2959,6 +3228,9 @@ async function proxyStream(params: {
   compactCacheRequestBody?: ProxyBody;
   compactCacheSourceFingerprint?: string;
   gatewayAbortReason?: string | null;
+  policyRecoveryContext?: PolicyRecoveryContext;
+  policyRecoveryAttempt?: number;
+  providerName: string;
 }) {
   const {
     reply,
@@ -2984,6 +3256,9 @@ async function proxyStream(params: {
     compactCacheRequestBody,
     compactCacheSourceFingerprint,
     gatewayAbortReason,
+    policyRecoveryContext,
+    policyRecoveryAttempt = 0,
+    providerName,
   } = params;
   const price = await prisma.modelPrice.findUniqueOrThrow({
     where: { id: priceId },
@@ -2996,6 +3271,9 @@ async function proxyStream(params: {
     upstreamEndpoint,
     transformContext,
   );
+  const policySseSanitizer = policyRecoveryContext
+    ? createPolicySseSanitizer()
+    : null;
   let pending = "";
   let rawStreamText = "";
   let firstTokenLatencyMs: number | null = null;
@@ -3056,7 +3334,12 @@ async function proxyStream(params: {
         bufferedStreamChunks.length = 0;
       };
       const forwardStreamText = (text: string) => {
-        const outputText = streamTransformer.transformText(text);
+        const sanitizedText = policySseSanitizer
+          ? policySseSanitizer.push(text)
+          : text;
+        const outputText = sanitizedText
+          ? streamTransformer.transformText(sanitizedText)
+          : "";
         if (!outputText) {
           return;
         }
@@ -3119,7 +3402,11 @@ async function proxyStream(params: {
           streamUsage = parseUsageFromSseBuffer(pending) ?? streamUsage;
           forwardStreamText(trailing);
         }
-        const transformedTrailing = streamTransformer.flush();
+        const sanitizedTrailing = policySseSanitizer?.flush() ?? "";
+        const transformedTrailing =
+          (sanitizedTrailing
+            ? streamTransformer.transformText(sanitizedTrailing)
+            : "") + streamTransformer.flush();
         if (transformedTrailing) {
           if (hasForwardedStream || firstTokenLatencyMs !== null) {
             flushBufferedStreamChunks();
@@ -3156,6 +3443,7 @@ async function proxyStream(params: {
           streamUsage,
           compactFallbackTrace,
         );
+        streamUsage = withPolicyRecoveryUsage(streamUsage, policyRecoveryContext);
         flushBufferedStreamChunks();
 
         if (
@@ -3189,6 +3477,28 @@ async function proxyStream(params: {
         }
 
         try {
+          if (policyRecoveryContext) {
+            await recordPolicyRecoveryAttempt({
+              apiRequestId,
+              context: policyRecoveryContext,
+              route: {
+                provider: { name: providerName } as UpstreamAttemptRoute["provider"],
+                price,
+                channelId,
+                upstreamProviderKeyId: upstreamProviderKeyId ?? undefined,
+              },
+              recoveryAttempt: policyRecoveryAttempt,
+              signal: null,
+              statusCode: upstreamResponse.status,
+              responseBody: parseSseJsonPayloads(rawStreamText),
+              latencyMs: Math.round(performance.now() - upstreamRequestStartedAt),
+            });
+            policyRecoveryContext.audit.recovered = policyRecoveryContext.audit.totalRecoveries > 0;
+            policyRecoveryContext.audit.finalOutcome = policyRecoveryContext.audit.recovered
+              ? "recovered"
+              : "not_triggered";
+            await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
+          }
           await chargeForRequest({
             requestId: apiRequestId,
             userId,
@@ -3236,6 +3546,10 @@ async function proxyStream(params: {
           : error instanceof Error
             ? error.message
             : "Stream failed";
+        if (policyRecoveryContext) {
+          policyRecoveryContext.audit.finalOutcome = "aborted";
+          await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext).catch(() => undefined);
+        }
         if (isClientStreamClosedError(error)) {
           await markRequestFailed(
             { id: apiRequestId },

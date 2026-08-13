@@ -37,6 +37,7 @@ export type ApiRequest = {
   upstreamFirstChunkLatencyMs?: number | null;
   errorMessage?: string | null;
   responseUsage?: unknown | null;
+  policyRecoveryAudit?: unknown | null;
   createdAt: string;
   user?: { email: string };
   apiKey?: { id: string; name: string; keyPrefix: string } | null;
@@ -46,6 +47,7 @@ type ApiRequestDetail = ApiRequest & {
   upstreamRequestId?: string | null;
   userAgent?: string | null;
   requestBody?: unknown | null;
+  policyRecoveryAudit?: unknown | null;
   updatedAt?: string;
 };
 
@@ -842,6 +844,7 @@ function RequestDetailModal({
         <section className="request-json-grid">
           <JsonPanel title="请求体快照" value={request.requestBody} />
           <JsonPanel title="Usage / 计费快照" value={request.responseUsage} />
+          {request.policyRecoveryAudit ? <JsonPanel title="策略恢复审计" value={request.policyRecoveryAudit} /> : null}
         </section>
       </div>
       <div className="modal-footer">

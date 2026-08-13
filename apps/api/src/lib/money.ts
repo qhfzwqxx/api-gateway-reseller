@@ -31,11 +31,14 @@ export function calculateCharges(price: ChargePrice, usage: Usage) {
   const minimumCharge = new Decimal(price.minimumChargeUsd.toString());
 
   if (price.pricingMode === "request") {
+    const requestCount = Math.max(1, Math.floor(usage.billableRequestCount ?? 1));
     const upstreamCostUsd = new Decimal(price.upstreamPerRequestUsd.toString())
       .mul(upstreamMultiplier)
+      .mul(requestCount)
       .toDecimalPlaces(8);
     const computedCustomerCharge = new Decimal(price.perRequestUsd.toString())
       .mul(customerMultiplier)
+      .mul(requestCount)
       .toDecimalPlaces(8);
     return {
       upstreamCostUsd,

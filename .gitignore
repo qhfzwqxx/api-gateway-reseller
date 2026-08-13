@@ -12,3 +12,5 @@ coverage
 !packages/db/prisma/migrations/**/migration.sql
 backups/
 .DS_Store
+
+artifacts/

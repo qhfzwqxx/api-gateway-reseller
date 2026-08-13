@@ -32,5 +32,6 @@ export type Usage = {
   cachedInputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  billableRequestCount?: number;
   raw?: unknown;
 };

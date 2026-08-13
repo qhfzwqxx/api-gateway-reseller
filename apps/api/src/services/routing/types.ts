@@ -15,6 +15,7 @@ export type UpstreamAttemptRoute = {
   upstreamProviderKeyId?: string;
   release?: () => Promise<void>;
   decisionTrace?: RoutingDecisionTrace;
+  policyRecoveryEnabled?: boolean;
 };
 
 export type RoutingInput = {

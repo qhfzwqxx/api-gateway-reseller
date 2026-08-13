@@ -112,6 +112,7 @@ export function RequestDetailDrawer({ requestId, onClose }: RequestDetailDrawerP
               </section>
 
               {showSensitiveBody ? <JsonBlock title="requestBody" value={request.requestBody} /> : null}
+              {request.policyRecoveryAudit ? <JsonBlock title="策略恢复审计" value={request.policyRecoveryAudit} /> : null}
               <JsonBlock title="responseUsage" value={request.responseUsage} />
             </div>
           ) : null}

@@ -52,6 +52,27 @@ import {
   saveResponseContentFilterSettings,
 } from "../services/response-content-filter-settings.js";
 import {
+  createPolicyRecoverySnapshot,
+  defaultPolicyRecoverySettings,
+  maxPolicyRecoveryInspectableBytes,
+  maxPolicyRecoveryInstructionsLength,
+  maxPolicyRecoveryLayerBytes,
+  maxPolicyRecoveryMergedBytes,
+  maxPolicyRecoverySseProbeBytes,
+  minPolicyRecoveryInspectableBytes,
+  minPolicyRecoverySseProbeBytes,
+  policyRecoveryLibrary,
+  readPolicyRecoverySettings,
+  resetAllPolicyRecoverySettings,
+  resetPolicyRecoveryLayer,
+  savePolicyRecoverySettings,
+} from "../services/policy-recovery-settings.js";
+import {
+  buildPolicyRecoveryBody,
+  createPolicyRecoveryContext,
+  detectPolicyBlock,
+} from "../services/policy-recovery.js";
+import {
   reasoningEffortValues,
   getReasoningEffortFromBody,
   readReasoningEffortTransformSettings,
@@ -2543,6 +2564,136 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 
+  const policyRecoveryLimits = {
+    maxInstructionsLength: maxPolicyRecoveryInstructionsLength,
+    maxLayerBytes: maxPolicyRecoveryLayerBytes,
+    maxMergedBytes: maxPolicyRecoveryMergedBytes,
+    minSseProbeBytes: minPolicyRecoverySseProbeBytes,
+    maxSseProbeBytes: maxPolicyRecoverySseProbeBytes,
+    minInspectableResponseBytes: minPolicyRecoveryInspectableBytes,
+    maxInspectableResponseBytes: maxPolicyRecoveryInspectableBytes,
+  };
+
+  app.get("/admin/policy-recovery-settings", async () => ({
+    settings: await readPolicyRecoverySettings(),
+    defaults: createPolicyRecoverySnapshot(defaultPolicyRecoverySettings),
+    limits: policyRecoveryLimits,
+  }));
+
+  app.put("/admin/policy-recovery-settings", async (request) => {
+    const body = z.object({
+      masterEnabled: z.boolean(),
+      layers: z.array(z.object({
+        id: z.string().trim().min(1).max(128),
+        name: z.string().trim().min(1).max(160),
+        source: z.enum(["exe", "seagull", "custom"]),
+        enabled: z.boolean(),
+        content: z.string().trim().min(1).max(maxPolicyRecoveryLayerBytes),
+        builtinSha256: z.string().max(64),
+      })).min(1).max(32),
+      retryInstructionsTemplate: z.string().trim().min(1).max(maxPolicyRecoveryInstructionsLength),
+      maxRecoveries: z.number().int().min(0).max(3),
+      sseProbeBytes: z.number().int().min(minPolicyRecoverySseProbeBytes).max(maxPolicyRecoverySseProbeBytes),
+      maxInspectableResponseBytes: z.number().int().min(minPolicyRecoveryInspectableBytes).max(maxPolicyRecoveryInspectableBytes),
+    }).parse(request.body);
+    return {
+      settings: await savePolicyRecoverySettings(body),
+      defaults: createPolicyRecoverySnapshot(defaultPolicyRecoverySettings),
+      limits: policyRecoveryLimits,
+    };
+  });
+
+  app.post("/admin/policy-recovery-settings/preview", async (request) => {
+    const body = z.object({
+      endpoint: z.enum(["/v1/responses", "/v1/responses/compact", "/v1/chat/completions"]),
+      requestBody: z.record(z.string(), z.unknown()),
+      responseStatus: z.number().int().min(100).max(599).optional(),
+      responseHeaders: z.record(z.string(), z.string()).optional(),
+      responseBody: z.unknown().optional(),
+    }).parse(request.body);
+    const settings = await readPolicyRecoverySettings();
+    const context = createPolicyRecoveryContext(body.requestBody, settings);
+    const injectedBody = buildPolicyRecoveryBody({
+      context,
+      endpoint: body.endpoint,
+      recoveryAttempt: 0,
+      provider: "preview",
+      model: typeof body.requestBody.model === "string" ? body.requestBody.model : "preview-model",
+    });
+    const signal = body.responseBody === undefined && !body.responseHeaders
+      ? null
+      : detectPolicyBlock({
+          statusCode: body.responseStatus ?? 200,
+          headers: body.responseHeaders ?? {},
+          body: body.responseBody,
+          source: body.endpoint === "/v1/chat/completions" ? "json" : "json",
+        });
+    return {
+      preview: {
+        endpoint: body.endpoint,
+        enabled: settings.masterEnabled,
+        mergedInstructions: settings.baseInstructions,
+        mergedBytes: settings.mergedBytes,
+        mergedSha256: settings.mergedSha256,
+        estimatedTokens: settings.estimatedTokens,
+        injectedBody,
+        signal,
+      },
+    };
+  });
+
+  app.post("/admin/policy-recovery-settings/reset-layer", async (request) => {
+    const body = z.object({ layerId: z.string().trim().min(1).max(128) }).parse(request.body);
+    return { settings: await resetPolicyRecoveryLayer(body.layerId) };
+  });
+
+  app.post("/admin/policy-recovery-settings/reset-all", async () => ({
+    settings: await resetAllPolicyRecoverySettings(),
+  }));
+
+  app.get("/admin/policy-recovery-library", async () => ({ entries: policyRecoveryLibrary }));
+
+  app.get("/admin/policy-recovery-stats", async () => {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const [enabledPools, recentRequests] = await Promise.all([
+      prisma.modelPool.count({ where: { policyRecoveryEnabled: true } }),
+      prisma.apiRequest.findMany({
+        where: { createdAt: { gte: since }, policyRecoveryAudit: { not: Prisma.JsonNull } },
+        orderBy: { createdAt: "desc" },
+        take: 500,
+        select: {
+          id: true,
+          createdAt: true,
+          model: true,
+          upstreamProvider: true,
+          httpStatus: true,
+          inputTokens: true,
+          outputTokens: true,
+          latencyMs: true,
+          policyRecoveryAudit: true,
+          accessTier: { select: { name: true } },
+        },
+      }),
+    ]);
+    const audits = recentRequests.map((item) => ({
+      ...item,
+      audit: item.policyRecoveryAudit,
+    }));
+    const recovered = audits.filter((item) => asRecord(item.audit)?.recovered === true).length;
+    const exhausted = audits.filter((item) => asRecord(item.audit)?.finalOutcome === "exhausted").length;
+    return {
+      stats: {
+        enabledPools,
+        totalRequests: audits.length,
+        recovered,
+        exhausted,
+        recoveryRate: audits.length ? recovered / audits.length : 0,
+        exhaustedRate: audits.length ? exhausted / audits.length : 0,
+        recentRequests: audits.slice(0, 100),
+      },
+    };
+  });
+
   app.get("/admin/image-generation-tool-settings", async () => {
     return {
       settings: await readImageGenerationToolSettings(),
@@ -3815,6 +3966,7 @@ export async function adminRoutes(app: FastifyInstance) {
         errorMessage: true,
         requestBody: true,
         responseUsage: true,
+        policyRecoveryAudit: true,
         createdAt: true,
         updatedAt: true,
         user: {
@@ -4724,6 +4876,7 @@ export async function adminRoutes(app: FastifyInstance) {
                 status: sourcePool.status,
                 autoHealthCheckEnabled: sourcePool.autoHealthCheckEnabled,
                 healthCheckEndpoint: sourcePool.healthCheckEndpoint,
+                policyRecoveryEnabled: sourcePool.policyRecoveryEnabled,
               },
             })
           : await tx.modelPool.create({
@@ -4733,6 +4886,7 @@ export async function adminRoutes(app: FastifyInstance) {
                 status: sourcePool.status,
                 autoHealthCheckEnabled: sourcePool.autoHealthCheckEnabled,
                 healthCheckEndpoint: sourcePool.healthCheckEndpoint,
+                policyRecoveryEnabled: sourcePool.policyRecoveryEnabled,
               },
             });
 
@@ -4990,6 +5144,7 @@ export async function adminRoutes(app: FastifyInstance) {
         autoHealthCheckEnabled: z.boolean().default(true),
         healthCheckEndpoint:
           modelPoolHealthCheckEndpointSchema.default("responses"),
+        policyRecoveryEnabled: z.boolean().default(false),
       })
       .parse(request.body);
     const standardTier = await ensureStandardAccessTier();
@@ -5022,6 +5177,7 @@ export async function adminRoutes(app: FastifyInstance) {
         status: body.status,
         autoHealthCheckEnabled: body.autoHealthCheckEnabled,
         healthCheckEndpoint: body.healthCheckEndpoint,
+        policyRecoveryEnabled: body.policyRecoveryEnabled,
       },
       create: {
         ...body,
@@ -5040,6 +5196,7 @@ export async function adminRoutes(app: FastifyInstance) {
         status: z.enum(["ACTIVE", "DISABLED"]).optional(),
         autoHealthCheckEnabled: z.boolean().optional(),
         healthCheckEndpoint: modelPoolHealthCheckEndpointSchema.optional(),
+        policyRecoveryEnabled: z.boolean().optional(),
       })
       .parse(request.body);
     const modelPool = await prisma.modelPool.update({

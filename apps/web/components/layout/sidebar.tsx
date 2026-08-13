@@ -14,6 +14,7 @@ import {
   Network,
   Route,
   Settings,
+  ShieldCheck,
   ShieldAlert,
   Users,
 } from "lucide-react";
@@ -36,6 +37,7 @@ export const navItems: NavItem[] = [
   { title: "上游管理", href: "/admin/upstreams", icon: Network },
   { title: "模型价格", href: "/admin/model-prices", icon: Banknote },
   { title: "模型池", href: "/admin/model-pools", icon: Layers3 },
+  { title: "破甲功能", href: "/admin/policy-recovery", icon: ShieldCheck },
   { title: "调度与访问等级", href: "/admin/routing", icon: Route },
   { title: "调用记录", href: "/admin/requests", icon: Activity },
   { title: "风控与公告", href: "/admin/risk-control", icon: ShieldAlert },

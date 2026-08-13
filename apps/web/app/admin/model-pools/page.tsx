@@ -3,6 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock3, Layers3, Plus, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -13,6 +14,7 @@ import {
   deleteModelPool,
   deletePoolChannel,
   getModelPools,
+  updateModelPool,
   updateModelPoolHealthCheck,
   updatePoolChannel,
   type ModelPool,
@@ -28,6 +30,7 @@ const poolSchema = z.object({
   status: z.enum(["ACTIVE", "DISABLED"]),
   autoHealthCheckEnabled: z.boolean(),
   healthCheckEndpoint: z.enum(["responses", "chat.completions"]),
+  policyRecoveryEnabled: z.boolean(),
 });
 
 const channelStatuses: PoolChannelStatus[] = ["ACTIVE", "FORCED_ACTIVE", "DISABLED", "UNAVAILABLE", "PENALIZED"];
@@ -112,13 +115,13 @@ export default function AdminModelPoolsPage() {
   }, [healthCheck, nowMs, pools, poolsQuery.isFetching]);
   const form = useForm<z.infer<typeof poolSchema>>({
     resolver: zodResolver(poolSchema),
-    defaultValues: { model: "", tierId: "", status: "ACTIVE", autoHealthCheckEnabled: true, healthCheckEndpoint: "responses" },
+    defaultValues: { model: "", tierId: "", status: "ACTIVE", autoHealthCheckEnabled: true, healthCheckEndpoint: "responses", policyRecoveryEnabled: false },
   });
 
   const createMutation = useMutation({
     mutationFn: createModelPool,
     onSuccess: () => {
-      form.reset({ model: "", tierId: tiers[0]?.id ?? "", status: "ACTIVE", autoHealthCheckEnabled: true, healthCheckEndpoint: "responses" });
+      form.reset({ model: "", tierId: tiers[0]?.id ?? "", status: "ACTIVE", autoHealthCheckEnabled: true, healthCheckEndpoint: "responses", policyRecoveryEnabled: false });
       setNotice("模型池已创建或更新");
       refresh();
     },
@@ -173,6 +176,11 @@ export default function AdminModelPoolsPage() {
       setNotice("健康检测参数已保存");
       refresh();
     },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+  const updatePoolMutation = useMutation({
+    mutationFn: ({ id, policyRecoveryEnabled }: { id: string; policyRecoveryEnabled: boolean }) => updateModelPool(id, { policyRecoveryEnabled }),
+    onSuccess: () => { setNotice("完整破甲状态已更新"); refresh(); },
     onError: (error) => setNotice(errorToText(error)),
   });
 
@@ -251,12 +259,23 @@ export default function AdminModelPoolsPage() {
       {notice ? <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">{notice}</div> : null}
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <form className="grid gap-3 xl:grid-cols-[minmax(220px,1fr)_220px_150px_190px_auto_auto]" onSubmit={form.handleSubmit(submitPool)}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-slate-950">完整破甲配置</h3>
+            <p className="mt-1 text-sm text-slate-500">模型池仅控制开关；全局总闸、分层指令、恢复参数、资料库和审计统一在独立控制台管理。</p>
+          </div>
+          <Link className={secondaryButton} href="/admin/policy-recovery"><ShieldCheck className="h-4 w-4" />打开破甲功能控制台</Link>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <form className="grid gap-3 xl:grid-cols-[minmax(220px,1fr)_220px_150px_190px_auto_auto_auto]" onSubmit={form.handleSubmit(submitPool)}>
           <label className="grid gap-2"><span className="text-sm font-medium text-slate-700">模型</span><input list="priced-models" className={inputClass} {...form.register("model")} /><datalist id="priced-models">{Array.from(pricedModels).map((model) => <option value={model} key={model} />)}</datalist>{form.formState.errors.model ? <span className="text-sm text-red-600">{form.formState.errors.model.message}</span> : null}</label>
           <label className="grid gap-2"><span className="text-sm font-medium text-slate-700">访问等级</span><select className={inputClass} {...form.register("tierId")}><option value="">选择等级</option>{tiers.map((tier) => <option value={tier.id} key={tier.id}>{tier.name}</option>)}</select></label>
           <label className="grid gap-2"><span className="text-sm font-medium text-slate-700">状态</span><select className={inputClass} {...form.register("status")}><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select></label>
           <label className="grid gap-2"><span className="text-sm font-medium text-slate-700">检测接口</span><select className={inputClass} {...form.register("healthCheckEndpoint")}><option value="responses">responses</option><option value="chat.completions">chat.completions</option></select></label>
           <label className="flex h-full min-h-[64px] items-end gap-2 pb-2 text-sm font-medium text-slate-700"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" {...form.register("autoHealthCheckEnabled")} />自动检测</label>
+          <label className="flex h-full min-h-[64px] items-end gap-2 pb-2 text-sm font-medium text-slate-700"><input type="checkbox" className="h-4 w-4 rounded border-slate-300" {...form.register("policyRecoveryEnabled")} />完整破甲</label>
           <div className="flex items-end"><button type="submit" disabled={createMutation.isPending} className={primaryButton}><Plus className="h-4 w-4" />创建/更新池</button></div>
         </form>
       </section>
@@ -325,6 +344,8 @@ export default function AdminModelPoolsPage() {
                 onCheck={(id) => checkChannelMutation.mutate(id)}
                 onDelete={(id) => deleteChannelMutation.mutate(id)}
                 onSetStatus={(id, status) => updateChannelMutation.mutate({ id, status })}
+                onSetPolicyRecovery={(enabled) => updatePoolMutation.mutate({ id: activePool.id, policyRecoveryEnabled: enabled })}
+                policyRecoveryUpdating={updatePoolMutation.isPending && updatePoolMutation.variables?.id === activePool.id}
               />
             ) : (
               <div className="flex h-full min-h-[420px] items-center justify-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-500">请选择模型和等级</div>
@@ -430,6 +451,8 @@ function PoolChannelBoard({
   onCheck,
   onDelete,
   onSetStatus,
+  onSetPolicyRecovery,
+  policyRecoveryUpdating,
 }: {
   pool: ModelPool;
   healthCheck: HealthCheckRuntime | null;
@@ -441,6 +464,8 @@ function PoolChannelBoard({
   onCheck: (id: string) => void;
   onDelete: (id: string) => void;
   onSetStatus: (id: string, status: PoolChannelStatus) => void;
+  onSetPolicyRecovery: (enabled: boolean) => void;
+  policyRecoveryUpdating: boolean;
 }) {
   const availableChannels = pool.channels.filter((channel) => isAvailableChannel(channel, checkingChannelId));
   const unavailableChannels = pool.channels.filter((channel) => !isAvailableChannel(channel, checkingChannelId));
@@ -455,12 +480,17 @@ function PoolChannelBoard({
               <Badge active={pool.status === "ACTIVE"}>{modelPoolStatusLabel(pool.status)}</Badge>
               <Badge active={pool.readyChannelCount > 0}>{pool.readyChannelCount > 0 ? "可调用" : "不可用"}</Badge>
               <Badge active={pool.autoHealthCheckEnabled}>{pool.autoHealthCheckEnabled ? "AUTO" : "MANUAL"}</Badge>
+              <Badge active={pool.policyRecoveryEnabled}>{pool.policyRecoveryEnabled ? "完整破甲开" : "完整破甲关"}</Badge>
             </div>
             <p className="mt-1 text-xs text-slate-500">
               等级 {pool.tier?.name ?? "Free"} · 检测接口 {pool.healthCheckEndpoint} · 已定价 {pool.pricedChannelCount} · 已加入 {pool.channels.length} · 下次 {poolNextCheckText(pool, healthCheck, nowMs)}
             </p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
+            <label className="inline-flex min-h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700">
+              <input type="checkbox" checked={pool.policyRecoveryEnabled} disabled={policyRecoveryUpdating} onChange={(event) => onSetPolicyRecovery(event.target.checked)} className="h-4 w-4 rounded border-slate-300" />
+              完整破甲
+            </label>
             <button type="button" onClick={onOpenManager} className={secondaryButton}>添加/管理渠道</button>
             <button type="button" onClick={onDeletePool} className={dangerButton}><Trash2 className="h-4 w-4" />删除池</button>
           </div>
@@ -781,6 +811,7 @@ function formatChannelError(value?: string | null) {
 }
 
 const inputClass = "h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
+const textareaClass = "w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 const primaryButton = "inline-flex h-10 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60";
 const secondaryButton = "inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50";
 const dangerButton = "inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60";

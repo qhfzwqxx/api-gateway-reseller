@@ -61,6 +61,7 @@ export interface ApiRequestRecord {
   upstreamFirstChunkLatencyMs: number | null;
   errorMessage: string | null;
   responseUsage?: unknown;
+  policyRecoveryAudit?: unknown;
   requestBody?: unknown;
   createdAt: string;
   updatedAt?: string;
