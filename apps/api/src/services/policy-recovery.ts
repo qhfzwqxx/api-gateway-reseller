@@ -21,6 +21,8 @@ export type PolicyRecoveryAttemptAudit = {
 
 export type PolicyRecoveryAudit = {
   enabled: boolean;
+  profileId: PolicyRecoverySnapshot["activeProfile"];
+  profileName: string;
   templateVersion: number;
   mergedSha256: string;
   recovered: boolean;
@@ -112,6 +114,8 @@ export function createPolicyRecoveryContext(
     accumulatedOutputTokens: 0,
     audit: {
       enabled: true,
+      profileId: settings.activeProfile,
+      profileName: settings.activeProfileName,
       templateVersion: settings.version,
       mergedSha256: settings.mergedSha256,
       recovered: false,

@@ -155,7 +155,10 @@ export interface ModelPoolInput {
 
 export interface PolicyRecoverySettings {
   masterEnabled: boolean;
+  activeProfile: PolicyRecoveryProfileId;
+  activeProfileName: string;
   layers: PolicyRecoveryLayer[];
+  unifiedDocument: string;
   baseInstructions: string;
   mergedSha256: string;
   mergedBytes: number;
@@ -166,6 +169,8 @@ export interface PolicyRecoverySettings {
   maxInspectableResponseBytes: number;
   version: number;
 }
+
+export type PolicyRecoveryProfileId = "layered-v1" | "unified-v2";
 
 export interface PolicyRecoveryLayer {
   id: string;
@@ -180,6 +185,7 @@ export interface PolicyRecoveryLimits {
   maxInstructionsLength: number;
   maxLayerBytes: number;
   maxMergedBytes: number;
+  maxUnifiedBytes: number;
   minSseProbeBytes: number;
   maxSseProbeBytes: number;
   minInspectableResponseBytes: number;
@@ -291,7 +297,7 @@ export async function getPolicyRecoverySettings() {
   return response.data;
 }
 
-export async function updatePolicyRecoverySettings(input: Pick<PolicyRecoverySettings, "masterEnabled" | "layers" | "retryInstructionsTemplate" | "maxRecoveries" | "sseProbeBytes" | "maxInspectableResponseBytes">) {
+export async function updatePolicyRecoverySettings(input: Pick<PolicyRecoverySettings, "masterEnabled" | "activeProfile" | "layers" | "unifiedDocument" | "retryInstructionsTemplate" | "maxRecoveries" | "sseProbeBytes" | "maxInspectableResponseBytes">) {
   const response = await http.put<{
     settings: PolicyRecoverySettings;
     defaults: PolicyRecoverySettings;
@@ -312,6 +318,16 @@ export async function previewPolicyRecovery(input: {
 
 export async function resetPolicyRecoveryLayer(layerId: string) {
   return (await http.post<{ settings: PolicyRecoverySettings }>("/admin/policy-recovery-settings/reset-layer", { layerId })).data.settings;
+}
+
+export async function regenerateUnifiedPolicyRecoveryDocument(input: {
+  source: "current-layers" | "builtin-default";
+  layers?: PolicyRecoveryLayer[];
+}) {
+  return (await http.post<{ unifiedDocument: string }>(
+    "/admin/policy-recovery-settings/regenerate-unified",
+    input,
+  )).data.unifiedDocument;
 }
 
 export async function resetAllPolicyRecoverySettings() {

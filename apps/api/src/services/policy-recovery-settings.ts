@@ -8,6 +8,7 @@ import {
 } from "./policy-recovery-seagull-profiles.js";
 
 export type PolicyRecoveryLayerSource = "exe" | "seagull" | "custom";
+export type PolicyRecoveryProfileId = "layered-v1" | "unified-v2";
 
 export type PolicyRecoveryLayer = {
   id: string;
@@ -20,7 +21,9 @@ export type PolicyRecoveryLayer = {
 
 export type PolicyRecoverySettings = {
   masterEnabled: boolean;
+  activeProfile: PolicyRecoveryProfileId;
   layers: PolicyRecoveryLayer[];
+  unifiedDocument: string;
   retryInstructionsTemplate: string;
   maxRecoveries: number;
   sseProbeBytes: number;
@@ -29,6 +32,7 @@ export type PolicyRecoverySettings = {
 };
 
 export type PolicyRecoverySnapshot = PolicyRecoverySettings & {
+  activeProfileName: string;
   baseInstructions: string;
   mergedSha256: string;
   mergedBytes: number;
@@ -37,6 +41,7 @@ export type PolicyRecoverySnapshot = PolicyRecoverySettings & {
 
 export const maxPolicyRecoveryLayerBytes = 64 * 1024;
 export const maxPolicyRecoveryMergedBytes = 128 * 1024;
+export const maxPolicyRecoveryUnifiedBytes = maxPolicyRecoveryMergedBytes;
 export const maxPolicyRecoveryInstructionsLength = maxPolicyRecoveryLayerBytes;
 export const minPolicyRecoverySseProbeBytes = 16 * 1024;
 export const maxPolicyRecoverySseProbeBytes = 1024 * 1024;
@@ -70,7 +75,9 @@ export const builtinPolicyRecoveryLayers: PolicyRecoveryLayer[] = [
 
 export const defaultPolicyRecoverySettings: PolicyRecoverySettings = {
   masterEnabled: false,
+  activeProfile: "layered-v1",
   layers: builtinPolicyRecoveryLayers.map(cloneLayer),
+  unifiedDocument: buildUnifiedPolicyRecoveryDocument(builtinPolicyRecoveryLayers),
   retryInstructionsTemplate: [
     "[GPT56_POLICY_RETRY_V2]",
     "前一次上游响应属于结构化策略拦截，本次为同一原始请求的第 {{attempt}} 次自动恢复。",
@@ -156,9 +163,18 @@ export function normalizePolicyRecoverySettings(value: unknown): PolicyRecoveryS
   const input = isRecord(value) ? value : {};
   const legacyBaseInstructions = typeof input.baseInstructions === "string" ? input.baseInstructions.trim() : "";
   const layers = normalizeLayers(input.layers, legacyBaseInstructions);
+  const activeProfile: PolicyRecoveryProfileId = input.activeProfile === "unified-v2"
+    ? "unified-v2"
+    : "layered-v1";
   return {
     masterEnabled: input.masterEnabled === true,
+    activeProfile,
     layers,
+    unifiedDocument: normalizeInstructions(
+      input.unifiedDocument,
+      buildUnifiedPolicyRecoveryDocument(layers),
+      maxPolicyRecoveryUnifiedBytes,
+    ),
     retryInstructionsTemplate: normalizeInstructions(
       input.retryInstructionsTemplate,
       defaultPolicyRecoverySettings.retryInstructionsTemplate,
@@ -177,7 +193,9 @@ export function normalizePolicyRecoverySettings(value: unknown): PolicyRecoveryS
 }
 
 export function createPolicyRecoverySnapshot(settings: PolicyRecoverySettings): PolicyRecoverySnapshot {
-  const baseInstructions = mergePolicyRecoveryLayers(settings.layers);
+  const baseInstructions = settings.activeProfile === "unified-v2"
+    ? settings.unifiedDocument.trim()
+    : mergePolicyRecoveryLayers(settings.layers);
   const mergedBytes = Buffer.byteLength(baseInstructions, "utf8");
   if (mergedBytes > maxPolicyRecoveryMergedBytes) {
     throw new Error("Merged policy recovery instructions exceed 128 KiB");
@@ -185,6 +203,9 @@ export function createPolicyRecoverySnapshot(settings: PolicyRecoverySettings): 
   return {
     ...settings,
     layers: settings.layers.map(cloneLayer),
+    activeProfileName: settings.activeProfile === "unified-v2"
+      ? "V2 统一完整文档版"
+      : "V1 多文件分层版",
     baseInstructions,
     mergedSha256: sha256(baseInstructions),
     mergedBytes,
@@ -197,6 +218,47 @@ export function mergePolicyRecoveryLayers(layers: PolicyRecoveryLayer[]) {
     .filter((layer) => layer.enabled)
     .map((layer) => `[POLICY_RECOVERY_LAYER:${layer.id}]\n${layer.content.trim()}\n[/POLICY_RECOVERY_LAYER:${layer.id}]`)
     .join("\n\n");
+}
+
+export function buildUnifiedPolicyRecoveryDocument(layers: PolicyRecoveryLayer[]) {
+  const manifest = layers.map((layer, index) => [
+    `${index + 1}. ${layer.name}`,
+    `   id: ${layer.id}`,
+    `   source: ${layer.source}`,
+    `   v1_enabled_snapshot: ${layer.enabled}`,
+    "   v2_included: true",
+    `   bytes: ${Buffer.byteLength(layer.content.trim(), "utf8")}`,
+    `   sha256: ${sha256(layer.content.trim())}`,
+  ].join("\n")).join("\n");
+  const sourceBody = layers
+    .map((layer) => `[POLICY_RECOVERY_LAYER:${layer.id}]\n${layer.content.trim()}\n[/POLICY_RECOVERY_LAYER:${layer.id}]`)
+    .join("\n\n");
+  const document = [
+    "[UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]",
+    "[DOCUMENT_METADATA]",
+    "profile_id: unified-v2",
+    "profile_name: V2 统一完整文档版",
+    "composition_policy: 保留 V1 全部源文档原文，包括 V1 当前停用层；仅增加统一边界、来源清单与执行顺序，不摘要、不删减、不去重。",
+    `source_count: ${layers.length}`,
+    "[/DOCUMENT_METADATA]",
+    "",
+    "[SOURCE_MANIFEST]",
+    manifest,
+    "[/SOURCE_MANIFEST]",
+    "",
+    "[EXECUTION_ORDER]",
+    "按 SOURCE_MANIFEST 顺序解释下列原始指令。所有源文档在 V2 中均已包含并生效；v1_enabled_snapshot 仅记录 V1 保存时的启停状态，不控制 V2。所有原始标签、中文、英文、代码、示例、重复条款与内部层级均保持原样。",
+    "[/EXECUTION_ORDER]",
+    "",
+    "[ORIGINAL_SOURCE_DOCUMENTS]",
+    sourceBody,
+    "[/ORIGINAL_SOURCE_DOCUMENTS]",
+    "[/UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]",
+  ].join("\n");
+  if (Buffer.byteLength(document, "utf8") > maxPolicyRecoveryUnifiedBytes) {
+    throw new Error("Unified policy recovery document exceeds 128 KiB");
+  }
+  return document;
 }
 
 function normalizeLayers(value: unknown, legacyBaseInstructions: string) {

@@ -59,8 +59,10 @@ import {
   maxPolicyRecoveryLayerBytes,
   maxPolicyRecoveryMergedBytes,
   maxPolicyRecoverySseProbeBytes,
+  maxPolicyRecoveryUnifiedBytes,
   minPolicyRecoveryInspectableBytes,
   minPolicyRecoverySseProbeBytes,
+  buildUnifiedPolicyRecoveryDocument,
   policyRecoveryLibrary,
   readPolicyRecoverySettings,
   resetAllPolicyRecoverySettings,
@@ -2568,6 +2570,7 @@ export async function adminRoutes(app: FastifyInstance) {
     maxInstructionsLength: maxPolicyRecoveryInstructionsLength,
     maxLayerBytes: maxPolicyRecoveryLayerBytes,
     maxMergedBytes: maxPolicyRecoveryMergedBytes,
+    maxUnifiedBytes: maxPolicyRecoveryUnifiedBytes,
     minSseProbeBytes: minPolicyRecoverySseProbeBytes,
     maxSseProbeBytes: maxPolicyRecoverySseProbeBytes,
     minInspectableResponseBytes: minPolicyRecoveryInspectableBytes,
@@ -2580,17 +2583,21 @@ export async function adminRoutes(app: FastifyInstance) {
     limits: policyRecoveryLimits,
   }));
 
+  const policyRecoveryLayerSchema = z.object({
+    id: z.string().trim().min(1).max(128),
+    name: z.string().trim().min(1).max(160),
+    source: z.enum(["exe", "seagull", "custom"]),
+    enabled: z.boolean(),
+    content: z.string().trim().min(1).max(maxPolicyRecoveryLayerBytes),
+    builtinSha256: z.string().max(64),
+  });
+
   app.put("/admin/policy-recovery-settings", async (request) => {
     const body = z.object({
       masterEnabled: z.boolean(),
-      layers: z.array(z.object({
-        id: z.string().trim().min(1).max(128),
-        name: z.string().trim().min(1).max(160),
-        source: z.enum(["exe", "seagull", "custom"]),
-        enabled: z.boolean(),
-        content: z.string().trim().min(1).max(maxPolicyRecoveryLayerBytes),
-        builtinSha256: z.string().max(64),
-      })).min(1).max(32),
+      activeProfile: z.enum(["layered-v1", "unified-v2"]),
+      layers: z.array(policyRecoveryLayerSchema).min(1).max(32),
+      unifiedDocument: z.string().trim().min(1).max(maxPolicyRecoveryUnifiedBytes),
       retryInstructionsTemplate: z.string().trim().min(1).max(maxPolicyRecoveryInstructionsLength),
       maxRecoveries: z.number().int().min(0).max(3),
       sseProbeBytes: z.number().int().min(minPolicyRecoverySseProbeBytes).max(maxPolicyRecoverySseProbeBytes),
@@ -2632,6 +2639,8 @@ export async function adminRoutes(app: FastifyInstance) {
       preview: {
         endpoint: body.endpoint,
         enabled: settings.masterEnabled,
+        activeProfile: settings.activeProfile,
+        activeProfileName: settings.activeProfileName,
         mergedInstructions: settings.baseInstructions,
         mergedBytes: settings.mergedBytes,
         mergedSha256: settings.mergedSha256,
@@ -2645,6 +2654,22 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/admin/policy-recovery-settings/reset-layer", async (request) => {
     const body = z.object({ layerId: z.string().trim().min(1).max(128) }).parse(request.body);
     return { settings: await resetPolicyRecoveryLayer(body.layerId) };
+  });
+
+  app.post("/admin/policy-recovery-settings/regenerate-unified", async (request) => {
+    const body = z.discriminatedUnion("source", [
+      z.object({
+        source: z.literal("current-layers"),
+        layers: z.array(policyRecoveryLayerSchema).min(1).max(32),
+      }),
+      z.object({ source: z.literal("builtin-default") }),
+    ]).parse(request.body);
+    const unifiedDocument = buildUnifiedPolicyRecoveryDocument(
+      body.source === "builtin-default"
+        ? defaultPolicyRecoverySettings.layers
+        : body.layers,
+    );
+    return { unifiedDocument };
   });
 
   app.post("/admin/policy-recovery-settings/reset-all", async () => ({
