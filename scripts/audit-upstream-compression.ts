@@ -10,7 +10,17 @@ import {
   getForwardableUpstreamResponseHeaders,
   safeReadUpstreamBody,
 } from "../apps/api/src/services/proxy-request-utils.ts";
-import { probePolicyRecoveryStream } from "../apps/api/src/services/policy-recovery.ts";
+import {
+  buildPolicyRecoveryBody,
+  createPolicyRecoveryContext,
+  probePolicyRecoveryStream,
+  sanitizePolicyResponseBody,
+  supportsPolicyRecovery,
+} from "../apps/api/src/services/policy-recovery.ts";
+import {
+  createPolicyRecoverySnapshot,
+  defaultPolicyRecoverySettings,
+} from "../apps/api/src/services/policy-recovery-settings.ts";
 
 type Encoding = "gzip" | "deflate" | "br";
 
@@ -19,6 +29,32 @@ const jsonFixture = {
   ok: true,
   message: "压缩响应已正确解码",
   nested: { value: 42 },
+};
+const compactEncryptedContent = "fixture-compact-encrypted-content";
+const compactRequestFixture = {
+  model: "fixture-model",
+  input: [
+    { role: "user", content: [{ type: "input_text", text: "请压缩当前会话" }] },
+    {
+      type: "compaction_summary",
+      encrypted_content: "fixture-previous-encrypted-content",
+    },
+  ],
+  instructions: ["caller-original-instructions"],
+};
+const compactResponseFixture = {
+  id: "resp_compact_fixture",
+  object: "response.compaction",
+  output: [
+    {
+      id: "cmp_fixture",
+      type: "compaction_summary",
+      encrypted_content: compactEncryptedContent,
+      summary: [{ type: "summary_text", text: "压缩后的连续会话摘要" }],
+    },
+  ],
+  openai_verification_recommendation: "trusted_access_for_cyber",
+  usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
 };
 const policySseFixture = [
   "event: response.failed",
@@ -48,15 +84,17 @@ const server = createServer((request, response) => {
     response.writeHead(404).end();
     return;
   }
-  const body = path.startsWith("/json/")
-    ? JSON.stringify(jsonFixture)
+  const body = path.startsWith("/compact-json/")
+    ? JSON.stringify(compactResponseFixture)
+    : path.startsWith("/json/")
+      ? JSON.stringify(jsonFixture)
     : path.startsWith("/tiny/")
       ? "ok"
-    : path.startsWith("/policy-sse/")
-      ? policySseFixture
-      : path.startsWith("/completed-sse/")
-        ? completedSseFixture
-        : JSON.stringify({ payload: "x".repeat(256 * 1024) });
+      : path.startsWith("/policy-sse/")
+        ? policySseFixture
+        : path.startsWith("/completed-sse/")
+          ? completedSseFixture
+          : JSON.stringify({ payload: "x".repeat(256 * 1024) });
   const compressed = compress(encoding, Buffer.from(body, "utf8"));
   response.writeHead(200, {
     "content-type": path.includes("sse")
@@ -81,6 +119,7 @@ async function main() {
   assert.ok(address && typeof address === "object");
   const origin = `http://127.0.0.1:${address.port}`;
   try {
+    const policyCompactPayloadStates = assertPolicyCompactPayloadChain();
     for (const encoding of encodings) {
       const jsonResponse = await fetch(`${origin}/json/${encoding}`, {
         headers: { "Accept-Encoding": "identity" },
@@ -104,6 +143,24 @@ async function main() {
       const tinyBody = await safeReadUpstreamBody(tinyResponse, { maxBytes: 2 });
       assert.ok(!("error" in tinyBody), `${encoding} encoded length was treated as decoded length`);
       assert.equal(tinyBody.text, "ok");
+
+      const compactResponse = await fetch(`${origin}/compact-json/${encoding}`, {
+        headers: { "Accept-Encoding": "identity" },
+      });
+      const compactBody = await safeReadUpstreamBody(compactResponse, {
+        maxBytes: 1024 * 1024,
+      });
+      assert.ok(!("error" in compactBody), `${encoding} compact response failed to decode`);
+      assert.deepEqual(compactBody.json, compactResponseFixture);
+      assert.equal(
+        readCompactEncryptedContent(compactBody.json),
+        compactEncryptedContent,
+      );
+      const sanitizedCompactBody = sanitizePolicyResponseBody(compactBody.json);
+      assert.equal(
+        readCompactEncryptedContent(sanitizedCompactBody),
+        compactEncryptedContent,
+      );
 
       const policyResponse = await fetch(`${origin}/policy-sse/${encoding}`, {
         headers: { "Accept-Encoding": "identity" },
@@ -144,16 +201,82 @@ async function main() {
       encodings,
       jsonDecodeCases: encodings.length,
       encodedLengthCases: encodings.length,
+      compressedCompactJsonCases: encodings.length,
+      sanitizedCompactItemCases: encodings.length,
       compressedSsePolicyCases: encodings.length,
       compressedSseCompletionCases: encodings.length,
       decodedSizeLimitCases: encodings.length,
       invalidEncodingCases: 1,
+      policyCompactPayloadStates,
       removedHeaders: ["content-encoding", "content-length"],
     }, null, 2));
   } finally {
     server.close();
     await once(server, "close");
   }
+}
+
+function assertPolicyCompactPayloadChain() {
+  const settings = createPolicyRecoverySnapshot({
+    ...defaultPolicyRecoverySettings,
+    masterEnabled: true,
+  });
+  assert.equal(supportsPolicyRecovery("/v1/responses/compact", "POST", false), true);
+  assert.match(settings.baseInstructions, /compact|压缩/iu);
+  const context = createPolicyRecoveryContext(
+    structuredClone(compactRequestFixture),
+    settings,
+  );
+  const originalBody = structuredClone(context.originalBody);
+
+  for (let recoveryAttempt = 0; recoveryAttempt <= 3; recoveryAttempt += 1) {
+    const body = buildPolicyRecoveryBody({
+      context,
+      endpoint: "/v1/responses/compact",
+      recoveryAttempt,
+      signal: recoveryAttempt > 0
+        ? {
+            source: "sse",
+            code: "fixture-policy-signal",
+            summary: `FIXTURE_SIGNAL_${recoveryAttempt}`,
+          }
+        : null,
+      provider: "fixture-provider",
+      model: "fixture-model",
+    });
+    assert.deepEqual(body.input, compactRequestFixture.input);
+    assert.ok(Array.isArray(body.instructions));
+    assert.equal(
+      body.instructions.filter((item) => item === settings.baseInstructions).length,
+      1,
+    );
+    assert.equal(
+      body.instructions.filter((item) => item === "caller-original-instructions").length,
+      1,
+    );
+    assert.equal(
+      body.instructions.filter(
+        (item) => typeof item === "string" && item.includes("[GPT56_POLICY_RETRY_V2]"),
+      ).length,
+      recoveryAttempt > 0 ? 1 : 0,
+    );
+  }
+
+  assert.deepEqual(context.originalBody, originalBody);
+  return 4;
+}
+
+function readCompactEncryptedContent(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const output = (value as Record<string, unknown>).output;
+  if (!Array.isArray(output)) return null;
+  const compactItem = output.find(
+    (item) => item && typeof item === "object" && !Array.isArray(item)
+      && (item as Record<string, unknown>).type === "compaction_summary",
+  );
+  if (!compactItem || typeof compactItem !== "object") return null;
+  const encryptedContent = (compactItem as Record<string, unknown>).encrypted_content;
+  return typeof encryptedContent === "string" ? encryptedContent : null;
 }
 
 function compress(encoding: Encoding, value: Buffer) {
