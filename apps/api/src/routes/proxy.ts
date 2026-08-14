@@ -67,8 +67,15 @@ import {
 } from "../services/global-circuit-breaker-settings.js";
 import { readBannedUserNoticeSettings } from "../services/banned-user-notice-settings.js";
 import {
+  inspectDirectCompactionOutput,
+  inspectRemoteCompactionOutput,
+  isCodexCompactionRequest,
   isCompactionTriggerRequestBody,
+  normalizeCodexDirectCompactionResponse,
+  normalizeCodexCompactionOutput,
+  normalizeCodexCompactionSseText,
   prepareCompactEndpointRequestBody,
+  shouldBypassPolicyRecoveryForCompact,
 } from "../services/compact-request-utils.js";
 import {
   isWhitelistFilterUnlocked,
@@ -986,6 +993,10 @@ export async function proxyRoutes(app: FastifyInstance) {
         : undefined;
       const policyRecoveryContext =
         policyRecoverySettings?.masterEnabled === true &&
+        !shouldBypassPolicyRecoveryForCompact({
+          endpoint,
+          requestBody: body,
+        }) &&
         supportsPolicyRecovery(endpoint, request.method, Boolean(multipartRawBody))
           ? createPolicyRecoveryContext(body, policyRecoverySettings)
           : undefined;
@@ -1701,12 +1712,27 @@ function normalizeCompactItemForTarget(
   }
 
   if (targetItemType === "compaction") {
+    if (
+      item.type === "compaction" &&
+      !Object.prototype.hasOwnProperty.call(item, "id") &&
+      !Object.prototype.hasOwnProperty.call(item, "object")
+    ) {
+      return item;
+    }
     const { id: _id, object: _object, ...rest } = item;
     return {
       ...rest,
       type: "compaction",
       encrypted_content: encryptedContent,
     };
+  }
+
+  if (
+    item.type === "compaction_summary" &&
+    typeof item.id === "string" &&
+    item.id
+  ) {
+    return item;
   }
 
   return {
@@ -1748,9 +1774,13 @@ function rewriteCompactionItemsForTargetType<T>(
       typeof current.encrypted_content === "string" &&
       current.encrypted_content
     ) {
+      const normalized = normalizeCompactItemForTarget(
+        current,
+        targetItemType,
+      );
       return {
-        value: normalizeCompactItemForTarget(current, targetItemType),
-        replacements: 1,
+        value: normalized,
+        replacements: normalized === current ? 0 : 1,
       };
     }
 
@@ -1833,6 +1863,100 @@ async function requestTargetCompact(params: {
   }
 }
 
+async function bufferValidatedCompactionTriggerResponse(params: {
+  response: Response;
+  logger?: {
+    warn: (value: unknown, message?: string) => void;
+    info?: (value: unknown, message?: string) => void;
+  };
+}) {
+  const contentType = params.response.headers.get("content-type") ?? "";
+  const rawBody = await safeReadUpstreamBody(params.response, {
+    logger: params.logger,
+    maxBytes: getUpstreamResponseMaxBytes("/v1/responses/compact"),
+  });
+  if ("error" in rawBody) {
+    throw new TypeError(rawBody.error.message);
+  }
+  if (
+    !contentType.includes("text/event-stream") &&
+    !rawBody.text.includes("data:")
+  ) {
+    throw new TypeError(
+      `remote compaction response was not an SSE stream (${contentType || "unknown content type"})`,
+    );
+  }
+
+  const normalizedBody = normalizeCodexCompactionSseText(rawBody.text);
+  const payloads = parseSseJsonPayloads(normalizedBody.text);
+  if (!sseBufferHasCompletedResponse(normalizedBody.text)) {
+    throw new TypeError(
+      `remote compaction stream closed before response.completed${readCompactionFailureMessage(payloads)}`,
+    );
+  }
+
+  const inspection = validateCodexCompactionOutput(payloads);
+
+  params.logger?.info?.(
+    {
+      outputItemCount: inspection.outputItemCount,
+      compactionOutputItemCount: inspection.compactionOutputItemCount,
+      outputItemTypes: inspection.outputItemTypes,
+      normalizedCompactItems: normalizedBody.replacements,
+    },
+    "Validated buffered remote compaction response before forwarding",
+  );
+
+  return new Response(normalizedBody.text, {
+    status: params.response.status,
+    statusText: params.response.statusText,
+    headers: new Headers(
+      getForwardableUpstreamResponseHeaders(params.response.headers),
+    ),
+  });
+}
+
+function validateCodexCompactionOutput(
+  value: unknown,
+  options?: { requireTopLevelOutput?: boolean },
+) {
+  const inspection = options?.requireTopLevelOutput
+    ? inspectDirectCompactionOutput(value)
+    : inspectRemoteCompactionOutput(value);
+  if (
+    inspection.outputItemCount !== 1 ||
+    inspection.compactionOutputItemCount !== 1
+  ) {
+    throw new TypeError(
+      `remote compaction v2 expected exactly one compaction output item, got ${inspection.compactionOutputItemCount} from ${inspection.outputItemCount} output items`,
+    );
+  }
+  return inspection;
+}
+
+function readCompactionFailureMessage(value: unknown) {
+  let message: string | null = null;
+  const visit = (current: unknown) => {
+    if (message || current === null || current === undefined) {
+      return;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item);
+      return;
+    }
+    if (!isPlainObject(current)) {
+      return;
+    }
+    if (typeof current.message === "string" && current.message.trim()) {
+      message = current.message.trim().slice(0, 500);
+      return;
+    }
+    for (const item of Object.values(current)) visit(item);
+  };
+  visit(value);
+  return message ? `: ${message}` : "";
+}
+
 async function updateApiRequestRoute(
   requestId: string,
   route: UpstreamAttemptRoute,
@@ -1911,6 +2035,7 @@ async function runUpstreamAttempt(params: {
   compactFallbackContext: CompactFallbackContext;
   invalidCompactRetryAttempted?: boolean;
   compactTypeRetryAttempted?: boolean;
+  compactItemTypeOverride?: CompactItemType;
   foreignReasoningState?: boolean;
   multipartRawBody?: Buffer;
   multipartContentType?: string;
@@ -1938,6 +2063,7 @@ async function runUpstreamAttempt(params: {
     compactFallbackContext,
     invalidCompactRetryAttempted,
     compactTypeRetryAttempted,
+    compactItemTypeOverride,
     foreignReasoningState,
     multipartRawBody,
     multipartContentType,
@@ -1965,19 +2091,9 @@ async function runUpstreamAttempt(params: {
   const resolvedUpstreamEndpoint = resolveUpstreamEndpoint(
     resolvedUpstreamRequestUrl,
   );
-  const attemptBody = policyRecoveryContext
-    ? buildPolicyRecoveryBody({
-        context: policyRecoveryContext,
-        endpoint,
-        recoveryAttempt: policyRecoveryAttempt,
-        signal: policyRecoverySignal,
-        provider: provider.name,
-        model: model ?? inferModelFromBody(body) ?? "unknown",
-      })
-    : body;
   const reasoningSanitized = foreignReasoningState
-    ? removeReasoningInputItems(attemptBody)
-    : { value: attemptBody, removed: 0 };
+    ? removeReasoningInputItems(body)
+    : { value: body, removed: 0 };
   if (reasoningSanitized.removed > 0) {
     app.log.warn(
       {
@@ -2001,25 +2117,56 @@ async function runUpstreamAttempt(params: {
     model,
     compactFallbackContext,
   });
+  const targetCompactItemType =
+    compactItemTypeOverride ?? getTargetCompactItemType(route);
+  const upstreamCompactRewrite =
+    endpoint === "/v1/responses" || endpoint === "/v1/responses/compact"
+      ? rewriteCompactionItemsForTargetType(
+          fallbackBody,
+          targetCompactItemType,
+        )
+      : { value: fallbackBody, replacements: 0 };
+  const upstreamBaseBody = upstreamCompactRewrite.value;
+  if (upstreamCompactRewrite.replacements > 0) {
+    app.log.info(
+      {
+        apiRequestId,
+        targetCompactItemType,
+        replacements: upstreamCompactRewrite.replacements,
+      },
+      "Normalized compact items for upstream request",
+    );
+  }
+  const attemptBody = policyRecoveryContext
+    ? buildPolicyRecoveryBody({
+        context: policyRecoveryContext,
+        baseBody: upstreamBaseBody,
+        endpoint,
+        recoveryAttempt: policyRecoveryAttempt,
+        signal: policyRecoverySignal,
+        provider: provider.name,
+        model: model ?? inferModelFromBody(upstreamBaseBody) ?? "unknown",
+      })
+    : upstreamBaseBody;
   const transformContext = imageToolBridge
     ? undefined
     : createProxyTransformContext(
         endpoint,
-        fallbackBody,
+        attemptBody,
         resolvedUpstreamEndpoint,
       );
   const upstreamBody = imageToolBridge
     ? buildImageToolBridgeBody(
-        fallbackBody,
+        attemptBody,
         imageToolBridgeSettings?.routingModel ?? "gpt-image-2",
       )
     : multipartRawBody
-      ? fallbackBody
+      ? attemptBody
       : await applyReasoningEffortTransform(
           applyApiKeyFastMode(
             buildUpstreamBody(
               endpoint,
-              fallbackBody,
+              attemptBody,
               provider,
               resolvedUpstreamEndpoint,
               transformContext,
@@ -2187,11 +2334,11 @@ async function runUpstreamAttempt(params: {
         !compactTypeRetryAttempted &&
         isCompactItemTypeCompatibilityError(text)
       ) {
-        const configuredType = getTargetCompactItemType(route);
+        const configuredType = targetCompactItemType;
         const alternateType: CompactItemType =
           configuredType === "compaction" ? "compaction_summary" : "compaction";
         const rewritten = rewriteCompactionItemsForTargetType(
-          fallbackBody,
+          upstreamBaseBody,
           alternateType,
         );
         if (rewritten.replacements > 0) {
@@ -2208,6 +2355,7 @@ async function runUpstreamAttempt(params: {
             ...params,
             body: rewritten.value,
             compactTypeRetryAttempted: true,
+            compactItemTypeOverride: alternateType,
           });
         }
       }
@@ -2218,7 +2366,7 @@ async function runUpstreamAttempt(params: {
         !invalidCompactRetryAttempted &&
         isInvalidEncryptedContentError(text)
       ) {
-        const sanitized = removeMalformedEncryptedInputItems(fallbackBody);
+        const sanitized = removeMalformedEncryptedInputItems(upstreamBaseBody);
         if (sanitized.removed > 0) {
           app.log.warn(
             {
@@ -2237,7 +2385,7 @@ async function runUpstreamAttempt(params: {
 
         const recoveredBody = await recoverInvalidEncryptedContentWithCompact({
           app,
-          body: fallbackBody,
+          body: upstreamBaseBody,
           route,
           apiRequestId,
           userId,
@@ -2254,7 +2402,7 @@ async function runUpstreamAttempt(params: {
           });
         }
 
-        const withoutReasoning = removeReasoningInputItems(fallbackBody);
+        const withoutReasoning = removeReasoningInputItems(upstreamBaseBody);
         if (withoutReasoning.removed > 0) {
           app.log.warn(
             {
@@ -2417,6 +2565,12 @@ async function runUpstreamAttempt(params: {
       }
       effectiveUpstreamResponse = probed.response;
     }
+    if (shouldStream && isCompactionTriggerRequestBody(body)) {
+      effectiveUpstreamResponse = await bufferValidatedCompactionTriggerResponse({
+        response: effectiveUpstreamResponse,
+        logger: app.log,
+      });
+    }
     if (shouldStream && billable && price) {
       activeControllerHandedOff = true;
       await proxyStream({
@@ -2495,6 +2649,17 @@ async function runUpstreamAttempt(params: {
       : contentType.includes("text/event-stream")
         ? parseSseJsonPayloads(rawBody.text)
         : rawBody.text;
+    if (
+      endpoint === "/v1/responses/compact" &&
+      contentType.includes("text/event-stream") &&
+      !sseBufferHasCompletedResponse(rawBody.text)
+    ) {
+      throw new TypeError(
+        `remote compaction stream closed before response.completed${readCompactionFailureMessage(
+          Array.isArray(upstreamResponseBody) ? upstreamResponseBody : [],
+        )}`,
+      );
+    }
     const nonStreamPolicySignal = policyRecoveryContext
       ? detectPolicyBlock({
           statusCode: upstreamResponse.status,
@@ -2533,7 +2698,7 @@ async function runUpstreamAttempt(params: {
         retryableFailure: false,
       };
     }
-    const responseBody = imageToolBridge
+    const transformedResponseBody = imageToolBridge
       ? await buildImageToolBridgeResponse({
           requestModel: model,
           routingModel: imageToolBridgeSettings?.routingModel ?? "gpt-image-2",
@@ -2547,6 +2712,41 @@ async function runUpstreamAttempt(params: {
             : upstreamResponseBody,
           transformContext,
         );
+    const codexCompactionRequest = isCodexCompactionRequest({
+      endpoint,
+      requestBody: body,
+    });
+    const directCodexCompactionRequest = endpoint === "/v1/responses/compact";
+    const normalizedCompactionResponse = directCodexCompactionRequest
+      ? normalizeCodexDirectCompactionResponse(transformedResponseBody)
+      : codexCompactionRequest
+        ? {
+            ...normalizeCodexCompactionOutput(transformedResponseBody),
+            unwrappedResponseEnvelope: false,
+          }
+        : {
+            value: transformedResponseBody,
+            replacements: 0,
+            unwrappedResponseEnvelope: false,
+          };
+    const responseBody = normalizedCompactionResponse.value;
+    if (codexCompactionRequest) {
+      const inspection = validateCodexCompactionOutput(responseBody, {
+        requireTopLevelOutput: directCodexCompactionRequest,
+      });
+      app.log.info(
+        {
+          apiRequestId,
+          outputItemCount: inspection.outputItemCount,
+          compactionOutputItemCount: inspection.compactionOutputItemCount,
+          outputItemTypes: inspection.outputItemTypes,
+          normalizedCompactItems: normalizedCompactionResponse.replacements,
+          unwrappedResponseEnvelope:
+            normalizedCompactionResponse.unwrappedResponseEnvelope,
+        },
+        "Validated remote compaction response before forwarding",
+      );
+    }
     let normalCompactUsageMetadata = isCompactionTriggerRequestBody(body)
       ? createNormalCompactResponseUsage("compact_trigger_completed")
       : undefined;

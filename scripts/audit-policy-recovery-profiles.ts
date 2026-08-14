@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { prisma } from "@gateway/db";
 import {
   buildUnifiedPolicyRecoveryDocument,
   createPolicyRecoverySnapshot,
   defaultPolicyRecoverySettings,
   normalizePolicyRecoverySettings,
+  readPolicyRecoverySettings,
   type PolicyRecoveryLayer,
 } from "../apps/api/src/services/policy-recovery-settings.ts";
 import {
@@ -24,14 +26,41 @@ const customizedLayers: PolicyRecoveryLayer[] = sourceLayers.map((layer, index) 
 }));
 
 const unified = buildUnifiedPolicyRecoveryDocument(customizedLayers);
-for (const layer of customizedLayers) {
-  const exactBlock = `[POLICY_RECOVERY_LAYER:${layer.id}]\n${layer.content.trim()}\n[/POLICY_RECOVERY_LAYER:${layer.id}]`;
+const fixtureLayerProofs: Array<{
+  index: number;
+  id: string;
+  enabledInV1: boolean;
+  bytes: number;
+  sha256: string;
+  extractedBytes: number;
+  extractedSha256: string;
+}> = [];
+let previousBlockEnd = -1;
+for (const [index, layer] of customizedLayers.entries()) {
+  const sourceText = layer.content.trim();
+  const exactBlock = `[POLICY_RECOVERY_LAYER:${layer.id}]\n${sourceText}\n[/POLICY_RECOVERY_LAYER:${layer.id}]`;
+  const extractedSource = extractUnifiedLayer(unified, layer.id);
   assert.ok(unified.includes(`[PROFILE_FIXTURE:${layer.id}]`), `V2 omitted ${layer.id}`);
   assert.equal(countOccurrences(unified, exactBlock), 1, `V2 exact source block mismatch for ${layer.id}`);
+  assert.equal(extractedSource, sourceText, `V2 altered source text for ${layer.id}`);
+  assert.equal(Buffer.byteLength(extractedSource, "utf8"), Buffer.byteLength(sourceText, "utf8"));
+  assert.equal(sha256(extractedSource), sha256(sourceText));
+  const blockStart = unified.indexOf(exactBlock);
+  assert.ok(blockStart > previousBlockEnd, `V2 source order mismatch for ${layer.id}`);
+  previousBlockEnd = blockStart + exactBlock.length;
   assert.ok(unified.includes(`v1_enabled_snapshot: ${String(layer.enabled)}`), `V2 manifest missing ${layer.id} V1 state`);
   assert.ok(unified.includes("v2_included: true"), `V2 manifest missing inclusion state for ${layer.id}`);
-  assert.ok(unified.includes(`bytes: ${Buffer.byteLength(layer.content.trim(), "utf8")}`), `V2 manifest byte count mismatch for ${layer.id}`);
-  assert.ok(unified.includes(`sha256: ${sha256(layer.content.trim())}`), `V2 manifest hash mismatch for ${layer.id}`);
+  assert.ok(unified.includes(`bytes: ${Buffer.byteLength(sourceText, "utf8")}`), `V2 manifest byte count mismatch for ${layer.id}`);
+  assert.ok(unified.includes(`sha256: ${sha256(sourceText)}`), `V2 manifest hash mismatch for ${layer.id}`);
+  fixtureLayerProofs.push({
+    index: index + 1,
+    id: layer.id,
+    enabledInV1: layer.enabled,
+    bytes: Buffer.byteLength(sourceText, "utf8"),
+    sha256: sha256(sourceText),
+    extractedBytes: Buffer.byteLength(extractedSource, "utf8"),
+    extractedSha256: sha256(extractedSource),
+  });
 }
 assert.equal(countOccurrences(unified, "v2_included: true"), customizedLayers.length);
 assert.equal(countOccurrences(unified, "[UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]"), 1);
@@ -66,6 +95,14 @@ const legacy = normalizePolicyRecoverySettings({
 });
 assert.equal(legacy.activeProfile, "layered-v1", "legacy settings must remain V1");
 assert.ok(legacy.unifiedDocument.includes(`[PROFILE_FIXTURE:${disabledLayer.id}]`), "legacy migration lost V2 source");
+
+const tampered = normalizePolicyRecoverySettings({
+  ...defaultPolicyRecoverySettings,
+  layers: customizedLayers,
+  activeProfile: "unified-v2",
+  unifiedDocument: "TAMPERED_V2_DOCUMENT",
+});
+assert.equal(tampered.unifiedDocument, unified, "server accepted a rewritten V2 document");
 
 const v1Context = createPolicyRecoveryContext({ model: "fixture", input: "hello" }, v1);
 const v2Context = createPolicyRecoveryContext({ model: "fixture", input: "hello" }, v2);
@@ -189,16 +226,76 @@ assert.notEqual(v1Body.instructions, v2Body.instructions);
 assert.ok(!String(v1Body.instructions).includes("[UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]"));
 assert.ok(String(v2Body.instructions).includes("[UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]"));
 
-console.log(JSON.stringify({
-  ok: true,
-  layerCount: customizedLayers.length,
-  v1Bytes: v1.mergedBytes,
-  v2Bytes: v2.mergedBytes,
-  v1Sha256: v1.mergedSha256,
-  v2Sha256: v2.mergedSha256,
-  legacyProfile: legacy.activeProfile,
-  disabledLayerIncludedInV2: v2.baseInstructions.includes(`[PROFILE_FIXTURE:${disabledLayer.id}]`),
-}, null, 2));
+void reportPersistedProof()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
+
+async function reportPersistedProof() {
+  const persistedSetting = await prisma.systemSetting.findUnique({
+    where: { key: "policy_recovery_settings" },
+    select: { value: true, updatedAt: true },
+  });
+  assert.ok(persistedSetting, "persisted policy recovery settings missing");
+  const persistedRaw = JSON.parse(persistedSetting.value) as Record<string, unknown>;
+  const persisted = await readPolicyRecoverySettings();
+  const rebuiltPersistedUnified = buildUnifiedPolicyRecoveryDocument(
+    persisted.layers,
+  );
+  assert.equal(
+    persistedRaw.unifiedDocument,
+    rebuiltPersistedUnified,
+    "persisted V2 document differs from the current V1 source layers",
+  );
+  assert.equal(persisted.unifiedDocument, rebuiltPersistedUnified);
+  const persistedLayerProofs = persisted.layers.map((layer, index) => {
+    const sourceText = layer.content.trim();
+    const extractedSource = extractUnifiedLayer(
+      rebuiltPersistedUnified,
+      layer.id,
+    );
+    assert.equal(extractedSource, sourceText, `persisted V2 altered ${layer.id}`);
+    assert.equal(sha256(extractedSource), sha256(sourceText));
+    return {
+      index: index + 1,
+      id: layer.id,
+      source: layer.source,
+      enabledInV1: layer.enabled,
+      bytes: Buffer.byteLength(sourceText, "utf8"),
+      sha256: sha256(sourceText),
+      extractedBytes: Buffer.byteLength(extractedSource, "utf8"),
+      extractedSha256: sha256(extractedSource),
+    };
+  });
+
+  console.log(JSON.stringify({
+    ok: true,
+    layerCount: customizedLayers.length,
+    v1Bytes: v1.mergedBytes,
+    v2Bytes: v2.mergedBytes,
+    v1Sha256: v1.mergedSha256,
+    v2Sha256: v2.mergedSha256,
+    legacyProfile: legacy.activeProfile,
+    disabledLayerIncludedInV2: v2.baseInstructions.includes(`[PROFILE_FIXTURE:${disabledLayer.id}]`),
+    tamperedV2Rejected: tampered.unifiedDocument === unified,
+    fixtureLayerProofs,
+    persisted: {
+      updatedAt: persistedSetting.updatedAt,
+      activeProfile: persisted.activeProfile,
+      masterEnabled: persisted.masterEnabled,
+      layerCount: persisted.layers.length,
+      unifiedBytes: Buffer.byteLength(rebuiltPersistedUnified, "utf8"),
+      unifiedSha256: sha256(rebuiltPersistedUnified),
+      rawDocumentMatchesRebuild:
+        persistedRaw.unifiedDocument === rebuiltPersistedUnified,
+      layerProofs: persistedLayerProofs,
+    },
+  }, null, 2));
+}
 
 function countOccurrences(value: string, needle: string) {
   if (!needle) return 0;
@@ -207,4 +304,17 @@ function countOccurrences(value: string, needle: string) {
 
 function sha256(value: string) {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function extractUnifiedLayer(document: string, layerId: string) {
+  const begin = `[POLICY_RECOVERY_LAYER:${layerId}]\n`;
+  const end = `\n[/POLICY_RECOVERY_LAYER:${layerId}]`;
+  const beginIndex = document.indexOf(begin);
+  assert.ok(beginIndex >= 0, `V2 missing start marker for ${layerId}`);
+  const contentStart = beginIndex + begin.length;
+  const endIndex = document.indexOf(end, contentStart);
+  assert.ok(endIndex >= 0, `V2 missing end marker for ${layerId}`);
+  assert.equal(document.indexOf(begin, contentStart), -1, `V2 duplicated start marker for ${layerId}`);
+  assert.equal(document.indexOf(end, endIndex + end.length), -1, `V2 duplicated end marker for ${layerId}`);
+  return document.slice(contentStart, endIndex);
 }

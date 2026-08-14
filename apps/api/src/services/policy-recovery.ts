@@ -1,5 +1,8 @@
 import type { PolicyRecoverySnapshot } from "./policy-recovery-settings.js";
-import type { ProxyBody } from "./proxy-request-utils.js";
+import {
+  getForwardableUpstreamResponseHeaders,
+  type ProxyBody,
+} from "./proxy-request-utils.js";
 
 export type PolicyBlockSignal = {
   source: "status" | "header" | "json" | "sse";
@@ -42,7 +45,6 @@ export type PolicyRecoveryContext = {
 
 const supportedEndpoints = new Set([
   "/v1/responses",
-  "/v1/responses/compact",
   "/v1/chat/completions",
 ]);
 
@@ -133,6 +135,7 @@ export function createPolicyRecoveryContext(
 
 export function buildPolicyRecoveryBody(params: {
   context: PolicyRecoveryContext;
+  baseBody?: ProxyBody;
   endpoint: string;
   recoveryAttempt: number;
   signal?: PolicyBlockSignal | null;
@@ -141,7 +144,7 @@ export function buildPolicyRecoveryBody(params: {
   chatInstructionRole?: "developer" | "system";
 }) {
   const body = injectPolicyInstructions(
-    cloneBody(params.context.originalBody),
+    cloneBody(params.baseBody ?? params.context.originalBody),
     params.endpoint,
     params.context.settings.baseInstructions,
     params.chatInstructionRole ?? "developer",
@@ -272,16 +275,11 @@ export function sanitizePolicyResponseHeaders(headers: Headers) {
 }
 
 function sanitizeReconstructedResponseHeaders(headers: Headers) {
-  const sanitized = sanitizePolicyResponseHeaders(headers);
-  for (const name of [
-    "content-length",
-    "content-encoding",
-    "transfer-encoding",
-    "connection",
-  ]) {
-    sanitized.delete(name);
-  }
-  return sanitized;
+  return new Headers(
+    getForwardableUpstreamResponseHeaders(
+      sanitizePolicyResponseHeaders(headers),
+    ),
+  );
 }
 
 export function sanitizePolicyResponseBody(value: unknown): unknown {

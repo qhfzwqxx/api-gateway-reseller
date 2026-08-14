@@ -2071,17 +2071,30 @@ export async function safeReadUpstreamBody(
   return { json: text, text };
 }
 
+const unsafeForwardedUpstreamResponseHeaders = new Set([
+  "connection",
+  "content-encoding",
+  "content-length",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
 export function getForwardableUpstreamResponseHeaders(headers: Headers) {
+  const removedHeaders = new Set(unsafeForwardedUpstreamResponseHeaders);
+  for (const name of headers.get("connection")?.split(",") ?? []) {
+    const normalizedName = name.trim().toLowerCase();
+    if (normalizedName) removedHeaders.add(normalizedName);
+  }
+
   const entries: Array<[string, string]> = [];
   headers.forEach((value, name) => {
-    if (
-      ![
-        "content-length",
-        "content-encoding",
-        "transfer-encoding",
-        "connection",
-      ].includes(name.toLowerCase())
-    ) {
+    if (!removedHeaders.has(name.toLowerCase())) {
       entries.push([name, value]);
     }
   });

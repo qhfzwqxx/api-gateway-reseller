@@ -67,8 +67,6 @@ export function collectEncryptedContents(value: unknown) {
 }
 
 export function extractCompactionSummaryItem(value: unknown) {
-  let fallback: string | null = null;
-  let fallbackItem: unknown = null;
   let summaryEncryptedContent: string | null = null;
   let summaryItem: unknown = null;
 
@@ -78,30 +76,22 @@ export function extractCompactionSummaryItem(value: unknown) {
       return;
     }
 
-    if (fallback === null) {
-      fallback = encryptedContent;
-      fallbackItem = record;
-    }
     if (
       summaryEncryptedContent === null &&
-      (record.type === "compaction_summary" ||
-        record.type === "response.compaction_summary" ||
-        record.type === "compaction" ||
-        record.object === "compaction_summary")
+      isCompactionItem(record)
     ) {
       summaryEncryptedContent = encryptedContent;
       summaryItem = record;
     }
   });
 
-  const encryptedContent = summaryEncryptedContent ?? fallback;
-  if (!encryptedContent) {
+  if (!summaryEncryptedContent) {
     return null;
   }
 
   return {
-    encryptedContent,
-    item: cloneJson(summaryItem ?? fallbackItem),
+    encryptedContent: summaryEncryptedContent,
+    item: cloneJson(summaryItem),
   };
 }
 
@@ -110,7 +100,11 @@ export function extractEncryptedItems(value: unknown) {
 
   visitJson(value, (record) => {
     const encryptedContent = record.encrypted_content;
-    if (typeof encryptedContent === "string" && encryptedContent) {
+    if (
+      typeof encryptedContent === "string" &&
+      encryptedContent &&
+      isCompactionItem(record)
+    ) {
       items.push({
         encryptedContent,
         item: cloneJson(record),
@@ -119,6 +113,15 @@ export function extractEncryptedItems(value: unknown) {
   });
 
   return items;
+}
+
+function isCompactionItem(record: Record<string, unknown>) {
+  return (
+    record.type === "compaction_summary" ||
+    record.type === "response.compaction_summary" ||
+    record.type === "compaction" ||
+    record.object === "compaction_summary"
+  );
 }
 
 export function removeMalformedEncryptedInputItems<T>(value: T) {
@@ -250,10 +253,13 @@ export async function saveCompactCache(params: {
     return { saved: false as const, reason: "request_body_too_large" };
   }
 
-  const encryptedContents = collectEncryptedContents(params.responseBody);
-  if (encryptedContents.length === 0) {
+  const compactItems = extractEncryptedItems(params.responseBody);
+  if (compactItems.length === 0) {
     return { saved: false as const, reason: "no_encrypted_content" };
   }
+  const encryptedContents = [
+    ...new Set(compactItems.map((item) => item.encryptedContent)),
+  ];
 
   const encryptedContentHashes = encryptedContents.map(hashEncryptedContent);
   const compactCacheId = randomUUID();

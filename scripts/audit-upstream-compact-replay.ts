@@ -36,13 +36,20 @@ const sampleRequestId =
   process.env.COMPACT_REPLAY_SAMPLE_REQUEST_ID ?? "cmrsq2gkw004f7zc914k6074o";
 const timeoutMs = 45_000;
 const concurrency = 4;
+const sourceOnly = process.env.COMPACT_REPLAY_SOURCE_ONLY === "1";
 
 async function main() {
   const sample = await loadReplaySample();
   const providers = await prisma.upstreamProvider.findMany({
+    where: sourceOnly ? { name: sample.sourceProvider } : undefined,
     include: {
       keys: {
-        where: { status: "ACTIVE" },
+        where: {
+          status: "ACTIVE",
+          ...(sourceOnly && sample.sourceKeyId
+            ? { id: sample.sourceKeyId }
+            : {}),
+        },
         orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       },
     },
@@ -100,6 +107,7 @@ async function main() {
         "try active keys until configured or alternate compact type succeeds; all keys are tried when the provider fails",
       timeoutMs,
       concurrency,
+      sourceOnly,
     },
     summary: Object.fromEntries(
       [...new Set(results.map((result) => result.classification))].map(
@@ -126,6 +134,7 @@ async function loadReplaySample() {
     select: {
       model: true,
       upstreamProvider: true,
+      upstreamProviderKeyId: true,
       requestBody: true,
     },
   });
@@ -160,6 +169,7 @@ async function loadReplaySample() {
   return {
     model: request.model,
     sourceProvider: request.upstreamProvider,
+    sourceKeyId: request.upstreamProviderKeyId,
     compactItem: {
       type: String(compactItem.type),
       encrypted_content: compactItem.encrypted_content,

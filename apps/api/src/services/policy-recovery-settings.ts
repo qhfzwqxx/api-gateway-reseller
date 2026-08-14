@@ -174,6 +174,7 @@ export function normalizePolicyRecoverySettings(value: unknown): PolicyRecoveryS
   const input = isRecord(value) ? value : {};
   const legacyBaseInstructions = typeof input.baseInstructions === "string" ? input.baseInstructions.trim() : "";
   const layers = normalizeLayers(input.layers, legacyBaseInstructions);
+  const unifiedDocument = buildUnifiedPolicyRecoveryDocument(layers);
   const activeProfile: PolicyRecoveryProfileId = input.activeProfile === "unified-v2"
     ? "unified-v2"
     : "layered-v1";
@@ -181,11 +182,7 @@ export function normalizePolicyRecoverySettings(value: unknown): PolicyRecoveryS
     masterEnabled: input.masterEnabled === true,
     activeProfile,
     layers,
-    unifiedDocument: normalizeInstructions(
-      input.unifiedDocument,
-      buildUnifiedPolicyRecoveryDocument(layers),
-      maxPolicyRecoveryUnifiedBytes,
-    ),
+    unifiedDocument,
     retryInstructionsTemplate: normalizeInstructions(
       input.retryInstructionsTemplate === legacyPolicyRecoveryRetryInstructionsTemplate
         ? exeParityPolicyRecoveryRetryInstructionsTemplate

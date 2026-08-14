@@ -638,8 +638,8 @@ function UnifiedProfileEditor({
               </span>
             </div>
             <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-              文档保留 V1 全部源层原文，包括当前停用层。修改文本不会自动同步
-              V1；重新生成会覆盖 V2 草稿，保存配置后才持久化。
+              文档保留 V1 全部源层原文，包括当前停用层。V2 由服务端按
+              V1 自动生成，只允许增加来源清单与边界，不允许删减或改写原文。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -665,9 +665,7 @@ function UnifiedProfileEditor({
         </div>
         <textarea
           value={draft.unifiedDocument}
-          onChange={(event) =>
-            setDraft({ ...draft, unifiedDocument: event.target.value })
-          }
+          readOnly
           className={`${textareaClass} mt-5 min-h-[680px] font-mono text-xs leading-5`}
           aria-label="V2 统一完整文档内容"
         />
@@ -678,7 +676,7 @@ function UnifiedProfileEditor({
             {formatBytes(bytes)} / {formatBytes(maxBytes)} · 约{" "}
             {Math.ceil(bytes / 4).toLocaleString()} tokens
           </span>
-          <span>当前 SHA-256 将在保存时重新计算</span>
+          <span>保存时服务端会按当前 V1 全部源层重新生成并计算 SHA-256</span>
         </div>
       </section>
       <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">

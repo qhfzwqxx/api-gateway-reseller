@@ -5,7 +5,10 @@ import {
   manualTerminateStatusCode,
 } from "./active-api-requests.js";
 import { readPendingAutoTerminateSettings } from "./pending-auto-terminate-settings.js";
-import { isProtectedCompactRequest } from "./compact-request-utils.js";
+import {
+  isProtectedCompactRequest,
+  isProtectedPolicyRecoveryRequest,
+} from "./compact-request-utils.js";
 import { redis } from "../lib/redis.js";
 import { recordAutoTerminatedIp } from "./temporary-ip-notice-ban.js";
 import { markRequestFailed } from "./billing.js";
@@ -40,6 +43,7 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
       endpoint: true,
       requestBody: true,
       responseUsage: true,
+      policyRecoveryAudit: true,
     },
     orderBy: {
       createdAt: "asc",
@@ -61,6 +65,12 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
         requestBody: pendingRequest.requestBody,
         responseUsage: pendingRequest.responseUsage,
       })
+    ) {
+      continue;
+    }
+
+    if (
+      isProtectedPolicyRecoveryRequest(pendingRequest.policyRecoveryAudit)
     ) {
       continue;
     }

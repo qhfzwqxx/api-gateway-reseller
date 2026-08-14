@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -8,11 +8,14 @@ import {
   buildPolicyRecoveryBody,
   createPolicyRecoveryContext,
   detectPolicyBlock,
+  policyRecoveryExhaustedStatusCode,
   probePolicyRecoveryStream,
   sanitizePolicyResponseBody,
   sanitizePolicyResponseHeaders,
   sanitizePolicySseText,
+  supportsPolicyRecovery,
 } from "../apps/api/src/services/policy-recovery.ts";
+import { shouldBypassPolicyRecoveryForCompact } from "../apps/api/src/services/compact-request-utils.ts";
 import {
   defaultPolicyRecoverySettings,
   type PolicyRecoverySnapshot,
@@ -25,6 +28,61 @@ const differences: unknown[] = [];
 const buf = (value: unknown) => Buffer.from(typeof value === "string" ? value : JSON.stringify(value));
 
 async function main() {
+const exeSource = await readFile(
+  join(process.cwd(), "scripts/fixtures/leila-restored-1.0.2/context-proxy.js"),
+  "utf8",
+);
+const exeMaxRecoveries = readSourceInteger(exeSource, "MAX_POLICY_RECOVERIES");
+const exeSseProbeBytes = readSourceExpressionInteger(
+  exeSource,
+  "MAX_SSE_PROBE_BYTES",
+);
+const exeInspectableBytes = readSourceExpressionInteger(
+  exeSource,
+  "MAX_INSPECTED_RESPONSE_BYTES",
+);
+if (exeMaxRecoveries !== defaultPolicyRecoverySettings.maxRecoveries) {
+  differences.push({
+    kind: "state-machine",
+    name: "max-recoveries",
+    exe: exeMaxRecoveries,
+    gateway: defaultPolicyRecoverySettings.maxRecoveries,
+  });
+}
+if (exeSseProbeBytes !== defaultPolicyRecoverySettings.sseProbeBytes) {
+  differences.push({
+    kind: "state-machine",
+    name: "sse-probe-bytes",
+    exe: exeSseProbeBytes,
+    gateway: defaultPolicyRecoverySettings.sseProbeBytes,
+  });
+}
+if (
+  exeInspectableBytes !==
+  defaultPolicyRecoverySettings.maxInspectableResponseBytes
+) {
+  differences.push({
+    kind: "state-machine",
+    name: "inspectable-response-bytes",
+    exe: exeInspectableBytes,
+    gateway: defaultPolicyRecoverySettings.maxInspectableResponseBytes,
+  });
+}
+const compactRuntimeBypassed = shouldBypassPolicyRecoveryForCompact({
+  endpoint: "/v1/responses",
+  requestBody: { input: [{ type: "compaction_trigger" }] },
+});
+const compactEndpointBypassed = shouldBypassPolicyRecoveryForCompact({
+  endpoint: "/v1/responses/compact",
+});
+if (!compactRuntimeBypassed || !compactEndpointBypassed) {
+  differences.push({
+    kind: "compact-runtime",
+    name: "gateway-compact-bypass",
+    exe: true,
+    gateway: { compactRuntimeBypassed, compactEndpointBypassed },
+  });
+}
 const jsonCases = [
   { name: "codex header", status: 403, headers: { "x-codex-error-info": "cyberPolicy" }, body: { error: { message: "blocked" } } },
   { name: "trusted header", status: 403, headers: { "x-verification-recommendation": "trusted_access_for_cyber" }, body: {} },
@@ -120,6 +178,7 @@ const authorization = {
 };
 const injectionCases = [
   { endpoint: "/v1/responses", body: { model: "fixture-model", input: "hi", instructions: "original" } },
+  { endpoint: "/v1/responses", body: { model: "fixture-model", input: [{ role: "user", content: "hi" }, { type: "compaction_trigger" }], instructions: "original" } },
   { endpoint: "/v1/responses/compact", body: { model: "fixture-model", input: "hi", instructions: ["original"] } },
   { endpoint: "/v1/chat/completions", body: { model: "fixture-model", messages: [{ role: "user", content: "hi" }] } },
 ];
@@ -145,6 +204,12 @@ for (const item of injectionCases) {
       model: "fixture-model",
     });
     compareValue("retry-payload", `${item.endpoint}#${attempt}`, exeBody, gatewayBody);
+    compareValue(
+      "original-request-immutable",
+      `${item.endpoint}#${attempt}`,
+      item.body,
+      context.originalBody,
+    );
   }
 }
 
@@ -191,6 +256,45 @@ console.log(JSON.stringify({
     payloadStates: injectionCases.length * 4,
     sseProbeStates: 5,
   },
+  stateMachine: {
+    maxRecoveries: {
+      exe: exeMaxRecoveries,
+      gateway: defaultPolicyRecoverySettings.maxRecoveries,
+      proven: exeMaxRecoveries === defaultPolicyRecoverySettings.maxRecoveries,
+    },
+    sseProbeBytes: {
+      exe: exeSseProbeBytes,
+      gateway: defaultPolicyRecoverySettings.sseProbeBytes,
+      proven: exeSseProbeBytes === defaultPolicyRecoverySettings.sseProbeBytes,
+    },
+    maxInspectableResponseBytes: {
+      exe: exeInspectableBytes,
+      gateway: defaultPolicyRecoverySettings.maxInspectableResponseBytes,
+      proven:
+        exeInspectableBytes ===
+        defaultPolicyRecoverySettings.maxInspectableResponseBytes,
+    },
+    exhaustionStatusCode: {
+      exe: 502,
+      gateway: policyRecoveryExhaustedStatusCode,
+      proven: policyRecoveryExhaustedStatusCode === 502,
+    },
+    originalRequestRebuild: "proven across initial payload plus three retries",
+    retryInstructionReplacement: "proven across responses, compact builder, and chat payloads",
+    compactRuntime: {
+      exeSupportsCompactEndpoint: exeSource.includes('"/v1/responses/compact"'),
+      gatewaySupportsCompactEndpoint:
+        supportsPolicyRecovery("/v1/responses/compact", "POST", false),
+      gatewayBypassesCompactionTrigger: compactRuntimeBypassed,
+      intentionalDifference:
+        "gateway bypasses policy recovery for compact protocol requests to preserve the compaction output contract",
+    },
+    notProven: [
+      "EXE network retry timing and gateway channel failover are different architectures",
+      "EXE forceModel behavior is not a gateway policy-recovery responsibility",
+      "static parity does not prove every upstream provider's runtime behavior",
+    ],
+  },
   differences,
 }, null, 2));
 if (differences.length > 0) process.exitCode = 1;
@@ -213,6 +317,22 @@ function compareValue(kind: string, name: string, exeValue: unknown, gatewayValu
 
 function sortRecord(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function readSourceInteger(source: string, name: string) {
+  const match = new RegExp(`const ${name} = (\\d+);`, "u").exec(source);
+  if (!match?.[1]) {
+    throw new Error(`Missing ${name} in EXE fixture`);
+  }
+  return Number(match[1]);
+}
+
+function readSourceExpressionInteger(source: string, name: string) {
+  const match = new RegExp(`const ${name} = ([^;]+);`, "u").exec(source);
+  if (!match?.[1] || !/^[\d\s*+()-]+$/u.test(match[1])) {
+    throw new Error(`Missing numeric ${name} in EXE fixture`);
+  }
+  return Function(`"use strict"; return (${match[1]});`)() as number;
 }
 
 async function probeExeStream(managerInstance: any, chunks: string[]) {

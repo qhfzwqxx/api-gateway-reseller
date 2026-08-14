@@ -33,13 +33,20 @@ const sampleRequestId =
   process.env.COMPACT_REPLAY_SAMPLE_REQUEST_ID ?? "cmrsq2gkw004f7zc914k6074o";
 const timeoutMs = 45_000;
 const concurrency = 4;
+const sourceOnly = process.env.COMPACT_REPLAY_SOURCE_ONLY === "1";
 
 async function main() {
   const sample = await loadSample();
   const providers = await prisma.upstreamProvider.findMany({
+    where: sourceOnly ? { name: sample.sourceProvider } : undefined,
     include: {
       keys: {
-        where: { status: "ACTIVE" },
+        where: {
+          status: "ACTIVE",
+          ...(sourceOnly && sample.sourceKeyId
+            ? { id: sample.sourceKeyId }
+            : {}),
+        },
         orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       },
     },
@@ -90,6 +97,7 @@ async function main() {
       sourceCompactType: sample.sourceCompactType,
       encryptedContentLength: sample.encryptedContentLength,
       mode: "exact original request body; only compact item type is rewritten",
+      sourceOnly,
     },
     summary: Object.fromEntries(
       [...new Set(results.map((result) => result.classification))].map(
@@ -112,12 +120,27 @@ async function main() {
 async function loadSample() {
   const row = await prisma.apiRequest.findUnique({
     where: { id: sampleRequestId },
-    select: { model: true, upstreamProvider: true, requestBody: true },
+    select: {
+      model: true,
+      upstreamProvider: true,
+      upstreamProviderKeyId: true,
+      requestBody: true,
+    },
   });
   if (!row || !isRecord(row.requestBody) || !Array.isArray(row.requestBody.input)) {
     throw new Error("exact replay sample request body is unavailable");
   }
   const input = row.requestBody.input as unknown[];
+  if (input.some(isLogTruncationMarker)) {
+    throw new Error(
+      "exact replay sample was truncated for request logging; use the standard compact replay audit",
+    );
+  }
+  if (containsLogRedaction(row.requestBody)) {
+    throw new Error(
+      "exact replay sample was redacted for request logging; use the standard compact replay audit",
+    );
+  }
   const compactIndex = input.findIndex(
     (item) =>
       isRecord(item) &&
@@ -132,6 +155,7 @@ async function loadSample() {
   return {
     model: row.model,
     sourceProvider: row.upstreamProvider,
+    sourceKeyId: row.upstreamProviderKeyId,
     body: row.requestBody as JsonRecord,
     compactIndex,
     sourceCompactType: String(item.type),
@@ -355,6 +379,33 @@ function visit(value: unknown, callback: (record: JsonRecord) => void) {
 
 function isRecord(value: unknown): value is JsonRecord {
   return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function isLogTruncationMarker(value: unknown) {
+  return (
+    isRecord(value) &&
+    value.reason === "log_array_truncated" &&
+    typeof value.omittedItems === "number"
+  );
+}
+
+function containsLogRedaction(value: unknown): boolean {
+  if (typeof value === "string") {
+    return (
+      /^\[(?:REDACTED|TRUNCATED)_/u.test(value) ||
+      /\.\.\.\[truncated \d+ chars\]$/u.test(value)
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsLogRedaction);
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    isLogTruncationMarker(value) ||
+    Object.values(value).some(containsLogRedaction)
+  );
 }
 
 function sanitizeText(value: string) {
