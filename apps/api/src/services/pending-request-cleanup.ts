@@ -5,6 +5,7 @@ import {
   manualTerminateStatusCode,
 } from "./active-api-requests.js";
 import { readPendingAutoTerminateSettings } from "./pending-auto-terminate-settings.js";
+import { isProtectedCompactRequest } from "./compact-request-utils.js";
 import { redis } from "../lib/redis.js";
 import { recordAutoTerminatedIp } from "./temporary-ip-notice-ban.js";
 import { markRequestFailed } from "./billing.js";
@@ -37,6 +38,7 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
       createdAt: true,
       clientIp: true,
       endpoint: true,
+      requestBody: true,
       responseUsage: true,
     },
     orderBy: {
@@ -53,7 +55,13 @@ export async function cleanupStalePendingRequests(olderThanMs?: number) {
       continue;
     }
 
-    if (isProtectedCompactRequest(pendingRequest.responseUsage)) {
+    if (
+      isProtectedCompactRequest({
+        endpoint: pendingRequest.endpoint,
+        requestBody: pendingRequest.requestBody,
+        responseUsage: pendingRequest.responseUsage,
+      })
+    ) {
       continue;
     }
 
@@ -87,23 +95,6 @@ function isProtectedImageRequest(endpoint: string) {
   return (
     endpoint === "/v1/images/generations" ||
     endpoint === "/v1/images/edits"
-  );
-}
-
-function isProtectedCompactRequest(responseUsage: unknown) {
-  if (
-    !responseUsage ||
-    typeof responseUsage !== "object" ||
-    Array.isArray(responseUsage)
-  ) {
-    return false;
-  }
-
-  const record = responseUsage as Record<string, unknown>;
-  return (
-    record.gatewayCompactFallback === true ||
-    record.gatewayCompactKind === "normal" ||
-    record.gatewayCompactKind === "fallback"
   );
 }
 

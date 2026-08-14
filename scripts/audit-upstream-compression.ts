@@ -11,6 +11,10 @@ import {
   safeReadUpstreamBody,
 } from "../apps/api/src/services/proxy-request-utils.ts";
 import {
+  isProtectedCompactRequest,
+  prepareCompactEndpointRequestBody,
+} from "../apps/api/src/services/compact-request-utils.ts";
+import {
   buildPolicyRecoveryBody,
   createPolicyRecoveryContext,
   probePolicyRecoveryStream,
@@ -22,9 +26,9 @@ import {
   defaultPolicyRecoverySettings,
 } from "../apps/api/src/services/policy-recovery-settings.ts";
 
-type Encoding = "gzip" | "deflate" | "br";
+type Encoding = "identity" | "gzip" | "deflate" | "br";
 
-const encodings: Encoding[] = ["gzip", "deflate", "br"];
+const encodings: Encoding[] = ["identity", "gzip", "deflate", "br"];
 const jsonFixture = {
   ok: true,
   message: "压缩响应已正确解码",
@@ -38,6 +42,10 @@ const compactRequestFixture = {
     {
       type: "compaction_summary",
       encrypted_content: "fixture-previous-encrypted-content",
+    },
+    {
+      type: "compaction_trigger",
+      encrypted_content: "fixture-trigger-encrypted-content",
     },
   ],
   instructions: ["caller-original-instructions"],
@@ -86,6 +94,13 @@ const server = createServer((request, response) => {
   }
   const body = path.startsWith("/compact-json/")
     ? JSON.stringify(compactResponseFixture)
+    : path.startsWith("/error/")
+      ? JSON.stringify({
+          error: {
+            message: "compressed upstream fixture error",
+            type: "upstream_fixture_error",
+          },
+        })
     : path.startsWith("/json/")
       ? JSON.stringify(jsonFixture)
     : path.startsWith("/tiny/")
@@ -96,11 +111,11 @@ const server = createServer((request, response) => {
           ? completedSseFixture
           : JSON.stringify({ payload: "x".repeat(256 * 1024) });
   const compressed = compress(encoding, Buffer.from(body, "utf8"));
-  response.writeHead(200, {
+  response.writeHead(path.startsWith("/error/") ? 422 : 200, {
     "content-type": path.includes("sse")
       ? "text/event-stream"
       : "application/json",
-    "content-encoding": encoding,
+    ...(encoding === "identity" ? {} : { "content-encoding": encoding }),
     "content-length": String(compressed.byteLength),
     "x-compression-fixture": encoding,
   });
@@ -124,7 +139,10 @@ async function main() {
       const jsonResponse = await fetch(`${origin}/json/${encoding}`, {
         headers: { "Accept-Encoding": "identity" },
       });
-      assert.equal(jsonResponse.headers.get("content-encoding"), encoding);
+      assert.equal(
+        jsonResponse.headers.get("content-encoding"),
+        encoding === "identity" ? null : encoding,
+      );
       const jsonBody = await safeReadUpstreamBody(jsonResponse, { maxBytes: 1024 * 1024 });
       assert.ok(!("error" in jsonBody), `${encoding} JSON response failed to decode`);
       assert.deepEqual(jsonBody.json, jsonFixture);
@@ -139,7 +157,10 @@ async function main() {
       const tinyResponse = await fetch(`${origin}/tiny/${encoding}`, {
         headers: { "Accept-Encoding": "identity" },
       });
-      assert.ok(Number(tinyResponse.headers.get("content-length")) > 2);
+      assert.equal(
+        Number(tinyResponse.headers.get("content-length")) > 2,
+        encoding !== "identity",
+      );
       const tinyBody = await safeReadUpstreamBody(tinyResponse, { maxBytes: 2 });
       assert.ok(!("error" in tinyBody), `${encoding} encoded length was treated as decoded length`);
       assert.equal(tinyBody.text, "ok");
@@ -161,6 +182,21 @@ async function main() {
         readCompactEncryptedContent(sanitizedCompactBody),
         compactEncryptedContent,
       );
+
+      const errorResponse = await fetch(`${origin}/error/${encoding}`, {
+        headers: { "Accept-Encoding": "identity" },
+      });
+      assert.equal(errorResponse.status, 422);
+      const errorBody = await safeReadUpstreamBody(errorResponse, {
+        maxBytes: 1024 * 1024,
+      });
+      assert.ok(!("error" in errorBody), `${encoding} error response failed to decode`);
+      assert.deepEqual(errorBody.json, {
+        error: {
+          message: "compressed upstream fixture error",
+          type: "upstream_fixture_error",
+        },
+      });
 
       const policyResponse = await fetch(`${origin}/policy-sse/${encoding}`, {
         headers: { "Accept-Encoding": "identity" },
@@ -196,19 +232,38 @@ async function main() {
     const invalidBody = await safeReadUpstreamBody(invalidResponse, { maxBytes: 1024 * 1024 });
     assert.ok("error" in invalidBody, "invalid gzip response was accepted");
 
+    const hopByHopHeaders = Object.fromEntries(
+      getForwardableUpstreamResponseHeaders(
+        new Headers({
+          connection: "keep-alive",
+          "content-encoding": "gzip",
+          "content-length": "10",
+          "transfer-encoding": "chunked",
+          "x-preserved": "yes",
+        }),
+      ),
+    );
+    assert.deepEqual(hopByHopHeaders, { "x-preserved": "yes" });
+
     console.log(JSON.stringify({
       ok: true,
       encodings,
       jsonDecodeCases: encodings.length,
       encodedLengthCases: encodings.length,
       compressedCompactJsonCases: encodings.length,
+      compressedErrorResponseCases: encodings.length,
       sanitizedCompactItemCases: encodings.length,
       compressedSsePolicyCases: encodings.length,
       compressedSseCompletionCases: encodings.length,
       decodedSizeLimitCases: encodings.length,
       invalidEncodingCases: 1,
       policyCompactPayloadStates,
-      removedHeaders: ["content-encoding", "content-length"],
+      removedHeaders: [
+        "connection",
+        "content-encoding",
+        "content-length",
+        "transfer-encoding",
+      ],
     }, null, 2));
   } finally {
     server.close();
@@ -228,6 +283,44 @@ function assertPolicyCompactPayloadChain() {
     settings,
   );
   const originalBody = structuredClone(context.originalBody);
+  assert.equal(
+    isProtectedCompactRequest({
+      endpoint: "/v1/responses",
+      requestBody: compactRequestFixture,
+    }),
+    true,
+  );
+  assert.equal(
+    isProtectedCompactRequest({
+      endpoint: "/v1/responses",
+      requestBody: { input: [{ role: "user", content: "normal request" }] },
+    }),
+    false,
+  );
+  assert.equal(
+    isProtectedCompactRequest({ endpoint: "/v1/responses/compact" }),
+    true,
+  );
+  assert.equal(
+    isProtectedCompactRequest({
+      endpoint: "/v1/responses",
+      responseUsage: { gatewayCompactKind: "fallback" },
+    }),
+    true,
+  );
+
+  const compactEndpointBody = prepareCompactEndpointRequestBody(
+    compactRequestFixture,
+  );
+  assert.ok(compactEndpointBody && typeof compactEndpointBody === "object");
+  assert.ok(!Array.isArray(compactEndpointBody));
+  assert.equal("stream" in compactEndpointBody, false);
+  assert.deepEqual(
+    (compactEndpointBody as Record<string, unknown>).input,
+    compactRequestFixture.input.filter(
+      (item) => item.type !== "compaction_trigger",
+    ),
+  );
 
   for (let recoveryAttempt = 0; recoveryAttempt <= 3; recoveryAttempt += 1) {
     const body = buildPolicyRecoveryBody({
@@ -260,6 +353,16 @@ function assertPolicyCompactPayloadChain() {
       ).length,
       recoveryAttempt > 0 ? 1 : 0,
     );
+    assert.equal(
+      body.input.filter(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          item.type === "compaction_trigger",
+      ).length,
+      1,
+    );
   }
 
   assert.deepEqual(context.originalBody, originalBody);
@@ -280,6 +383,7 @@ function readCompactEncryptedContent(value: unknown) {
 }
 
 function compress(encoding: Encoding, value: Buffer) {
+  if (encoding === "identity") return value;
   if (encoding === "gzip") return gzipSync(value);
   if (encoding === "deflate") return deflateSync(value);
   return brotliCompressSync(value);

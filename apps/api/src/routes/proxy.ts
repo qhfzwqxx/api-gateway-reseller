@@ -67,6 +67,10 @@ import {
 } from "../services/global-circuit-breaker-settings.js";
 import { readBannedUserNoticeSettings } from "../services/banned-user-notice-settings.js";
 import {
+  isCompactionTriggerRequestBody,
+  prepareCompactEndpointRequestBody,
+} from "../services/compact-request-utils.js";
+import {
   isWhitelistFilterUnlocked,
   readWhitelistFilterSettings,
 } from "../services/whitelist-filter-settings.js";
@@ -950,10 +954,13 @@ export async function proxyRoutes(app: FastifyInstance) {
             clientIp,
             userAgent: request.headers["user-agent"],
             requestBody: redactBodyForLog(body) as Prisma.InputJsonValue,
-            ...(endpoint === "/v1/responses/compact"
+            ...(endpoint === "/v1/responses/compact" ||
+              isCompactionTriggerRequestBody(body)
               ? {
                   responseUsage: createNormalCompactResponseUsage(
-                    "compact_request_in_progress",
+                    endpoint === "/v1/responses/compact"
+                      ? "compact_request_in_progress"
+                      : "compact_trigger_in_progress",
                   ) as Prisma.InputJsonValue,
                 }
               : {}),
@@ -1785,7 +1792,7 @@ async function requestTargetCompact(params: {
           Accept: "application/json",
           "Accept-Encoding": "identity",
         },
-        body: JSON.stringify(buildInternalCompactRequestBody(requestBody)),
+        body: JSON.stringify(prepareCompactEndpointRequestBody(requestBody)),
         signal: controller.signal,
       },
     );
@@ -1824,17 +1831,6 @@ async function requestTargetCompact(params: {
   } finally {
     clearTimeout(timeout);
   }
-}
-
-function buildInternalCompactRequestBody(requestBody: unknown) {
-  if (!isPlainObject(requestBody)) {
-    return requestBody;
-  }
-
-  const compactBody = { ...requestBody };
-  delete compactBody.stream;
-  delete compactBody.stream_options;
-  return compactBody;
 }
 
 async function updateApiRequestRoute(
@@ -2551,9 +2547,9 @@ async function runUpstreamAttempt(params: {
             : upstreamResponseBody,
           transformContext,
         );
-    let normalCompactUsageMetadata:
-      | ReturnType<typeof createNormalCompactResponseUsage>
-      | undefined;
+    let normalCompactUsageMetadata = isCompactionTriggerRequestBody(body)
+      ? createNormalCompactResponseUsage("compact_trigger_completed")
+      : undefined;
     if (endpoint === "/v1/responses/compact") {
       const compactCacheResult = await cacheCompactResponse({
         logger: app.log,
@@ -3455,6 +3451,14 @@ async function proxyStream(params: {
               "Upstream stream did not include usage; passing through without billing",
             );
           }
+        }
+        if (isCompactionTriggerRequestBody(requestBody)) {
+          const compactUsage = createNormalCompactResponseUsage(
+            "compact_trigger_completed",
+          );
+          streamUsage.raw = isPlainObject(streamUsage.raw)
+            ? { ...streamUsage.raw, ...compactUsage }
+            : compactUsage;
         }
         streamUsage = withCompactFallbackUsage(
           streamUsage,

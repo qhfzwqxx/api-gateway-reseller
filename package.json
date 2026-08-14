@@ -16,6 +16,7 @@
     "typecheck": "npm run db:generate && npm run build --workspace packages/db && npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
     "audit:codex-upstreams": "dotenv -e .env -- tsx scripts/audit-upstream-codex-roundtrip.ts",
     "audit:upstream-compression": "tsx scripts/audit-upstream-compression.ts",
+    "audit:policy-recovery-compact-live": "tsx scripts/audit-policy-recovery-compact-live.ts",
     "audit:policy-recovery-parity": "tsx scripts/audit-policy-recovery-exe-parity.ts",
     "load:saturation": "node scripts/saturation-load-test.mjs",
     "db:generate": "npm run db:generate --workspace packages/db",

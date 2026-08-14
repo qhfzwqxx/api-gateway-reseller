@@ -13,6 +13,7 @@ import {
   manualTerminateMessage,
   manualTerminateStatusCode,
 } from "../services/active-api-requests.js";
+import { isProtectedCompactRequest } from "../services/compact-request-utils.js";
 import { getApiKeyTotalUsageUsd } from "../services/api-key-limits.js";
 import {
   readAuthSettings,
@@ -4130,6 +4131,7 @@ export async function adminRoutes(app: FastifyInstance) {
         status: true,
         createdAt: true,
         endpoint: true,
+        requestBody: true,
         responseUsage: true,
       },
     });
@@ -4144,7 +4146,13 @@ export async function adminRoutes(app: FastifyInstance) {
         .send({ message: "Only PENDING requests can be terminated" });
     }
 
-    if (isProtectedCompactRequest(existing.endpoint, existing.responseUsage)) {
+    if (
+      isProtectedCompactRequest({
+        endpoint: existing.endpoint,
+        requestBody: existing.requestBody,
+        responseUsage: existing.responseUsage,
+      })
+    ) {
       return reply
         .status(409)
         .send({ message: "Compact requests cannot be manually terminated" });
@@ -6525,27 +6533,6 @@ function pickHeaderValue(value: string | string[] | undefined) {
 function pickForwardedFor(value: string | string[] | undefined) {
   const text = pickHeaderValue(value);
   return text?.split(",")[0]?.trim() || null;
-}
-
-function isProtectedCompactRequest(endpoint: string, responseUsage: unknown) {
-  if (endpoint === "/v1/responses/compact") {
-    return true;
-  }
-
-  if (
-    !responseUsage ||
-    typeof responseUsage !== "object" ||
-    Array.isArray(responseUsage)
-  ) {
-    return false;
-  }
-
-  const record = responseUsage as Record<string, unknown>;
-  return (
-    record.gatewayCompactFallback === true ||
-    record.gatewayCompactKind === "normal" ||
-    record.gatewayCompactKind === "fallback"
-  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

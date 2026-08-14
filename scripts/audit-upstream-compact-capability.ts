@@ -48,15 +48,21 @@ type AuditResult = {
   workingCompactItemType: CompactItemType | null;
 };
 
-const timeoutMs = 45_000;
+const timeoutMs = readPositiveInteger("AUDIT_TIMEOUT_MS", 45_000);
 const concurrency = 4;
 const auditMarker = `gateway-compact-audit-${Date.now()}`;
 
 async function main() {
+  const configuredKeyIds = readConfiguredKeyIds();
   const providers = await prisma.upstreamProvider.findMany({
     include: {
       keys: {
-        where: { status: "ACTIVE" },
+        where: {
+          status: "ACTIVE",
+          ...(configuredKeyIds
+            ? { id: { in: [...configuredKeyIds] } }
+            : {}),
+        },
         orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       },
     },
@@ -80,10 +86,6 @@ async function main() {
     modelsByProvider.set(price.upstreamProvider, models);
   }
 
-  const jobs = providers.flatMap((provider) => {
-    const models = modelsByProvider.get(provider.name) ?? [];
-    return models.map(() => provider);
-  });
   const configuredTargets = readConfiguredTargets();
   const jobInputs = providers.flatMap((provider) =>
     (modelsByProvider.get(provider.name) ?? []).map((model) => ({
@@ -109,7 +111,7 @@ async function main() {
       results[index] = await auditProviderModel(input.provider, input.model);
       const result = results[index];
       console.log(
-        `[${index + 1}/${jobs.length}] ${result.classification} ${result.provider} ${result.model}`,
+        `[${index + 1}/${jobInputs.length}] ${result.classification} ${result.provider} ${result.model}`,
       );
     }
   }
@@ -158,6 +160,19 @@ function readConfiguredTargets() {
   }
   const parsed = JSON.parse(value) as Array<{ provider: string; model: string }>;
   return new Set(parsed.map((item) => targetKey(item.provider, item.model)));
+}
+
+function readConfiguredKeyIds() {
+  const value = process.env.AUDIT_KEY_IDS_JSON;
+  if (!value) {
+    return null;
+  }
+  return new Set(JSON.parse(value) as string[]);
+}
+
+function readPositiveInteger(name: string, fallback: number) {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 function targetKey(provider: string, model: string) {
