@@ -2016,14 +2016,15 @@ export async function safeReadUpstreamBody(
     };
   }
 
-  if (text.length > maxBytes) {
+  const bodyBytes = Buffer.byteLength(text, "utf8");
+  if (bodyBytes > maxBytes) {
     options?.logger?.warn(
-      { bodyBytes: text.length, maxBytes },
+      { bodyBytes, maxBytes },
       "Upstream response body exceeds limit after reading, rejecting",
     );
     return {
       error: {
-        message: `Upstream response body too large (${(text.length / 1024 / 1024).toFixed(1)}MB)`,
+        message: `Upstream response body too large (${(bodyBytes / 1024 / 1024).toFixed(1)}MB)`,
         statusCode: 502,
       },
     };

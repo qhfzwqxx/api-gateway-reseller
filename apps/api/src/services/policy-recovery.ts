@@ -46,6 +46,11 @@ const supportedEndpoints = new Set([
   "/v1/chat/completions",
 ]);
 
+const policyRetryBeginMarker = "[GPT56_POLICY_RETRY_V2]";
+const policyRetryEndMarker = "[/GPT56_POLICY_RETRY_V2]";
+
+export const policyRecoveryExhaustedStatusCode = 502;
+
 const strongPolicyTexts = [
   "invalid prompt: we've limited access to this content for safety reasons",
   "无法显示此内容",
@@ -135,7 +140,13 @@ export function buildPolicyRecoveryBody(params: {
   model: string;
   chatInstructionRole?: "developer" | "system";
 }) {
-  const body = cloneBody(params.context.originalBody);
+  const body = injectPolicyInstructions(
+    cloneBody(params.context.originalBody),
+    params.endpoint,
+    params.context.settings.baseInstructions,
+    params.chatInstructionRole ?? "developer",
+  );
+  if (params.recoveryAttempt <= 0) return body;
   const recoveryInstructions = params.recoveryAttempt > 0
     ? renderRetryInstructions(params.context.settings.retryInstructionsTemplate, {
         attempt: params.recoveryAttempt,
@@ -145,13 +156,10 @@ export function buildPolicyRecoveryBody(params: {
         model: params.model,
       })
     : "";
-  const instructions = recoveryInstructions
-    ? `${params.context.settings.baseInstructions}\n\n${recoveryInstructions}`
-    : params.context.settings.baseInstructions;
-  return injectPolicyInstructions(
+  return injectPolicyRetryInstructions(
     body,
     params.endpoint,
-    instructions,
+    recoveryInstructions,
     params.chatInstructionRole ?? "developer",
   );
 }
@@ -162,19 +170,82 @@ export function injectPolicyInstructions(
   instructions: string,
   chatInstructionRole: "developer" | "system" = "developer",
 ) {
+  if (chatInstructionRole !== "developer" && chatInstructionRole !== "system") {
+    throw new Error("Chat policy recovery role must be developer or system");
+  }
   if (endpoint === "/v1/responses" || endpoint === "/v1/responses/compact") {
     const existing = body.instructions;
     if (existing === undefined) body.instructions = instructions;
     else if (typeof existing === "string") body.instructions = existing
-      ? `${instructions}\n\n[Original instructions]\n${existing}`
+      ? `${instructions}\n\n[调用方原始 instructions]\n${existing}`
       : instructions;
     else if (Array.isArray(existing)) body.instructions = [instructions, ...existing];
+    else throw new Error("Responses instructions must be a string or array");
     return body;
   }
-  if (endpoint === "/v1/chat/completions" && Array.isArray(body.messages)) {
-    body.messages = [{ role: chatInstructionRole, content: instructions }, ...body.messages];
+  if (endpoint !== "/v1/chat/completions") {
+    throw new Error(`Unsupported policy recovery endpoint: ${endpoint}`);
   }
+  if (!Array.isArray(body.messages)) {
+    throw new Error("Chat Completions messages must be an array");
+  }
+  body.messages = [{ role: chatInstructionRole, content: instructions }, ...body.messages];
   return body;
+}
+
+export function injectPolicyRetryInstructions(
+  body: ProxyBody,
+  endpoint: string,
+  retryInstructions: string,
+  chatInstructionRole: "developer" | "system" = "developer",
+) {
+  if (chatInstructionRole !== "developer" && chatInstructionRole !== "system") {
+    throw new Error("Chat policy recovery role must be developer or system");
+  }
+  if (endpoint === "/v1/responses" || endpoint === "/v1/responses/compact") {
+    const existing = body.instructions;
+    if (existing === undefined) body.instructions = retryInstructions;
+    else if (typeof existing === "string") {
+      body.instructions = replacePolicyRetryInstructions(existing, retryInstructions)
+        ?? `${retryInstructions}\n\n[重试前 instructions 原文]\n${existing}`;
+    } else if (Array.isArray(existing)) {
+      const updated = [...existing];
+      const replacement = typeof updated[0] === "string"
+        ? replacePolicyRetryInstructions(updated[0], retryInstructions)
+        : null;
+      if (replacement !== null) updated[0] = replacement;
+      else updated.unshift(retryInstructions);
+      body.instructions = updated;
+    } else {
+      throw new Error("Responses instructions must be a string or array");
+    }
+    return body;
+  }
+  if (endpoint !== "/v1/chat/completions") {
+    throw new Error(`Unsupported policy recovery endpoint: ${endpoint}`);
+  }
+  if (!Array.isArray(body.messages)) {
+    throw new Error("Chat Completions messages must be an array");
+  }
+  const first = body.messages[0];
+  if (
+    first &&
+    typeof first === "object" &&
+    (first.role === "developer" || first.role === "system") &&
+    typeof first.content === "string"
+  ) {
+    const replacement = replacePolicyRetryInstructions(first.content, retryInstructions);
+    if (replacement !== null) {
+      body.messages[0] = { ...first, content: replacement };
+      return body;
+    }
+  }
+  body.messages = [{ role: chatInstructionRole, content: retryInstructions }, ...body.messages];
+  return body;
+}
+
+export function formatPolicyRecoveryExhaustedMessage(signal: PolicyBlockSignal) {
+  return `授权范围内已达到透明恢复上限，上游仍返回策略拦截：${signal.summary}`;
 }
 
 export function detectPolicyBlock(params: {
@@ -185,9 +256,9 @@ export function detectPolicyBlock(params: {
 }): PolicyBlockSignal | null {
   const headerSignal = detectHeaderSignal(params.headers, params.statusCode);
   if (headerSignal) return headerSignal;
-  const bodySignal = detectStructuredSignal(params.body, params.source, params.statusCode);
-  if (bodySignal) return bodySignal;
-  return null;
+  return params.source === "sse"
+    ? detectSseSignal(params.body, params.statusCode)
+    : detectStructuredSignal(params.body, "json", params.statusCode);
 }
 
 export function sanitizePolicyResponseHeaders(headers: Headers) {
@@ -264,23 +335,34 @@ export async function probePolicyRecoveryStream(
   const chunks: Uint8Array[] = [];
   let total = 0;
   let text = "";
+  let ended = false;
   const decoder = new TextDecoder();
   let signal: PolicyBlockSignal | null = detectHeaderSignal(response.headers, response.status);
   while (!signal && total < maxBytes) {
     const result = await reader.read();
-    if (result.done) break;
+    if (result.done) {
+      ended = true;
+      break;
+    }
     chunks.push(result.value);
     total += result.value.byteLength;
     text += decoder.decode(result.value, { stream: true });
     signal = detectPolicyBlock({
       statusCode: response.status,
       headers: response.headers,
-      body: parseSseFrames(text),
+      body: text,
       source: "sse",
     });
     if (signal || hasSubstantiveSseOutput(text)) break;
   }
   text += decoder.decode();
+  if (!signal && ended && !hasCompletedSseOutput(text)) {
+    signal = {
+      source: "sse",
+      code: "sse_validation_indeterminate",
+      summary: "SSE validation: indeterminate",
+    };
+  }
   if (signal) {
     await reader.cancel().catch(() => undefined);
     return { response, signal, text };
@@ -351,7 +433,7 @@ function detectStructuredSignal(
   for (const [key, child] of Object.entries(value)) {
     const keyCode = canonical(key);
     const valueCode = typeof child === "string" ? canonical(child) : "";
-    if (keyCode === "codexerrorinfo" && (valueCode === "cyberpolicy" || valueCode === "trustedaccessforcyber")) {
+    if (keyCode === "codexerrorinfo" && valueCode === "cyberpolicy") {
       return { source, code: "cyber_policy", summary: `${key}: ${String(child)}` };
     }
     if (keyCode === "moderationresponse" && isCyberModeration(child)) {
@@ -402,6 +484,45 @@ function detectStructuredSignal(
   return null;
 }
 
+function detectSseSignal(value: unknown, statusCode: number): PolicyBlockSignal | null {
+  for (const frame of normalizeSseFrames(value)) {
+    const nested = detectStructuredSignal(
+      { event: frame.event, data: frame.data },
+      "sse",
+      statusCode,
+    );
+    if (nested) {
+      return {
+        ...nested,
+        source: "sse",
+        summary: `SSE ${nested.summary}`,
+      };
+    }
+    const joined = `${frame.event}\n${frame.dataText}`.toLowerCase();
+    const failedEvent = /(^|\.)(failed|incomplete|error)$|message_stop|content_block/iu.test(frame.event);
+    const strongText = strongPolicyTexts.find((text) => joined.includes(text));
+    if ((failedEvent || statusCode >= 400) && strongText) {
+      return {
+        source: "sse",
+        code: "sse_policy_text",
+        summary: `SSE policy text: ${strongText}`,
+      };
+    }
+    if (
+      (failedEvent || statusCode >= 400) &&
+      /cyber|trusted\s*access|网络安全/iu.test(joined) &&
+      /policy|safety|blocked|refusal|moderation|策略|拦截/iu.test(joined)
+    ) {
+      return {
+        source: "sse",
+        code: "sse_cyber_policy_context",
+        summary: "SSE cyber policy context",
+      };
+    }
+  }
+  return null;
+}
+
 function cyberResponseHeaderKind(name: string, rawValue: string | string[] | undefined) {
   const nameCode = canonical(name);
   const value = Array.isArray(rawValue) ? rawValue.join(" ") : String(rawValue ?? "");
@@ -419,7 +540,11 @@ function cyberResponseHeaderKind(name: string, rawValue: string | string[] | und
 
 function isCyberModeration(value: unknown) {
   if (!isRecord(value) || value.blocked !== true) return false;
-  const metadata = isRecord(value.metadata) ? value.metadata : {};
+  const metadata = isRecord(value.metadata)
+    ? value.metadata
+    : isRecord(value.Metadata)
+      ? value.Metadata
+      : {};
   const protection = canonical(metadata.protection_type ?? metadata.protectionType);
   return protection === "cyber" && (metadata.safety_limited === true || metadata.safetyLimited === true);
 }
@@ -468,7 +593,7 @@ function removeCyberVerification(value: unknown): [unknown, boolean] {
 }
 
 function parseSseFrames(text: string) {
-  const values: Array<{ event: string; data: unknown }> = [];
+  const values: Array<{ event: string; data: unknown; dataText: string }> = [];
   for (const frame of text.split(/\r?\n\r?\n/u)) {
     if (!frame.trim()) continue;
     let event = "";
@@ -481,13 +606,58 @@ function parseSseFrames(text: string) {
     if (!dataText || dataText === "[DONE]") continue;
     let data: unknown = dataText;
     try { data = JSON.parse(dataText); } catch { /* preserve raw SSE data */ }
-    values.push({ event, data });
+    values.push({ event, data, dataText });
   }
   return values;
 }
 
+function normalizeSseFrames(value: unknown) {
+  if (typeof value === "string") return parseSseFrames(value);
+  const items = Array.isArray(value) ? value : [value];
+  return items.map((item) => {
+    if (isRecord(item) && Object.prototype.hasOwnProperty.call(item, "data")) {
+      const data = item.data;
+      return {
+        event: typeof item.event === "string" ? item.event : "",
+        data,
+        dataText: serializeSseData(data),
+      };
+    }
+    return { event: "", data: item, dataText: serializeSseData(item) };
+  });
+}
+
+function serializeSseData(value: unknown) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value ?? "");
+  }
+}
+
 function hasSubstantiveSseOutput(text: string) {
   return /response\.(?:output_text|reasoning_text|reasoning_summary_text|function_call_arguments)\.delta|response\.output_item\.added|response\.(?:file_search_call|web_search_call)/iu.test(text);
+}
+
+function hasCompletedSseOutput(text: string) {
+  return /(?:^|\n)event:\s*(?:response\.completed|message_stop)\s*(?:\n|$)/iu.test(text)
+    || /(?:^|\n)data:\s*\[DONE\]\s*(?:\n|$)/iu.test(text);
+}
+
+function replacePolicyRetryInstructions(value: string, replacement: string) {
+  if (!value.startsWith(policyRetryBeginMarker)) return null;
+  const end = value.indexOf(policyRetryEndMarker, policyRetryBeginMarker.length);
+  if (end < 0) return null;
+  const candidate = value.slice(0, end + policyRetryEndMarker.length);
+  if (
+    !candidate.includes("前一次上游响应属于结构化策略拦截") ||
+    !candidate.includes("显式授权词：") ||
+    !candidate.includes("授权范围：")
+  ) {
+    return null;
+  }
+  return `${replacement}${value.slice(end + policyRetryEndMarker.length)}`;
 }
 
 function cloneBody(body: ProxyBody): ProxyBody {

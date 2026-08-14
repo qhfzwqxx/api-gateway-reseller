@@ -151,6 +151,8 @@ import {
   createPolicySseSanitizer,
   createPolicyRecoveryContext,
   detectPolicyBlock,
+  formatPolicyRecoveryExhaustedMessage,
+  policyRecoveryExhaustedStatusCode,
   probePolicyRecoveryStream,
   sanitizePolicyResponseBody,
   sanitizePolicyResponseHeaders,
@@ -1780,6 +1782,7 @@ async function requestTargetCompact(params: {
           Authorization: `Bearer ${route.provider.apiKey}`,
           "Content-Type": "application/json",
           Accept: "application/json",
+          "Accept-Encoding": "identity",
         },
         body: JSON.stringify(buildInternalCompactRequestBody(requestBody)),
         signal: controller.signal,
@@ -2058,6 +2061,7 @@ async function runUpstreamAttempt(params: {
         ? (multipartContentType ?? "multipart/form-data")
         : "application/json",
       Accept: body.stream ? "text/event-stream" : "application/json",
+      "Accept-Encoding": "identity",
     };
     const upstreamRequestBody =
       request.method === "GET" || request.method === "DELETE"
@@ -2106,16 +2110,40 @@ async function runUpstreamAttempt(params: {
       },
     });
 
+    const upstreamContentType = upstreamResponse.headers.get("content-type") ?? "";
     if (!upstreamResponse.ok) {
-      const text = await upstreamResponse.text();
+      const rawErrorBody = await safeReadUpstreamBody(upstreamResponse, {
+        logger: app.log,
+        maxBytes: policyRecoveryContext?.settings.maxInspectableResponseBytes
+          ?? getUpstreamResponseMaxBytes(endpoint),
+      });
+      if ("error" in rawErrorBody) {
+        await markRequestFailed(
+          { id: apiRequestId },
+          rawErrorBody.error.message,
+          rawErrorBody.error.statusCode,
+          Math.round(performance.now() - startedAt),
+          undefined,
+          "UPSTREAM_ERROR",
+        );
+        reply.status(rawErrorBody.error.statusCode);
+        reply.header("content-type", "application/json");
+        reply.send({ error: rawErrorBody.error.message });
+        return { kind: "sent" };
+      }
+      const text = rawErrorBody.text;
       const statusCode = upstreamResponse.status;
-      const parsedErrorBody = parseJsonOrText(text);
+      const parsedErrorBody = upstreamContentType.includes("application/json")
+        ? rawErrorBody.json
+        : rawErrorBody.text;
       const policySignal = policyRecoveryContext
         ? detectPolicyBlock({
             statusCode,
             headers: upstreamResponse.headers,
-            body: parsedErrorBody,
-            source: "json",
+            body: upstreamContentType.includes("text/event-stream")
+              ? rawErrorBody.text
+              : parsedErrorBody,
+            source: upstreamContentType.includes("text/event-stream") ? "sse" : "json",
           })
         : null;
       if (policyRecoveryContext && policySignal) {
@@ -2141,12 +2169,9 @@ async function runUpstreamAttempt(params: {
         await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
         return {
           kind: "failed",
-          statusCode,
-          message: text.slice(0, 2000),
-          retryableFailure: true,
-          responseBody: text,
-          responseContentType:
-            upstreamResponse.headers.get("content-type") ?? "application/json",
+          statusCode: policyRecoveryExhaustedStatusCode,
+          message: formatPolicyRecoveryExhaustedMessage(policySignal),
+          retryableFailure: false,
         };
       }
       const upstreamBalanceInsufficient =
@@ -2382,9 +2407,9 @@ async function runUpstreamAttempt(params: {
         await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
         return {
           kind: "failed",
-          statusCode: 403,
-          message: probed.signal.summary,
-          retryableFailure: true,
+          statusCode: policyRecoveryExhaustedStatusCode,
+          message: formatPolicyRecoveryExhaustedMessage(probed.signal),
+          retryableFailure: false,
         };
       }
       effectiveUpstreamResponse = probed.response;
@@ -2442,10 +2467,11 @@ async function runUpstreamAttempt(params: {
       return { kind: "sent" };
     }
 
-    const contentType = upstreamResponse.headers.get("content-type") ?? "";
+    const contentType = upstreamContentType;
     const rawBody = await safeReadUpstreamBody(upstreamResponse, {
       logger: app.log,
-      maxBytes: getUpstreamResponseMaxBytes(endpoint),
+      maxBytes: policyRecoveryContext?.settings.maxInspectableResponseBytes
+        ?? getUpstreamResponseMaxBytes(endpoint),
     });
     if ("error" in rawBody) {
       await markRequestFailed(
@@ -2470,7 +2496,9 @@ async function runUpstreamAttempt(params: {
       ? detectPolicyBlock({
           statusCode: upstreamResponse.status,
           headers: upstreamResponse.headers,
-          body: upstreamResponseBody,
+          body: contentType.includes("text/event-stream")
+            ? rawBody.text
+            : upstreamResponseBody,
           source: contentType.includes("text/event-stream") ? "sse" : "json",
         })
       : null;
@@ -2497,9 +2525,9 @@ async function runUpstreamAttempt(params: {
       await persistPolicyRecoveryAudit(apiRequestId, policyRecoveryContext);
       return {
         kind: "failed",
-        statusCode: upstreamResponse.status,
-        message: nonStreamPolicySignal.summary,
-        retryableFailure: true,
+        statusCode: policyRecoveryExhaustedStatusCode,
+        message: formatPolicyRecoveryExhaustedMessage(nonStreamPolicySignal),
+        retryableFailure: false,
       };
     }
     const responseBody = imageToolBridge
@@ -3059,14 +3087,6 @@ function compactFallbackUsageFields(
   };
 }
 
-function parseJsonOrText(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
 async function recordPolicyRecoveryAttempt(params: {
   apiRequestId: string;
   context: PolicyRecoveryContext;
@@ -3134,7 +3154,7 @@ async function persistPolicyRecoveryAudit(
 function responseHeadersEntries(headers: Headers) {
   const entries: Array<[string, string]> = [];
   headers.forEach((value, name) => {
-    if (!["content-length", "transfer-encoding", "connection"].includes(name.toLowerCase())) {
+    if (!["content-length", "content-encoding", "transfer-encoding", "connection"].includes(name.toLowerCase())) {
       entries.push([name, value]);
     }
   });

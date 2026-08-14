@@ -91,7 +91,7 @@ for (const profile of [v1, v2]) {
   });
   assert.equal(
     responsesBody.instructions,
-    `${profile.baseInstructions}\n\n[Original instructions]\nCALLER_ORIGINAL_INSTRUCTIONS`,
+    `${profile.baseInstructions}\n\n[调用方原始 instructions]\nCALLER_ORIGINAL_INSTRUCTIONS`,
   );
   assert.equal(countOccurrences(String(responsesBody.instructions), profile.baseInstructions), 1);
 
@@ -142,11 +142,43 @@ for (const profile of [v1, v2]) {
   });
   assert.equal(countOccurrences(String(retryOne.instructions), profile.baseInstructions), 1);
   assert.equal(countOccurrences(String(retryTwo.instructions), profile.baseInstructions), 1);
+  assert.ok(String(retryOne.instructions).startsWith("[GPT56_POLICY_RETRY_V2]"));
+  assert.ok(String(retryTwo.instructions).startsWith("[GPT56_POLICY_RETRY_V2]"));
+  assert.ok(String(retryOne.instructions).includes("[重试前 instructions 原文]"));
+  assert.ok(String(retryTwo.instructions).includes("[重试前 instructions 原文]"));
   assert.ok(String(retryOne.instructions).includes("第 1 次自动恢复"));
   assert.ok(String(retryTwo.instructions).includes("第 2 次自动恢复"));
-  assert.ok(!String(retryTwo.instructions).includes("FIRST_SIGNAL"));
-  assert.ok(String(retryTwo.instructions).includes("SECOND_SIGNAL"));
+  assert.ok(!String(retryTwo.instructions).includes("第 1 次自动恢复"));
+  assert.ok(!String(retryTwo.instructions).includes("上游：fixture-provider"));
+  assert.ok(!String(retryTwo.instructions).includes("SECOND_SIGNAL"));
   assert.equal(countOccurrences(String(retryTwo.instructions), "CALLER_ORIGINAL_INSTRUCTIONS"), 1);
+
+  const compactRetry = buildPolicyRecoveryBody({
+    context: compactContext,
+    endpoint: "/v1/responses/compact",
+    recoveryAttempt: 1,
+    signal: { source: "sse", code: "fixture", summary: "COMPACT_SIGNAL" },
+    provider: "fixture-provider",
+    model: "fixture-model",
+  });
+  assert.ok(Array.isArray(compactRetry.instructions));
+  assert.ok(String(compactRetry.instructions[0]).startsWith("[GPT56_POLICY_RETRY_V2]"));
+  assert.equal(compactRetry.instructions[1], profile.baseInstructions);
+  assert.equal(compactRetry.instructions[2], "CALLER_ARRAY_INSTRUCTIONS");
+
+  const chatRetry = buildPolicyRecoveryBody({
+    context: chatContext,
+    endpoint: "/v1/chat/completions",
+    recoveryAttempt: 1,
+    signal: { source: "sse", code: "fixture", summary: "CHAT_SIGNAL" },
+    provider: "fixture-provider",
+    model: "fixture-model",
+  });
+  assert.equal(chatRetry.messages?.[0]?.role, "developer");
+  assert.ok(String(chatRetry.messages?.[0]?.content).startsWith("[GPT56_POLICY_RETRY_V2]"));
+  assert.equal(chatRetry.messages?.[1]?.role, "developer");
+  assert.equal(chatRetry.messages?.[1]?.content, profile.baseInstructions);
+  assert.deepEqual(chatRetry.messages?.slice(2), [{ role: "user", content: "hello" }]);
 }
 
 const v1Body = buildPolicyRecoveryBody({ context: v1Context, endpoint: "/v1/responses", recoveryAttempt: 0, provider: "fixture", model: "fixture" });
