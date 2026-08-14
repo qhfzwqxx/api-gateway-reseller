@@ -271,6 +271,19 @@ export function sanitizePolicyResponseHeaders(headers: Headers) {
   return sanitized;
 }
 
+function sanitizeReconstructedResponseHeaders(headers: Headers) {
+  const sanitized = sanitizePolicyResponseHeaders(headers);
+  for (const name of [
+    "content-length",
+    "content-encoding",
+    "transfer-encoding",
+    "connection",
+  ]) {
+    sanitized.delete(name);
+  }
+  return sanitized;
+}
+
 export function sanitizePolicyResponseBody(value: unknown): unknown {
   return removeCyberVerification(value)[0];
 }
@@ -384,7 +397,7 @@ export async function probePolicyRecoveryStream(
     response: new Response(stream, {
       status: response.status,
       statusText: response.statusText,
-      headers: sanitizePolicyResponseHeaders(response.headers),
+      headers: sanitizeReconstructedResponseHeaders(response.headers),
     }),
     signal: null,
     text,

@@ -1988,7 +1988,8 @@ export async function safeReadUpstreamBody(
 ): Promise<SafeBodyResult> {
   const maxBytes = options?.maxBytes ?? UPSTREAM_RESPONSE_MAX_BYTES;
   const contentLength = response.headers.get("content-length");
-  if (contentLength) {
+  const contentEncoding = response.headers.get("content-encoding")?.trim().toLowerCase();
+  if (contentLength && (!contentEncoding || contentEncoding === "identity")) {
     const size = Number(contentLength);
     if (Number.isFinite(size) && size > maxBytes) {
       options?.logger?.warn(
@@ -2004,10 +2005,35 @@ export async function safeReadUpstreamBody(
     }
   }
 
-  let text: string;
+  const reader = response.body?.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bodyBytes = 0;
   try {
-    text = await response.text();
+    if (reader) {
+      for (;;) {
+        const result = await reader.read();
+        if (result.done) break;
+        bodyBytes += result.value.byteLength;
+        if (bodyBytes > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          options?.logger?.warn(
+            { bodyBytes, maxBytes },
+            "Upstream response body exceeds limit while reading, rejecting",
+          );
+          return {
+            error: {
+              message: `Upstream response body too large (${(bodyBytes / 1024 / 1024).toFixed(1)}MB)`,
+              statusCode: 502,
+            },
+          };
+        }
+        text += decoder.decode(result.value, { stream: true });
+      }
+      text += decoder.decode();
+    }
   } catch (err) {
+    await reader?.cancel().catch(() => undefined);
     return {
       error: {
         message: `Failed to read upstream response body: ${err instanceof Error ? err.message : "unknown error"}`,
@@ -2016,7 +2042,7 @@ export async function safeReadUpstreamBody(
     };
   }
 
-  const bodyBytes = Buffer.byteLength(text, "utf8");
+  bodyBytes = Math.max(bodyBytes, Buffer.byteLength(text, "utf8"));
   if (bodyBytes > maxBytes) {
     options?.logger?.warn(
       { bodyBytes, maxBytes },
@@ -2043,4 +2069,21 @@ export async function safeReadUpstreamBody(
   }
 
   return { json: text, text };
+}
+
+export function getForwardableUpstreamResponseHeaders(headers: Headers) {
+  const entries: Array<[string, string]> = [];
+  headers.forEach((value, name) => {
+    if (
+      ![
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+        "connection",
+      ].includes(name.toLowerCase())
+    ) {
+      entries.push([name, value]);
+    }
+  });
+  return entries;
 }

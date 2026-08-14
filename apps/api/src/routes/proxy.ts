@@ -73,6 +73,7 @@ import {
 import {
   buildUpstreamBody,
   createProxyTransformContext,
+  getForwardableUpstreamResponseHeaders,
   getClientIp,
   getUpstreamResponseMaxBytes,
   inferModelFromEndpoint,
@@ -1789,9 +1790,15 @@ async function requestTargetCompact(params: {
       },
     );
     const contentType = response.headers.get("content-type") ?? "";
+    const rawBody = await safeReadUpstreamBody(response, {
+      maxBytes: getUpstreamResponseMaxBytes("/v1/responses/compact"),
+    });
+    if ("error" in rawBody) {
+      throw new Error(rawBody.error.message);
+    }
     const responseBody = contentType.includes("application/json")
-      ? await response.json()
-      : await response.text();
+      ? rawBody.json
+      : rawBody.text;
 
     if (!response.ok) {
       const message =
@@ -2670,7 +2677,7 @@ async function runUpstreamAttempt(params: {
     });
 
     reply.status(upstreamResponse.status);
-    for (const [name, value] of responseHeadersEntries(
+    for (const [name, value] of getForwardableUpstreamResponseHeaders(
       policyRecoveryContext
         ? sanitizePolicyResponseHeaders(upstreamResponse.headers)
         : upstreamResponse.headers,
@@ -3149,16 +3156,6 @@ async function persistPolicyRecoveryAudit(
       ) as Prisma.InputJsonValue,
     },
   });
-}
-
-function responseHeadersEntries(headers: Headers) {
-  const entries: Array<[string, string]> = [];
-  headers.forEach((value, name) => {
-    if (!["content-length", "content-encoding", "transfer-encoding", "connection"].includes(name.toLowerCase())) {
-      entries.push([name, value]);
-    }
-  });
-  return entries;
 }
 
 async function cacheCompactResponse(params: {
