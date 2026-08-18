@@ -2,6 +2,15 @@ import { createHash } from "node:crypto";
 import { prisma } from "@gateway/db";
 import { defaultLeilaActiveContext } from "./policy-recovery-default-profile.js";
 import {
+  defaultPolicyRecoveryPrefillAssistantMessage,
+  defaultPolicyRecoveryPrefillUserMessage,
+  defaultSecurityResearchSkillStartupTemplate,
+  maxSecurityResearchSkillDocumentBytes,
+  securityResearchSkillLibrary,
+  securityResearchSkillGatewayRoot,
+  type SecuritySkillInjectionMode,
+} from "./policy-recovery-security-skill.js";
+import {
   seagullLibraryEntries,
   seagullProfessionalAgents,
   seagullSkillProfiles,
@@ -24,6 +33,12 @@ export type PolicyRecoverySettings = {
   activeProfile: PolicyRecoveryProfileId;
   layers: PolicyRecoveryLayer[];
   unifiedDocument: string;
+  securitySkillEnabled: boolean;
+  securitySkillMode: SecuritySkillInjectionMode;
+  securitySkillStartupTemplate: string;
+  prefillConversationEnabled: boolean;
+  prefillUserMessage: string;
+  prefillAssistantMessage: string;
   retryInstructionsTemplate: string;
   maxRecoveries: number;
   sseProbeBytes: number;
@@ -37,11 +52,13 @@ export type PolicyRecoverySnapshot = PolicyRecoverySettings & {
   mergedSha256: string;
   mergedBytes: number;
   estimatedTokens: number;
+  securitySkillGatewayRoot: string;
 };
 
 export const maxPolicyRecoveryLayerBytes = 64 * 1024;
 export const maxPolicyRecoveryMergedBytes = 128 * 1024;
 export const maxPolicyRecoveryUnifiedBytes = maxPolicyRecoveryMergedBytes;
+export const maxPolicyRecoverySkillBytes = maxSecurityResearchSkillDocumentBytes;
 export const maxPolicyRecoveryInstructionsLength = maxPolicyRecoveryLayerBytes;
 export const minPolicyRecoverySseProbeBytes = 16 * 1024;
 export const maxPolicyRecoverySseProbeBytes = 1024 * 1024;
@@ -97,6 +114,12 @@ export const defaultPolicyRecoverySettings: PolicyRecoverySettings = {
   activeProfile: "layered-v1",
   layers: builtinPolicyRecoveryLayers.map(cloneLayer),
   unifiedDocument: buildUnifiedPolicyRecoveryDocument(builtinPolicyRecoveryLayers),
+  securitySkillEnabled: true,
+  securitySkillMode: "routed",
+  securitySkillStartupTemplate: defaultSecurityResearchSkillStartupTemplate,
+  prefillConversationEnabled: true,
+  prefillUserMessage: defaultPolicyRecoveryPrefillUserMessage,
+  prefillAssistantMessage: defaultPolicyRecoveryPrefillAssistantMessage,
   retryInstructionsTemplate: exeParityPolicyRecoveryRetryInstructionsTemplate,
   maxRecoveries: 3,
   sseProbeBytes: 262144,
@@ -104,13 +127,13 @@ export const defaultPolicyRecoverySettings: PolicyRecoverySettings = {
   version: 1,
 };
 
-export const policyRecoveryLibrary = seagullLibraryEntries.map((entry) => ({
+export const policyRecoveryLibrary = [...seagullLibraryEntries.map((entry) => ({
   path: entry.path,
   kind: entry.kind,
   content: entry.content,
   sha256: entry.sha256,
   bytes: Buffer.byteLength(entry.content, "utf8"),
-}));
+})), ...securityResearchSkillLibrary];
 
 const settingKey = "policy_recovery_settings";
 const cacheTtlMs = 5_000;
@@ -183,6 +206,24 @@ export function normalizePolicyRecoverySettings(value: unknown): PolicyRecoveryS
     activeProfile,
     layers,
     unifiedDocument,
+    securitySkillEnabled: input.securitySkillEnabled !== false,
+    securitySkillMode: input.securitySkillMode === "full" ? "full" : "routed",
+    securitySkillStartupTemplate: normalizeInstructions(
+      input.securitySkillStartupTemplate,
+      defaultPolicyRecoverySettings.securitySkillStartupTemplate,
+      maxPolicyRecoveryLayerBytes,
+    ),
+    prefillConversationEnabled: input.prefillConversationEnabled !== false,
+    prefillUserMessage: normalizeInstructions(
+      input.prefillUserMessage,
+      defaultPolicyRecoverySettings.prefillUserMessage,
+      maxPolicyRecoveryLayerBytes,
+    ),
+    prefillAssistantMessage: normalizeInstructions(
+      input.prefillAssistantMessage,
+      defaultPolicyRecoverySettings.prefillAssistantMessage,
+      maxPolicyRecoveryLayerBytes,
+    ),
     retryInstructionsTemplate: normalizeInstructions(
       input.retryInstructionsTemplate === legacyPolicyRecoveryRetryInstructionsTemplate
         ? exeParityPolicyRecoveryRetryInstructionsTemplate
@@ -220,6 +261,7 @@ export function createPolicyRecoverySnapshot(settings: PolicyRecoverySettings): 
     mergedSha256: sha256(baseInstructions),
     mergedBytes,
     estimatedTokens: Math.ceil(mergedBytes / 4),
+    securitySkillGatewayRoot: securityResearchSkillGatewayRoot,
   };
 }
 

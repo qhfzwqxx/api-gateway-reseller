@@ -1,4 +1,5 @@
 import type { PolicyRecoverySnapshot } from "./policy-recovery-settings.js";
+import { buildSecurityResearchSkillInstructions } from "./policy-recovery-security-skill.js";
 import {
   getForwardableUpstreamResponseHeaders,
   type ProxyBody,
@@ -31,6 +32,10 @@ export type PolicyRecoveryAudit = {
   recovered: boolean;
   finalOutcome: "not_triggered" | "recovered" | "exhausted" | "aborted";
   totalRecoveries: number;
+  prefillConversationEnabled: boolean;
+  securitySkillMode: string | null;
+  securitySkillRoutes: string[];
+  securitySkillFiles: string[];
   attempts: PolicyRecoveryAttemptAudit[];
 };
 
@@ -128,6 +133,12 @@ export function createPolicyRecoveryContext(
       recovered: false,
       finalOutcome: "not_triggered",
       totalRecoveries: 0,
+      prefillConversationEnabled: settings.prefillConversationEnabled,
+      securitySkillMode: settings.securitySkillEnabled
+        ? settings.securitySkillMode
+        : null,
+      securitySkillRoutes: [],
+      securitySkillFiles: [],
       attempts: [],
     },
   };
@@ -143,12 +154,38 @@ export function buildPolicyRecoveryBody(params: {
   model: string;
   chatInstructionRole?: "developer" | "system";
 }) {
+  const skillInstructions = params.context.settings.securitySkillEnabled
+    ? buildSecurityResearchSkillInstructions(
+        params.context.originalBody,
+        params.context.settings.securitySkillMode,
+        params.context.settings.securitySkillStartupTemplate,
+      )
+    : null;
+  if (skillInstructions) {
+    params.context.audit.securitySkillRoutes = skillInstructions.selectedRoutes;
+    params.context.audit.securitySkillFiles = skillInstructions.selectedPaths;
+  }
   const body = injectPolicyInstructions(
     cloneBody(params.baseBody ?? params.context.originalBody),
     params.endpoint,
     params.context.settings.baseInstructions,
     params.chatInstructionRole ?? "developer",
   );
+  if (skillInstructions) {
+    injectPolicySkillStartup(
+      body,
+      params.endpoint,
+      skillInstructions.document,
+    );
+  }
+  if (params.context.settings.prefillConversationEnabled) {
+    injectPolicyConversationPrefill(
+      body,
+      params.endpoint,
+      params.context.settings.prefillUserMessage,
+      params.context.settings.prefillAssistantMessage,
+    );
+  }
   if (params.recoveryAttempt <= 0) return body;
   const recoveryInstructions = params.recoveryAttempt > 0
     ? renderRetryInstructions(params.context.settings.retryInstructionsTemplate, {
@@ -165,6 +202,148 @@ export function buildPolicyRecoveryBody(params: {
     recoveryInstructions,
     params.chatInstructionRole ?? "developer",
   );
+}
+
+export function injectPolicyConversationPrefill(
+  body: ProxyBody,
+  endpoint: string,
+  userMessage: string,
+  assistantMessage: string,
+) {
+  const userContent = `[POLICY_RECOVERY_PREFILL_USER_V1]\n${userMessage.trim()}\n[/POLICY_RECOVERY_PREFILL_USER_V1]`;
+  const assistantContent = `[POLICY_RECOVERY_PREFILL_ASSISTANT_V1]\n${assistantMessage.trim()}\n[/POLICY_RECOVERY_PREFILL_ASSISTANT_V1]`;
+  if (endpoint === "/v1/responses" || endpoint === "/v1/responses/compact") {
+    if (containsPrefillMarker(body.input)) return body;
+    const prefill = [
+      { role: "user", content: userContent },
+      { role: "assistant", content: assistantContent },
+    ];
+    if (typeof body.input === "string") {
+      body.input = [...prefill, { role: "user", content: body.input }];
+    } else if (Array.isArray(body.input)) {
+      const lastUserIndex = findLastMessageIndex(body.input, "user");
+      const index = lastUserIndex < 0 ? body.input.length : lastUserIndex;
+      body.input = [
+        ...body.input.slice(0, index),
+        ...prefill,
+        ...body.input.slice(index),
+      ];
+    } else if (body.input === undefined) {
+      body.input = prefill;
+    } else {
+      body.input = [...prefill, body.input];
+    }
+    return body;
+  }
+  if (endpoint !== "/v1/chat/completions") {
+    throw new Error(`Unsupported policy recovery endpoint: ${endpoint}`);
+  }
+  if (!Array.isArray(body.messages)) {
+    throw new Error("Chat Completions messages must be an array");
+  }
+  if (containsPrefillMarker(body.messages)) return body;
+  const lastUserIndex = findLastMessageIndex(body.messages, "user");
+  const index = lastUserIndex < 0 ? body.messages.length : lastUserIndex;
+  body.messages.splice(
+    index,
+    0,
+    { role: "user", content: userContent },
+    { role: "assistant", content: assistantContent },
+  );
+  return body;
+}
+
+export function injectPolicySkillStartup(
+  body: ProxyBody,
+  endpoint: string,
+  startup: string,
+) {
+  const prefixed = (content: string) => `${startup}\n\n${content}`;
+
+  if (endpoint === "/v1/responses" || endpoint === "/v1/responses/compact") {
+    if (typeof body.input === "string") {
+      body.input = body.input.includes("[SECURITY_RESEARCH_SKILL_START_V4]")
+        ? body.input
+        : prefixed(body.input);
+      return body;
+    }
+    if (Array.isArray(body.input)) {
+      const lastUserIndex = findLastMessageIndex(body.input, "user");
+      if (lastUserIndex >= 0) {
+        const item = body.input[lastUserIndex];
+        if (item && typeof item === "object") {
+          const content = prefixMessageContent(item.content, startup, "input_text");
+          body.input[lastUserIndex] = { ...item, content };
+        } else {
+          body.input.splice(lastUserIndex, 0, { role: "user", content: startup });
+        }
+      } else {
+        body.input.unshift({ role: "user", content: startup });
+      }
+      return body;
+    }
+    if (body.input === undefined) body.input = startup;
+    else body.input = prefixed(String(body.input));
+    return body;
+  }
+  if (endpoint !== "/v1/chat/completions") {
+    throw new Error(`Unsupported policy recovery endpoint: ${endpoint}`);
+  }
+  if (!Array.isArray(body.messages)) {
+    throw new Error("Chat Completions messages must be an array");
+  }
+  const lastUserIndex = findLastMessageIndex(body.messages, "user");
+  if (lastUserIndex >= 0) {
+    const message = body.messages[lastUserIndex];
+    if (message && typeof message === "object") {
+      const content = prefixMessageContent(message.content, startup, "text");
+      body.messages[lastUserIndex] = { ...message, content };
+    } else {
+      body.messages.splice(lastUserIndex, 0, { role: "user", content: startup });
+    }
+  } else {
+    body.messages.push({ role: "user", content: startup });
+  }
+  return body;
+}
+
+function prefixMessageContent(
+  content: unknown,
+  startup: string,
+  defaultTextType: "input_text" | "text",
+) {
+  const marker = "[SECURITY_RESEARCH_SKILL_START_V4]";
+  if (typeof content === "string") {
+    return content.includes(marker) ? content : `${startup}\n\n${content}`;
+  }
+  if (!Array.isArray(content)) return startup;
+
+  const updated = content.map((part) =>
+    part && typeof part === "object" ? { ...part } : part,
+  );
+  const alreadyPrefixed = updated.some((part) =>
+    Boolean(
+      part &&
+      typeof part === "object" &&
+      typeof part.text === "string" &&
+      part.text.includes(marker),
+    ),
+  );
+  if (alreadyPrefixed) return updated;
+  const textIndex = updated.findIndex((part) =>
+    Boolean(
+      part &&
+      typeof part === "object" &&
+      typeof part.text === "string" &&
+      (part.type === "input_text" || part.type === "text"),
+    ),
+  );
+  if (textIndex >= 0) {
+    const part = updated[textIndex] as { text: string; [key: string]: unknown };
+    updated[textIndex] = { ...part, text: `${startup}\n\n${part.text}` };
+    return updated;
+  }
+  return [{ type: defaultTextType, text: startup }, ...updated];
 }
 
 export function injectPolicyInstructions(
@@ -677,6 +856,26 @@ function cloneBody(body: ProxyBody): ProxyBody {
 
 function canonical(value: unknown) {
   return String(value ?? "").replace(/[\s_-]/g, "").toLowerCase();
+}
+
+function containsPrefillMarker(value: unknown) {
+  try {
+    return JSON.stringify(value).includes("POLICY_RECOVERY_PREFILL_USER_V1");
+  } catch {
+    return false;
+  }
+}
+
+function findLastMessageIndex(items: unknown[], role: string) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (
+      item &&
+      typeof item === "object" &&
+      String((item as Record<string, unknown>).role ?? "") === role
+    ) return index;
+  }
+  return -1;
 }
 
 function collectStrings(value: unknown, path: string[] = [], result: Array<{ path: string[]; value: string }> = []) {

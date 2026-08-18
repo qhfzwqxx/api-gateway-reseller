@@ -185,7 +185,7 @@ write_env_file() {
   fi
 
   log "Creating .env"
-  local postgres_password jwt_secret admin_email admin_username admin_password api_port web_port server_host default_api_base api_base web_base frontend_origin cors_origins
+  local postgres_password jwt_secret admin_email admin_username admin_password api_port web_port server_host default_api_base api_base web_base security_skill_root frontend_origin cors_origins
 
   postgres_password="$(random_hex 16)"
   jwt_secret="$(random_secret)"
@@ -200,6 +200,7 @@ write_env_file() {
   warn "For public access, use the server public IP/domain here, not 127.0.0.1."
   api_base="$(read_with_default "Public API base URL" "$default_api_base")"
   web_base="$api_base"
+  security_skill_root="${api_base%/}/security-research/current"
   frontend_origin="$(frontend_origin_from_api_base "$api_base" "$web_port" || printf 'http://127.0.0.1:%s' "$web_port")"
   cors_origins="http://127.0.0.1:${web_port},http://localhost:${web_port},${frontend_origin}"
 
@@ -211,6 +212,7 @@ REDIS_URL="redis://127.0.0.1:56379"
 API_PORT=${api_port}
 API_HOST="0.0.0.0"
 PUBLIC_API_BASE_URL="${api_base}"
+SECURITY_RESEARCH_SKILL_PUBLIC_ROOT="${security_skill_root}"
 CORS_ORIGINS="${cors_origins}"
 
 WEB_PORT=${web_port}
@@ -288,6 +290,10 @@ install_dependencies() {
 build_and_migrate() {
   log "Generating Prisma client"
   npm run db:generate
+
+  log "Syncing Security Research Skill mirror"
+  npm run sync:security-research-skill
+  npm run verify:security-research-skill
 
   log "Building API and web"
   npm run build

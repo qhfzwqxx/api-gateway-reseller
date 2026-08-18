@@ -86,7 +86,22 @@ export function isRetryableUpstreamFailure(
     statusCode === 408 ||
     statusCode === 429 ||
     statusCode >= 500 ||
+    isTransientUpstreamNginxBadRequest(statusCode, responseBody) ||
     isUpstreamQuotaExhaustedError(responseBody)
+  );
+}
+
+export function isTransientUpstreamNginxBadRequest(
+  statusCode: number,
+  responseBody?: unknown,
+) {
+  if (statusCode !== 400 || typeof responseBody !== "string") {
+    return false;
+  }
+
+  return (
+    /<title>\s*400 Bad Request\s*<\/title>/iu.test(responseBody) &&
+    /<center>\s*nginx\s*<\/center>/iu.test(responseBody)
   );
 }
 

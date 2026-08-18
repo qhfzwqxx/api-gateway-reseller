@@ -524,9 +524,9 @@ function rewriteCompactItems(value: unknown[], itemType: CompactItemType) {
     return {
       ...item,
       id:
-        typeof item.id === "string" && item.id
+        typeof item.id === "string" && /^cmp(?:_|$)/u.test(item.id)
           ? item.id
-          : `compact_audit_${auditMarker}`,
+          : `cmp_audit_${auditMarker}`,
       type: "compaction_summary",
     };
   });

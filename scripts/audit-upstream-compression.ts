@@ -38,6 +38,10 @@ import {
   defaultPolicyRecoverySettings,
 } from "../apps/api/src/services/policy-recovery-settings.ts";
 import { parseSseJsonPayloads } from "../apps/api/src/services/proxy-usage.ts";
+import {
+  isRetryableUpstreamFailure,
+  isTransientUpstreamNginxBadRequest,
+} from "../apps/api/src/services/proxy-errors.ts";
 
 type Encoding = "identity" | "gzip" | "deflate" | "br";
 
@@ -135,6 +139,15 @@ const completedSseFixture = [
   "",
   "",
 ].join("\n");
+const nginxBadRequestFixture = [
+  "<html>",
+  "<head><title>400 Bad Request</title></head>",
+  "<body>",
+  "<center><h1>400 Bad Request</h1></center>",
+  "<hr><center>nginx</center>",
+  "</body>",
+  "</html>",
+].join("\r\n");
 
 const server = createServer((request, response) => {
   const path = request.url ?? "/";
@@ -400,6 +413,22 @@ async function main() {
     assert.equal(reconstructedProbe.response.headers.get("transfer-encoding"), null);
     assert.equal(reconstructedProbe.response.headers.get("x-connection-scoped"), null);
     assert.equal(reconstructedProbe.response.headers.get("x-preserved"), "yes");
+    assert.equal(
+      isTransientUpstreamNginxBadRequest(400, nginxBadRequestFixture),
+      true,
+    );
+    assert.equal(
+      isRetryableUpstreamFailure(400, nginxBadRequestFixture),
+      true,
+    );
+    assert.equal(
+      isTransientUpstreamNginxBadRequest(400, '{"error":"bad request"}'),
+      false,
+    );
+    assert.equal(
+      isRetryableUpstreamFailure(400, '{"error":"bad request"}'),
+      false,
+    );
 
     console.log(JSON.stringify({
       ok: true,
@@ -418,6 +447,7 @@ async function main() {
       streamingCancellationCases: 1,
       invalidEncodingCases: 1,
       reconstructedResponseHeaderCases: 1,
+      transientNginx400Cases: 4,
       policyCompactPayloadStates,
       removedHeaders: [
         "connection",

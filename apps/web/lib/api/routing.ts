@@ -159,10 +159,17 @@ export interface PolicyRecoverySettings {
   activeProfileName: string;
   layers: PolicyRecoveryLayer[];
   unifiedDocument: string;
+  securitySkillEnabled: boolean;
+  securitySkillMode: "routed" | "full";
+  securitySkillStartupTemplate: string;
+  prefillConversationEnabled: boolean;
+  prefillUserMessage: string;
+  prefillAssistantMessage: string;
   baseInstructions: string;
   mergedSha256: string;
   mergedBytes: number;
   estimatedTokens: number;
+  securitySkillGatewayRoot: string;
   retryInstructionsTemplate: string;
   maxRecoveries: number;
   sseProbeBytes: number;
@@ -186,6 +193,7 @@ export interface PolicyRecoveryLimits {
   maxLayerBytes: number;
   maxMergedBytes: number;
   maxUnifiedBytes: number;
+  maxSkillBytes: number;
   minSseProbeBytes: number;
   maxSseProbeBytes: number;
   minInspectableResponseBytes: number;
@@ -297,7 +305,7 @@ export async function getPolicyRecoverySettings() {
   return response.data;
 }
 
-export async function updatePolicyRecoverySettings(input: Pick<PolicyRecoverySettings, "masterEnabled" | "activeProfile" | "layers" | "unifiedDocument" | "retryInstructionsTemplate" | "maxRecoveries" | "sseProbeBytes" | "maxInspectableResponseBytes">) {
+export async function updatePolicyRecoverySettings(input: Pick<PolicyRecoverySettings, "masterEnabled" | "activeProfile" | "layers" | "unifiedDocument" | "securitySkillEnabled" | "securitySkillMode" | "securitySkillStartupTemplate" | "prefillConversationEnabled" | "prefillUserMessage" | "prefillAssistantMessage" | "retryInstructionsTemplate" | "maxRecoveries" | "sseProbeBytes" | "maxInspectableResponseBytes">) {
   const response = await http.put<{
     settings: PolicyRecoverySettings;
     defaults: PolicyRecoverySettings;
@@ -336,10 +344,12 @@ export async function resetAllPolicyRecoverySettings() {
 
 export interface PolicyRecoveryLibraryEntry {
   path: string;
-  kind: "reference" | "script";
+  kind: "reference" | "script" | "security-research-skill";
   content: string;
   sha256: string;
+  sourceSha256?: string;
   bytes: number;
+  sourceBytes?: number;
 }
 
 export async function getPolicyRecoveryLibrary() {

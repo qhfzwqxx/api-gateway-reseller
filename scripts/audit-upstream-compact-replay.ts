@@ -327,7 +327,7 @@ function normalizeCompactItem(
     };
   }
   return {
-    id: `compact_replay_audit_${Date.now()}`,
+    id: `cmp_replay_audit_${Date.now()}`,
     type: "compaction_summary",
     encrypted_content: item.encrypted_content,
   };

@@ -25,7 +25,10 @@
     "db:migrate:deploy": "npm run db:migrate:deploy --workspace packages/db",
     "db:seed": "npm run db:seed --workspace packages/db",
     "db:studio": "npm run db:studio --workspace packages/db",
-    "audit:policy-recovery-profiles": "dotenv -e .env -- tsx scripts/audit-policy-recovery-profiles.ts"
+    "audit:policy-recovery-profiles": "dotenv -e .env -- tsx scripts/audit-policy-recovery-profiles.ts",
+    "sync:security-research-skill": "node scripts/sync-security-research-skill.mjs",
+    "verify:security-research-skill": "node scripts/verify-security-research-skill.mjs",
+    "verify:security-research-skill:remote": "node scripts/verify-security-research-skill.mjs --remote"
   },
   "engines": {
     "node": ">=20.11.0"

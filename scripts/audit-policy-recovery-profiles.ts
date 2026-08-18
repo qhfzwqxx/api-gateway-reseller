@@ -13,6 +13,10 @@ import {
   buildPolicyRecoveryBody,
   createPolicyRecoveryContext,
 } from "../apps/api/src/services/policy-recovery.ts";
+import {
+  securityResearchSkillRemoteRoot,
+  securityResearchSkillLibrary,
+} from "../apps/api/src/services/policy-recovery-security-skill.ts";
 
 const sourceLayers = defaultPolicyRecoverySettings.layers.map((layer) => ({
   ...layer,
@@ -24,6 +28,10 @@ const customizedLayers: PolicyRecoveryLayer[] = sourceLayers.map((layer, index) 
   ...layer,
   enabled: index !== 1,
 }));
+const legacyProfileDefaults = {
+  securitySkillEnabled: false,
+  prefillConversationEnabled: false,
+};
 
 const unified = buildUnifiedPolicyRecoveryDocument(customizedLayers);
 const fixtureLayerProofs: Array<{
@@ -68,12 +76,14 @@ assert.equal(countOccurrences(unified, "[/UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]")
 
 const v1 = createPolicyRecoverySnapshot({
   ...defaultPolicyRecoverySettings,
+  ...legacyProfileDefaults,
   activeProfile: "layered-v1",
   layers: customizedLayers,
   unifiedDocument: unified,
 });
 const v2 = createPolicyRecoverySnapshot({
   ...defaultPolicyRecoverySettings,
+  ...legacyProfileDefaults,
   activeProfile: "unified-v2",
   layers: customizedLayers,
   unifiedDocument: unified,
@@ -86,6 +96,7 @@ assert.equal(v2.baseInstructions, unified);
 
 const legacy = normalizePolicyRecoverySettings({
   masterEnabled: true,
+  ...legacyProfileDefaults,
   layers: customizedLayers,
   retryInstructionsTemplate: defaultPolicyRecoverySettings.retryInstructionsTemplate,
   maxRecoveries: 3,
@@ -98,6 +109,7 @@ assert.ok(legacy.unifiedDocument.includes(`[PROFILE_FIXTURE:${disabledLayer.id}]
 
 const tampered = normalizePolicyRecoverySettings({
   ...defaultPolicyRecoverySettings,
+  ...legacyProfileDefaults,
   layers: customizedLayers,
   activeProfile: "unified-v2",
   unifiedDocument: "TAMPERED_V2_DOCUMENT",
@@ -226,6 +238,87 @@ assert.notEqual(v1Body.instructions, v2Body.instructions);
 assert.ok(!String(v1Body.instructions).includes("[UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]"));
 assert.ok(String(v2Body.instructions).includes("[UNIFIED_POLICY_RECOVERY_DOCUMENT_V2]"));
 
+const completeSettings = createPolicyRecoverySnapshot({
+  ...defaultPolicyRecoverySettings,
+  masterEnabled: true,
+  securitySkillEnabled: true,
+  securitySkillMode: "routed",
+  prefillConversationEnabled: true,
+});
+const completeChatContext = createPolicyRecoveryContext({
+  model: "fixture",
+  messages: [
+    { role: "system", content: "CALLER_SYSTEM" },
+    { role: "user", content: "请分析 LLM 提示注入和 API 路由" },
+  ],
+}, completeSettings);
+const completeChat = buildPolicyRecoveryBody({
+  context: completeChatContext,
+  endpoint: "/v1/chat/completions",
+  recoveryAttempt: 0,
+  provider: "fixture",
+  model: "fixture",
+});
+assert.ok(String(completeChat.messages?.[0]?.content).includes("[SECURITY_RESEARCH_SKILL_START_V4]"));
+assert.ok(String(completeChat.messages?.[0]?.content).includes("entry_url:"));
+assert.ok(!String(completeChat.messages?.[0]?.content).includes("[SECURITY_RESEARCH_SKILL_FILE:"));
+assert.ok(String(completeChat.messages?.[1]?.content).includes("[POLICY_RECOVERY_LAYER:"));
+const completeChatPrefillUserIndex = completeChat.messages?.findIndex((message) =>
+  String(message.content).includes("[POLICY_RECOVERY_PREFILL_USER_V1]"),
+) ?? -1;
+const completeChatPrefillAssistantIndex = completeChat.messages?.findIndex((message) =>
+  String(message.content).includes("[POLICY_RECOVERY_PREFILL_ASSISTANT_V1]"),
+) ?? -1;
+const completeChatRealUserIndex = completeChat.messages?.findIndex((message) =>
+  message.role === "user" && message.content === "请分析 LLM 提示注入和 API 路由",
+) ?? -1;
+assert.equal(completeChatPrefillAssistantIndex, completeChatPrefillUserIndex + 1);
+assert.equal(completeChatRealUserIndex, completeChatPrefillAssistantIndex + 1);
+assert.equal(countOccurrences(JSON.stringify(completeChat), "[POLICY_RECOVERY_PREFILL_USER_V1]"), 1);
+assert.ok(completeChatContext.audit.securitySkillRoutes.includes("ai-security"));
+assert.ok(completeChatContext.audit.securitySkillRoutes.includes("web-api"));
+
+const completeResponses = buildPolicyRecoveryBody({
+  context: createPolicyRecoveryContext({
+    model: "fixture",
+    instructions: "CALLER_INSTRUCTIONS",
+    input: [
+      { role: "assistant", content: "previous" },
+      { role: "user", content: "current" },
+    ],
+  }, completeSettings),
+  endpoint: "/v1/responses",
+  recoveryAttempt: 1,
+  signal: { source: "json", code: "fixture", summary: "BLOCKED" },
+  provider: "fixture",
+  model: "fixture",
+});
+assert.ok(String(completeResponses.instructions).includes("CALLER_INSTRUCTIONS"));
+assert.equal(countOccurrences(JSON.stringify(completeResponses), "[GPT56_POLICY_RETRY_V2]"), 1);
+const completeResponsesPrefillUserIndex = completeResponses.input?.findIndex((message) =>
+  String(message.content).includes("[POLICY_RECOVERY_PREFILL_USER_V1]"),
+) ?? -1;
+const completeResponsesRealUserIndex = completeResponses.input?.findIndex((message) =>
+  message.role === "user" && message.content === "current",
+) ?? -1;
+assert.equal(completeResponsesRealUserIndex, completeResponsesPrefillUserIndex + 2);
+
+const fullSkillSettings = createPolicyRecoverySnapshot({
+  ...completeSettings,
+  securitySkillMode: "full",
+});
+const fullSkillContext = createPolicyRecoveryContext({ model: "fixture", input: "hello" }, fullSkillSettings);
+buildPolicyRecoveryBody({
+  context: fullSkillContext,
+  endpoint: "/v1/responses",
+  recoveryAttempt: 0,
+  provider: "fixture",
+  model: "fixture",
+});
+assert.equal(fullSkillContext.audit.securitySkillFiles.length, securityResearchSkillLibrary.length);
+assert.equal(fullSkillContext.audit.securitySkillRoutes.length, 8);
+assert.ok(!JSON.stringify(fullSkillContext).includes(securityResearchSkillRemoteRoot));
+
 void reportPersistedProof()
   .catch((error) => {
     console.error(error);
@@ -282,6 +375,13 @@ async function reportPersistedProof() {
     legacyProfile: legacy.activeProfile,
     disabledLayerIncludedInV2: v2.baseInstructions.includes(`[PROFILE_FIXTURE:${disabledLayer.id}]`),
     tamperedV2Rejected: tampered.unifiedDocument === unified,
+    completeFeature: {
+      chatOrder: completeChat.messages?.map((message) => message.role),
+      routedSkillRoutes: completeChatContext.audit.securitySkillRoutes,
+      routedSkillFiles: completeChatContext.audit.securitySkillFiles.length,
+      fullSkillFiles: fullSkillContext.audit.securitySkillFiles.length,
+      prefillRoundCount: countOccurrences(JSON.stringify(completeChat), "[POLICY_RECOVERY_PREFILL_USER_V1]"),
+    },
     fixtureLayerProofs,
     persisted: {
       updatedAt: persistedSetting.updatedAt,

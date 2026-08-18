@@ -326,9 +326,9 @@ function normalizeCompactItem(value: unknown, type: CompactItemType) {
   return {
     ...value,
     id:
-      typeof value.id === "string" && value.id
+      typeof value.id === "string" && /^cmp(?:_|$)/u.test(value.id)
         ? value.id
-        : `compact_exact_${Date.now()}`,
+        : `cmp_exact_${Date.now()}`,
     type: "compaction_summary",
   };
 }

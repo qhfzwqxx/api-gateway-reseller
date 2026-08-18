@@ -144,6 +144,7 @@ import {
   isMissingUsageError,
   isRetryableProxyError,
   isRetryableUpstreamFailure,
+  isTransientUpstreamNginxBadRequest,
   isUpstreamBalanceInsufficientError,
   missingUsageMessage,
 } from "../services/proxy-errors.js";
@@ -1730,17 +1731,14 @@ function normalizeCompactItemForTarget(
   if (
     item.type === "compaction_summary" &&
     typeof item.id === "string" &&
-    item.id
+    /^cmp(?:_|$)/u.test(item.id)
   ) {
     return item;
   }
 
   return {
     ...item,
-    id:
-      typeof item.id === "string" && item.id
-        ? item.id
-        : `compact_${hashEncryptedContent(encryptedContent).slice(0, 24)}`,
+    id: `cmp_${hashEncryptedContent(encryptedContent).slice(0, 24)}`,
     type: "compaction_summary",
     encrypted_content: encryptedContent,
   };
@@ -1927,11 +1925,17 @@ function validateCodexCompactionOutput(
     inspection.outputItemCount !== 1 ||
     inspection.compactionOutputItemCount !== 1
   ) {
-    throw new TypeError(
-      `remote compaction v2 expected exactly one compaction output item, got ${inspection.compactionOutputItemCount} from ${inspection.outputItemCount} output items`,
+    const error = new TypeError(
+      `remote compaction v2 expected exactly one compaction output item, got ${inspection.compactionOutputItemCount} from ${inspection.outputItemCount} output items; types=${inspection.outputItemTypes.join(",") || "none"}`,
     );
+    error.name = "CodexCompactionOutputError";
+    throw error;
   }
   return inspection;
+}
+
+function isCodexCompactionOutputError(error: unknown) {
+  return error instanceof Error && error.name === "CodexCompactionOutputError";
 }
 
 function readCompactionFailureMessage(value: unknown) {
@@ -2035,6 +2039,8 @@ async function runUpstreamAttempt(params: {
   compactFallbackContext: CompactFallbackContext;
   invalidCompactRetryAttempted?: boolean;
   compactTypeRetryAttempted?: boolean;
+  compactionOutputRetryAttempted?: boolean;
+  transientNginx400RetryAttempted?: boolean;
   compactItemTypeOverride?: CompactItemType;
   foreignReasoningState?: boolean;
   multipartRawBody?: Buffer;
@@ -2063,6 +2069,8 @@ async function runUpstreamAttempt(params: {
     compactFallbackContext,
     invalidCompactRetryAttempted,
     compactTypeRetryAttempted,
+    compactionOutputRetryAttempted,
+    transientNginx400RetryAttempted,
     compactItemTypeOverride,
     foreignReasoningState,
     multipartRawBody,
@@ -2327,6 +2335,25 @@ async function runUpstreamAttempt(params: {
       const upstreamBalanceInsufficient =
         isUpstreamBalanceInsufficientError(text);
       const retryableFailure = isRetryableUpstreamFailure(statusCode, text);
+
+      if (
+        !transientNginx400RetryAttempted &&
+        isTransientUpstreamNginxBadRequest(statusCode, text)
+      ) {
+        app.log.warn(
+          {
+            apiRequestId,
+            channelId,
+            upstreamProviderKeyId,
+            upstreamStatusCode: statusCode,
+          },
+          "Retrying request on the same upstream route after transient nginx 400",
+        );
+        return runUpstreamAttempt({
+          ...params,
+          transientNginx400RetryAttempted: true,
+        });
+      }
 
       if (
         endpoint === "/v1/responses" &&
@@ -2891,6 +2918,27 @@ async function runUpstreamAttempt(params: {
         : "Upstream request failed";
     const statusCode = manualTerminated ? manualTerminateStatusCode : 502;
     const retryableFailure = isRetryableProxyError(error, endpoint);
+
+    if (
+      !manualTerminated &&
+      !compactionOutputRetryAttempted &&
+      isCodexCompactionRequest({ endpoint, requestBody: body }) &&
+      isCodexCompactionOutputError(error)
+    ) {
+      app.log.warn(
+        {
+          apiRequestId,
+          channelId,
+          upstreamProviderKeyId,
+          error: message,
+        },
+        "Retrying compaction trigger on the same upstream route after invalid output shape",
+      );
+      return runUpstreamAttempt({
+        ...params,
+        compactionOutputRetryAttempted: true,
+      });
+    }
 
     if (
       !manualTerminated &&

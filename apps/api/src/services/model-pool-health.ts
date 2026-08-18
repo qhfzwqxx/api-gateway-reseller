@@ -1,3 +1,4 @@
+import { randomInt, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { prisma, type ModelPoolChannel } from "@gateway/db";
 import {
@@ -461,63 +462,32 @@ async function performModelPoolChannelCheck(
   }
 
   const healthCheckEndpoint = normalizeModelPoolHealthCheckEndpoint(channel.modelPool.healthCheckEndpoint);
-  let winnerKeyId: string | null = null;
-  const keyResults = await Promise.all(
-    resolvedActiveKeys.map((key) =>
-      probeProviderKey({
-        baseUrl: provider.baseUrl,
-        apiKey: key.key,
-        timeoutMs: provider.timeoutMs,
-        model: channel.modelPool.model,
-        endpoint: healthCheckEndpoint,
-        onFirstToken: () => {
-          if (winnerKeyId === null) {
-            winnerKeyId = key.id;
-            return "continue";
-          }
+  const key = resolvedActiveKeys[randomInt(resolvedActiveKeys.length)]!;
+  const result = await probeProviderKey({
+    baseUrl: provider.baseUrl,
+    apiKey: key.key,
+    timeoutMs: provider.timeoutMs,
+    model: channel.modelPool.model,
+    endpoint: healthCheckEndpoint,
+    onFirstToken: () => "stop",
+  });
 
-          return "stop";
-        },
-      }).then(async (result) => {
-        await prisma.upstreamProviderKey.update({
-          where: { id: key.id },
-          data: {
-            lastCheckStatus: result.ok ? "SUCCESS" : "FAILED",
-            lastCheckedAt: new Date(),
-            lastError: result.ok ? null : result.message.slice(0, 1000),
-          },
-        });
+  await prisma.upstreamProviderKey.update({
+    where: { id: key.id },
+    data: {
+      lastCheckStatus: result.ok ? "SUCCESS" : "FAILED",
+      lastCheckedAt: new Date(),
+      lastError: result.ok ? null : result.message.slice(0, 1000),
+    },
+  });
 
-        return { key, result };
-      }),
-    ),
-  );
-  const failedKey = keyResults.find(({ result }) => !result.ok);
-  const winnerResult = winnerKeyId
-    ? keyResults.find(({ key }) => key.id === winnerKeyId)
-    : undefined;
-
-  if (failedKey && !failedKey.result.ok) {
-    const message = `${formatUpstreamKeyLabel(failedKey.key)}: ${failedKey.result.message}`;
-    const latencyMs = failedKey.result.latencyMs;
-    return markChannelFailure(channel, message, latencyMs, options);
+  if (!result.ok) {
+    const message = `${formatUpstreamKeyLabel(key)}: ${result.message}`;
+    return markChannelFailure(channel, message, result.latencyMs, options);
   }
 
-  if (!winnerResult || !winnerResult.result.ok) {
-    return markChannelFailure(
-      channel,
-      "No active upstream key returned a valid output token",
-      undefined,
-      options,
-    );
-  }
-
-  const latencyMs = winnerResult.result.latencyMs;
-  const firstTokenLatencyMs = averageNullableNumbers(
-    keyResults.map(({ result }) =>
-      result.ok ? result.firstTokenLatencyMs : null,
-    ),
-  );
+  const latencyMs = result.latencyMs;
+  const firstTokenLatencyMs = result.firstTokenLatencyMs;
 
   return markChannelSuccess(channel, latencyMs, firstTokenLatencyMs);
 }
@@ -722,20 +692,6 @@ function successGraceRemainingSeconds(successGraceUntilMs: number | null, now: D
   }
 
   return Math.max(0, Math.ceil((successGraceUntilMs - now.getTime()) / 1000));
-}
-
-function averageNullableNumbers(values: Array<number | null>) {
-  const numericValues = values.filter((value): value is number => value !== null);
-  return averageNumbers(numericValues);
-}
-
-function averageNumbers(values: number[]) {
-  if (values.length === 0) {
-    return null;
-  }
-
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return Math.round(total / values.length);
 }
 
 async function markChannelSuccess(
@@ -972,14 +928,7 @@ async function probeUpstream(input: ProbeInput): Promise<ProbeResult> {
       ...input,
       mode: "responses",
       path: "/v1/responses",
-      body: {
-        model: input.model,
-        instructions: "Reply with ok.",
-        input: [{ role: "user", content: "ok" }],
-        reasoning: { effort: "low" },
-        store: false,
-        stream: true,
-      },
+      body: buildCodexHealthProbeBody(input.model),
     });
   }
 
@@ -995,6 +944,94 @@ async function probeUpstream(input: ProbeInput): Promise<ProbeResult> {
       stream: true,
     },
   });
+}
+
+export function buildCodexHealthProbeBody(
+  model: string,
+  marker = `gateway-health-${Date.now()}`,
+) {
+  const turnId = randomUUID();
+  const sessionId = randomUUID();
+  const installationId = "gateway-health-check";
+
+  return {
+    model,
+    instructions:
+      "You are a Codex protocol health check. Reply with exactly OK. Do not call tools.",
+    input: [
+      {
+        role: "user",
+        type: "message",
+        content: [
+          {
+            type: "input_text",
+            text: `Reply with exactly OK. Health marker: ${marker}.`,
+          },
+        ],
+      },
+    ],
+    tools: [
+      {
+        type: "function",
+        name: "get_goal",
+        description: "Read the current health-check goal.",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+        strict: false,
+      },
+      {
+        type: "namespace",
+        name: "codex_app",
+        description: "Codex application tools.",
+        tools: [
+          {
+            type: "function",
+            name: "read_thread_terminal",
+            description: "Read the current terminal output.",
+            parameters: {
+              type: "object",
+              properties: {},
+              additionalProperties: false,
+            },
+            strict: false,
+          },
+        ],
+      },
+      {
+        type: "web_search",
+        external_web_access: true,
+      },
+    ],
+    tool_choice: "auto",
+    parallel_tool_calls: false,
+    include: [],
+    reasoning: null,
+    store: false,
+    stream: true,
+    client_metadata: {
+      turn_id: turnId,
+      thread_id: sessionId,
+      session_id: sessionId,
+      "x-codex-window-id": `${sessionId}:0`,
+      "x-codex-turn-metadata": JSON.stringify({
+        installation_id: installationId,
+        session_id: sessionId,
+        thread_id: sessionId,
+        turn_id: turnId,
+        window_id: `${sessionId}:0`,
+        request_kind: "turn",
+        sandbox: "none",
+        turn_started_at_unix_ms: Date.now(),
+        workspace_kind: "project",
+      }),
+      "x-codex-installation-id": installationId,
+    },
+    prompt_cache_key: sessionId,
+  };
 }
 
 type PostHealthProbeInput = ProbeInput & {
@@ -1014,6 +1051,8 @@ async function postHealthProbe(input: PostHealthProbeInput): Promise<ProbeResult
     headers: {
       Authorization: `Bearer ${input.apiKey}`,
       "Content-Type": "application/json",
+      Accept: "text/event-stream, application/json",
+      "Accept-Encoding": "identity",
     },
     body: JSON.stringify(input.body),
     signal: input.signal,
@@ -1034,6 +1073,15 @@ async function postHealthProbe(input: PostHealthProbeInput): Promise<ProbeResult
     startedAt,
     input.onFirstToken,
   );
+  if (readResult.failureMessage) {
+    return {
+      ok: false,
+      message: `${input.mode}: ${readResult.failureMessage}`.slice(0, 1000),
+      latencyMs: Math.round(performance.now() - startedAt),
+      firstTokenLatencyMs: readResult.firstTokenLatencyMs,
+    };
+  }
+
   if (readResult.firstTokenLatencyMs === null) {
     return {
       ok: false,
@@ -1057,6 +1105,7 @@ type HealthProbeReadResult = {
   firstTokenLatencyMs: number | null;
   completed: boolean;
   stoppedAfterFirstToken: boolean;
+  failureMessage: string | null;
 };
 
 async function readHealthProbeResponse(
@@ -1077,6 +1126,10 @@ async function readHealthProbeResponse(
       firstTokenLatencyMs,
       completed: true,
       stoppedAfterFirstToken,
+      failureMessage: findHealthProbeFailure(
+        bodyText,
+        response.headers.get("content-type"),
+      ),
     };
   }
 
@@ -1136,6 +1189,7 @@ async function readHealthProbeResponse(
           firstTokenLatencyMs,
           completed: false,
           stoppedAfterFirstToken,
+          failureMessage: null,
         };
       }
     }
@@ -1161,6 +1215,12 @@ async function readHealthProbeResponse(
     firstTokenLatencyMs,
     completed: !stoppedAfterFirstToken,
     stoppedAfterFirstToken,
+    failureMessage: stoppedAfterFirstToken
+      ? null
+      : findHealthProbeFailure(
+          rawResponseText,
+          response.headers.get("content-type"),
+        ),
   };
 }
 
@@ -1169,12 +1229,70 @@ function findOutputTokenInBody(
   contentType: string | null,
   startedAt: number,
 ) {
-  const payloads = contentType?.includes("text/event-stream") || bodyText.includes("data:")
-    ? parseSseJsonPayloads(bodyText)
-    : parseJsonBody(bodyText);
+  const payloads = parseHealthProbePayloads(bodyText, contentType);
 
   return payloads.some(streamChunkHasOutputToken)
     ? Math.round(performance.now() - startedAt)
+    : null;
+}
+
+function findHealthProbeFailure(
+  bodyText: string,
+  contentType: string | null,
+) {
+  for (const payload of parseHealthProbePayloads(bodyText, contentType)) {
+    const message = readHealthProbeFailureMessage(payload);
+    if (message) {
+      return message;
+    }
+  }
+
+  return null;
+}
+
+function parseHealthProbePayloads(
+  bodyText: string,
+  contentType: string | null,
+) {
+  return contentType?.includes("text/event-stream") || bodyText.includes("data:")
+    ? parseSseJsonPayloads(bodyText)
+    : parseJsonBody(bodyText);
+}
+
+function readHealthProbeFailureMessage(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const event = value as Record<string, unknown>;
+  const response = event.response && typeof event.response === "object"
+    ? event.response as Record<string, unknown>
+    : null;
+  const failed = event.type === "response.failed" ||
+    event.type === "error" ||
+    response?.status === "failed";
+
+  if (!failed) {
+    return null;
+  }
+
+  return readErrorMessage(event.error) ??
+    readErrorMessage(response?.error) ??
+    "upstream response stream failed";
+}
+
+function readErrorMessage(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const error = value as Record<string, unknown>;
+  return typeof error.message === "string" && error.message.trim()
+    ? error.message.trim()
     : null;
 }
 
@@ -1247,20 +1365,22 @@ function streamChunkHasOutputToken(chunk: unknown): boolean {
       }
 
       const item = choice as Record<string, unknown>;
-      return textLikeValueHasContent(item.text) || textLikeValueHasContent(item.delta);
+      return outputLikeValueHasContent(item.text) ||
+        outputLikeValueHasContent(item.delta);
     });
   }
 
-  return textLikeValueHasContent(event.output);
+  return outputLikeValueHasContent(event.output) ||
+    outputLikeValueHasContent(event.item);
 }
 
-function textLikeValueHasContent(value: unknown): boolean {
+function outputLikeValueHasContent(value: unknown): boolean {
   if (typeof value === "string") {
     return value.length > 0;
   }
 
   if (Array.isArray(value)) {
-    return value.some(textLikeValueHasContent);
+    return value.some(outputLikeValueHasContent);
   }
 
   if (!value || typeof value !== "object") {
@@ -1268,9 +1388,29 @@ function textLikeValueHasContent(value: unknown): boolean {
   }
 
   const record = value as Record<string, unknown>;
+  if (
+    record.type === "function_call" ||
+    record.type === "custom_tool_call"
+  ) {
+    return typeof record.name === "string" ||
+      typeof record.call_id === "string" ||
+      typeof record.arguments === "string" ||
+      typeof record.input === "string";
+  }
+
+  if (
+    typeof record.name === "string" ||
+    typeof record.call_id === "string" ||
+    typeof record.arguments === "string"
+  ) {
+    return true;
+  }
+
   return (
-    textLikeValueHasContent(record.content) ||
-    textLikeValueHasContent(record.text) ||
-    textLikeValueHasContent(record.delta)
+    outputLikeValueHasContent(record.content) ||
+    outputLikeValueHasContent(record.text) ||
+    outputLikeValueHasContent(record.delta) ||
+    outputLikeValueHasContent(record.tool_calls) ||
+    outputLikeValueHasContent(record.function)
   );
 }

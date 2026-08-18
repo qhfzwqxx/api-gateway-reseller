@@ -37,6 +37,8 @@ const tabs = [
   "版本管理",
   "V1 分层版",
   "V2 统一版",
+  "Skill 流程",
+  "启动提示",
   "当前注入预览",
   "恢复设置",
   "模型池",
@@ -199,6 +201,13 @@ export default function PolicyRecoveryPage() {
   const layeredBytes = byteLength(layeredInstructions);
   const unifiedInstructions = draft?.unifiedDocument ?? "";
   const unifiedBytes = byteLength(unifiedInstructions);
+  const skillLibraryEntries = (libraryQuery.data ?? []).filter(
+    (entry) => entry.kind === "security-research-skill",
+  );
+  const skillLibraryBytes = skillLibraryEntries.reduce(
+    (sum, entry) => sum + entry.bytes,
+    0,
+  );
   const activeInstructions =
     draft?.activeProfile === "unified-v2"
       ? unifiedInstructions
@@ -263,8 +272,8 @@ export default function PolicyRecoveryPage() {
               完整破甲功能
             </h1>
             <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
-              V1 保留现有多文件分层配置，V2 将全部源层原文整合成一份统一大文档。
-              两个版本互斥生效，切换不会覆盖另一份配置。
+              原有 V1/V2 破甲、Security Research Skill 流程和伪造历史对话是三套独立机制；
+              开启后会在同一次请求中依次同时执行。
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -445,11 +454,27 @@ export default function PolicyRecoveryPage() {
           loading={regenerateUnifiedMutation.isPending}
         />
       ) : null}
+      {activeTab === "Skill 流程" ? (
+        <SecuritySkillProfileEditor
+          draft={draft}
+          setDraft={setDraft}
+          fileCount={skillLibraryEntries.length}
+          libraryBytes={skillLibraryBytes}
+          gatewayRoot={draft.securitySkillGatewayRoot}
+        />
+      ) : null}
+      {activeTab === "启动提示" ? (
+        <SkillStartupTemplateEditor
+          draft={draft}
+          defaults={settingsQuery.data?.defaults}
+          setDraft={setDraft}
+        />
+      ) : null}
       {activeTab === "当前注入预览" ? (
         <CodeViewer
-          title={`${profileName(draft.activeProfile)} · 当前真实注入文本`}
+          title={`${profileName(draft.activeProfile)} · 原有破甲 Profile 注入文本`}
           content={activeInstructions}
-          meta={`${formatBytes(activeBytes)} · 约 ${Math.ceil(activeBytes / 4).toLocaleString()} tokens · 保存后新请求生效`}
+          meta={`${formatBytes(activeBytes)} · 约 ${Math.ceil(activeBytes / 4).toLocaleString()} tokens · Skill 与伪造对话请在“测试预览”查看最终请求体`}
         />
       ) : null}
       {activeTab === "恢复设置" ? (
@@ -530,8 +555,8 @@ function ProfileManager({
               注入版本选择
             </h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">
-              只有当前选中的 Profile
-              会进入新请求。切换不会删除或覆盖另一版本；保存后立即对新请求生效。
+              这里只选择原有破甲使用 V1 还是 V2。独立 Skill 流程与伪造历史对话不参与互斥，
+              各自开启后会和当前 Profile 同时进入新请求。
             </p>
           </div>
           <span className="inline-flex min-h-9 items-center rounded-full bg-blue-50 px-3 text-xs font-semibold text-blue-700">
@@ -811,6 +836,179 @@ function RecoverySettings({
           {"{{provider}}"}、{"{{model}}"}
         </span>
       </label>
+    </section>
+  );
+}
+
+function SecuritySkillProfileEditor({
+  draft,
+  setDraft,
+  fileCount,
+  libraryBytes,
+  gatewayRoot,
+}: {
+  draft: PolicyRecoverySettings;
+  setDraft: (value: PolicyRecoverySettings) => void;
+  fileCount: number;
+  libraryBytes: number;
+  gatewayRoot: string;
+}) {
+  return (
+    <section className="grid gap-4">
+      <section className="rounded-xl border border-blue-200 bg-blue-50/60 p-5 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-blue-700">
+              <BookOpen className="h-4 w-4" />
+              本地 Security Research Skill
+            </div>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">独立 Skill 固定顺序工作流</h2>
+            <p className="mt-1 max-w-4xl text-sm leading-6 text-slate-600">
+              请求不再访问远程站点。服务器从本地镜像读取核心入口，再根据原请求内容选择 AI、Web、逆向、Pwn、密码学、取证、OSINT 或评估工具模块。
+            </p>
+            <code className="mt-3 block break-all rounded-lg border border-blue-200 bg-white px-3 py-2 text-xs text-blue-800">
+              {gatewayRoot}
+            </code>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-center">
+            <Metric label="镜像文件" value={fileCount} />
+            <Metric label="镜像体积" value={formatBytes(libraryBytes)} />
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <label className="flex min-h-11 items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4">
+          <span>
+            <span className="block text-sm font-semibold text-slate-900">启用独立 Skill 流程</span>
+            <span className="mt-1 block text-xs text-slate-500">与当前 V1/V2 破甲同时执行，不替代、不覆盖现有 Profile。</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={draft.securitySkillEnabled}
+            onChange={(event) => setDraft({ ...draft, securitySkillEnabled: event.target.checked })}
+            className="h-4 w-4 rounded border-slate-300"
+          />
+        </label>
+        <h3 className="mt-5 text-base font-semibold text-slate-950">资料注入模式</h3>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {([
+            ["routed", "按请求路由（推荐）", "始终注入核心文件，只追加命中的领域模块和专题资料，减少上下文与费用。"],
+            ["full", "全部文件", "把本地镜像全部注入每次请求；内容可能超过部分上游模型的上下文限制。"],
+          ] as const).map(([mode, title, text]) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={draft.securitySkillMode === mode}
+              onClick={() => setDraft({ ...draft, securitySkillMode: mode })}
+              className={`min-h-24 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${draft.securitySkillMode === mode ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:bg-slate-50"}`}
+            >
+              <div className="font-semibold text-slate-950">{title}</div>
+              <p className="mt-1 text-sm leading-6 text-slate-600">{text}</p>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="grid gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <label className="flex min-h-11 items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-4">
+          <span>
+            <span className="block text-sm font-semibold text-slate-900">伪造一轮历史对话</span>
+            <span className="mt-1 block text-xs text-slate-500">在调用方真实消息前插入 user → assistant，Responses 与 Chat Completions 都支持。</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={draft.prefillConversationEnabled}
+            onChange={(event) => setDraft({ ...draft, prefillConversationEnabled: event.target.checked })}
+            className="h-4 w-4 rounded border-slate-300"
+          />
+        </label>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-slate-800">预置用户消息</span>
+            <textarea
+              value={draft.prefillUserMessage}
+              onChange={(event) => setDraft({ ...draft, prefillUserMessage: event.target.value })}
+              className={`${textareaClass} min-h-[260px] font-mono text-xs leading-5`}
+            />
+          </label>
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-slate-800">预置助手回复</span>
+            <textarea
+              value={draft.prefillAssistantMessage}
+              onChange={(event) => setDraft({ ...draft, prefillAssistantMessage: event.target.value })}
+              className={`${textareaClass} min-h-[260px] font-mono text-xs leading-5`}
+            />
+          </label>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function SkillStartupTemplateEditor({
+  draft,
+  defaults,
+  setDraft,
+}: {
+  draft: PolicyRecoverySettings;
+  defaults?: PolicyRecoverySettings;
+  setDraft: (value: PolicyRecoverySettings) => void;
+}) {
+  const preview = draft.securitySkillStartupTemplate
+    .replaceAll("{{skillRoot}}", draft.securitySkillGatewayRoot)
+    .replaceAll("{{syncedAt}}", "运行时镜像同步时间")
+    .replaceAll("{{selectedRoutes}}", "运行时匹配路由");
+
+  return (
+    <section className="grid gap-4 xl:grid-cols-2">
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-blue-700">
+              <FileCode2 className="h-4 w-4" />
+              Skill 启动提示
+            </div>
+            <h2 className="mt-2 text-lg font-semibold text-slate-950">真实用户消息前缀模板</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              保存后会紧贴在每条真实用户提示词前面。这里只发送启动提示，不注入 Skill 文件正文。
+            </p>
+          </div>
+          <button
+            type="button"
+            className={secondaryButton}
+            disabled={!defaults}
+            onClick={() => defaults && setDraft({
+              ...draft,
+              securitySkillStartupTemplate: defaults.securitySkillStartupTemplate,
+            })}
+          >
+            <RotateCcw className="h-4 w-4" />
+            恢复默认
+          </button>
+        </div>
+        <label className="mt-4 grid gap-2">
+          <span className="text-sm font-semibold text-slate-800">启动提示模板</span>
+          <textarea
+            value={draft.securitySkillStartupTemplate}
+            onChange={(event) => setDraft({
+              ...draft,
+              securitySkillStartupTemplate: event.target.value,
+            })}
+            className={`${textareaClass} min-h-[520px] font-mono text-xs leading-5`}
+            aria-label="Skill 启动提示模板"
+          />
+        </label>
+        <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-5 text-blue-800">
+          可用变量：<code>{"{{skillRoot}}"}</code>、<code>{"{{syncedAt}}"}</code>、<code>{"{{selectedRoutes}}"}</code>
+        </div>
+      </section>
+
+      <CodeViewer
+        title="实际运行时预览"
+        content={`${preview}\n\n[用户原始提示词]`}
+        meta={`${formatBytes(byteLength(draft.securitySkillStartupTemplate))} · 保存配置后生效`}
+      />
     </section>
   );
 }

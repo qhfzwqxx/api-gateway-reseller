@@ -11,6 +11,10 @@ import { readCharityAnnouncementSettings } from "../services/charity-announcemen
 import { sendEmergencyAdminCallEmail } from "../services/mailer.js";
 import { onPublicStatusChanged } from "../services/public-status-events.js";
 import { readUnifiedPriceSettings } from "../services/unified-pricing.js";
+import {
+  readSecurityResearchSkillFile,
+  readSecurityResearchSkillManifest,
+} from "../services/policy-recovery-security-skill.js";
 
 type CharityRequestRow = {
   day: string;
@@ -67,6 +71,36 @@ const emergencyAdminCallSchema = z.object({
 });
 
 export async function publicRoutes(app: FastifyInstance) {
+  app.get("/security-research/current", async (_request, reply) => {
+    const content = readSecurityResearchSkillFile("SKILL.md");
+    if (content === null) {
+      return reply.status(404).send({ message: "Skill entry not found" });
+    }
+    return reply
+      .type("text/markdown; charset=utf-8")
+      .header("cache-control", "public, max-age=300")
+      .send(content);
+  });
+  app.get<{ Params: { "*": string } }>(
+    "/security-research/current/*",
+    async (request, reply) => {
+      const requestedPath = decodeURIComponent(request.params["*"] || "");
+      if (requestedPath === "manifest.json") {
+        return reply
+          .type("application/json; charset=utf-8")
+          .header("cache-control", "public, max-age=300")
+          .send(readSecurityResearchSkillManifest());
+      }
+      const content = readSecurityResearchSkillFile(requestedPath);
+      if (content === null) {
+        return reply.status(404).send({ message: "Skill file not found" });
+      }
+      return reply
+        .type(contentTypeForSkillPath(requestedPath))
+        .header("cache-control", "public, max-age=300")
+        .send(content);
+    },
+  );
   app.get("/public/charity-status", async () => getPublicModelPoolStatus());
 
   app.post("/public/emergency-admin-call", async (request, reply) => {
@@ -223,6 +257,18 @@ export async function publicRoutes(app: FastifyInstance) {
       }
     }, 15000);
   });
+}
+
+function contentTypeForSkillPath(path: string) {
+  if (path.endsWith(".json")) return "application/json; charset=utf-8";
+  if (path.endsWith(".py")) return "text/x-python; charset=utf-8";
+  if (path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".cjs") || path.endsWith(".ts")) {
+    return "text/javascript; charset=utf-8";
+  }
+  if (path.endsWith(".yaml") || path.endsWith(".yml") || path.endsWith(".ps1") || path.endsWith(".txt")) {
+    return "text/plain; charset=utf-8";
+  }
+  return "text/markdown; charset=utf-8";
 }
 
 async function reserveEmergencyAdminCallSlot(

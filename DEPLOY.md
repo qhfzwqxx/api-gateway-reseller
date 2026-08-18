@@ -54,6 +54,7 @@ Important variables live in `.env`:
 - `ADMIN_EMAIL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`: initial admin seed account
 - `API_PORT`, `WEB_PORT`: service ports
 - `NEXT_PUBLIC_API_BASE_URL`: browser-facing API URL
+- `SECURITY_RESEARCH_SKILL_PUBLIC_ROOT`: public API-hosted root for the mirrored Security Research Skill, for example `https://gateway.example.com/security-research/current`; do not point this at a frontend-only domain unless that domain proxies this path to the API
 - `CORS_ORIGINS`: comma-separated frontend origins allowed to call the API
 
 Do not commit `.env` to GitHub.
