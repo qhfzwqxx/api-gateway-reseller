@@ -595,6 +595,9 @@ PATCH /admin/dispatch-settings
     "healthCheckIntervalSeconds": 30,
     "speedRankPenalty": 300,
     "stickyHitPenalty": 500,
+    "channelConcurrencyPenalty": 300,
+    "keyConcurrencyPenalty": 200,
+    "recentFailurePenalty": 250,
     "forceAvailableButtonEnabled": true
   },
   "defaults": {}
@@ -615,8 +618,11 @@ PATCH /admin/dispatch-settings
 | `penaltyFailureThreshold` | 1-100 | 连续失败多少次惩罚 |
 | `penaltySeconds` | 1-86400 | 惩罚时长 |
 | `healthCheckIntervalSeconds` | 5-3600 | 健康检查间隔 |
-| `speedRankPenalty` | 0-60000 | 速度排名惩罚分 |
-| `stickyHitPenalty` | 0-60000 | 粘性占用惩罚分 |
+| `speedRankPenalty` | 0-60000 | 相对速度差距权重 |
+| `stickyHitPenalty` | 0-60000 | 粘性占比最大惩罚分 |
+| `channelConcurrencyPenalty` | 0-60000 | 渠道实时并发惩罚分 |
+| `keyConcurrencyPenalty` | 0-60000 | Key 实时并发惩罚分 |
+| `recentFailurePenalty` | 0-60000 | 近期可重试失败软惩罚分 |
 | `forceAvailableButtonEnabled` | boolean | 是否允许强制可用操作 |
 
 ## 8. 上游管理

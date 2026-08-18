@@ -496,6 +496,9 @@ PATCH /admin/dispatch-settings
   "healthCheckIntervalSeconds": 60,
   "speedRankPenalty": 100,
   "stickyHitPenalty": 50,
+  "channelConcurrencyPenalty": 300,
+  "keyConcurrencyPenalty": 200,
+  "recentFailurePenalty": 250,
   "forceAvailableButtonEnabled": true
 }
 ```
@@ -518,7 +521,7 @@ PATCH /admin/dispatch-settings
 - `penaltyFailureThreshold`：1-100。
 - `penaltySeconds`：1-86400。
 - `healthCheckIntervalSeconds`：5-3600。
-- `speedRankPenalty`、`stickyHitPenalty`：0-60000。
+- `speedRankPenalty`、`stickyHitPenalty`、`channelConcurrencyPenalty`、`keyConcurrencyPenalty`、`recentFailurePenalty`：0-60000。
 
 ## 6. 用户、钱包、API Key
 

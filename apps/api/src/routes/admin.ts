@@ -233,6 +233,9 @@ const dispatchSettingsSchema = z.object({
   healthCheckIntervalSeconds: z.number().int().min(5).max(3600).optional(),
   speedRankPenalty: z.number().int().min(0).max(60000).optional(),
   stickyHitPenalty: z.number().int().min(0).max(60000).optional(),
+  channelConcurrencyPenalty: z.number().int().min(0).max(60000).optional(),
+  keyConcurrencyPenalty: z.number().int().min(0).max(60000).optional(),
+  recentFailurePenalty: z.number().int().min(0).max(60000).optional(),
   forceAvailableButtonEnabled: z.boolean().optional(),
 });
 const upstreamProviderKeyStatusSchema = z.enum(["ACTIVE", "DISABLED"]);

@@ -277,10 +277,11 @@ export async function reserveProviderKey(
   }));
 
   if (options.dryRun) {
-    const fallbackKey = chooseFallbackKey(
+    const fallbackKey = await chooseFallbackKey(
       keys,
       stickyOccupancies,
       dispatchSettings.stickyHitPenalty,
+      dispatchSettings.keyConcurrencyPenalty,
     );
     return fallbackKey
       ? {
@@ -298,6 +299,7 @@ export async function reserveProviderKey(
       keys,
       stickyOccupancies,
       dispatchSettings.stickyHitPenalty,
+      dispatchSettings.keyConcurrencyPenalty,
     );
     const selectedKey = keys.find((key) => key.id === selectedKeyId);
 
@@ -318,10 +320,11 @@ export async function reserveProviderKey(
       },
     };
   } catch {
-    const fallbackKey = chooseFallbackKey(
+    const fallbackKey = await chooseFallbackKey(
       keys,
       stickyOccupancies,
       dispatchSettings.stickyHitPenalty,
+      dispatchSettings.keyConcurrencyPenalty,
     );
     if (!fallbackKey) {
       return null;
@@ -359,10 +362,12 @@ async function reserveKeyAtomically(
   keys: UpstreamProviderKey[],
   stickyOccupancies: Map<string, number>,
   stickyHitPenalty: number,
+  keyConcurrencyPenalty: number,
 ) {
   const redisKeys = keys.map((key) => upstreamKeyInflightKey(key.id));
   const args = [
     String(keyInflightTtlSeconds),
+    String(Math.max(0, keyConcurrencyPenalty)),
     ...keys.flatMap((key) => [
       key.id,
       String((stickyOccupancies.get(key.id) ?? 0) * stickyHitPenalty),
@@ -379,21 +384,22 @@ local bestEntropy = nil
 local bestInflight = nil
 local bestPriority = nil
 local bestLastUsed = nil
-local argIndex = 2
+local argIndex = 3
 
 for index = 1, #KEYS do
   local entropy = tonumber(ARGV[argIndex + 1])
   local priority = tonumber(ARGV[argIndex + 2])
   local lastUsed = tonumber(ARGV[argIndex + 3])
   local inflight = math.max(0, tonumber(redis.call("GET", KEYS[index]) or "0"))
+  local score = entropy + (inflight * tonumber(ARGV[2]))
 
   if bestEntropy == nil
-    or entropy < bestEntropy
-    or (entropy == bestEntropy and inflight < bestInflight)
-    or (entropy == bestEntropy and inflight == bestInflight and priority < bestPriority)
-    or (entropy == bestEntropy and inflight == bestInflight and priority == bestPriority and lastUsed < bestLastUsed)
+    or score < bestEntropy
+    or (score == bestEntropy and inflight < bestInflight)
+    or (score == bestEntropy and inflight == bestInflight and priority < bestPriority)
+    or (score == bestEntropy and inflight == bestInflight and priority == bestPriority and lastUsed < bestLastUsed)
   then
-    bestEntropy = entropy
+    bestEntropy = score
     bestInflight = inflight
     bestPriority = priority
     bestLastUsed = lastUsed
@@ -405,7 +411,7 @@ end
 
 redis.call("INCR", KEYS[bestIndex])
 redis.call("EXPIRE", KEYS[bestIndex], ttl)
-return ARGV[2 + ((bestIndex - 1) * 4)]
+  return ARGV[3 + ((bestIndex - 1) * 4)]
 `,
     redisKeys.length,
     ...redisKeys,
@@ -415,15 +421,19 @@ return ARGV[2 + ((bestIndex - 1) * 4)]
   return typeof result === "string" ? result : null;
 }
 
-function chooseFallbackKey(
+async function chooseFallbackKey(
   keys: UpstreamProviderKey[],
   stickyOccupancies: Map<string, number>,
   stickyHitPenalty: number,
+  keyConcurrencyPenalty: number,
 ) {
+  const inflightByKey = await getProviderKeyInflightCounts(keys.map((key) => key.id));
   return [...keys].sort((left, right) => {
     const entropyDelta =
-      (stickyOccupancies.get(left.id) ?? 0) * stickyHitPenalty -
-      (stickyOccupancies.get(right.id) ?? 0) * stickyHitPenalty;
+      ((stickyOccupancies.get(left.id) ?? 0) * stickyHitPenalty +
+        (inflightByKey.get(left.id) ?? 0) * keyConcurrencyPenalty) -
+      ((stickyOccupancies.get(right.id) ?? 0) * stickyHitPenalty +
+        (inflightByKey.get(right.id) ?? 0) * keyConcurrencyPenalty);
     if (entropyDelta !== 0) {
       return entropyDelta;
     }
@@ -434,6 +444,23 @@ function chooseFallbackKey(
 
     return (left.lastUsedAt?.getTime() ?? 0) - (right.lastUsedAt?.getTime() ?? 0);
   })[0] ?? null;
+}
+
+async function getProviderKeyInflightCounts(keyIds: string[]) {
+  const uniqueIds = [...new Set(keyIds)];
+  try {
+    const values = await redis.mget(
+      ...uniqueIds.map((keyId) => upstreamKeyInflightKey(keyId)),
+    );
+    return new Map(
+      uniqueIds.map((keyId, index) => [
+        keyId,
+        Math.max(0, Number(values[index] ?? 0)),
+      ] as const),
+    );
+  } catch {
+    return new Map(uniqueIds.map((keyId) => [keyId, 0] as const));
+  }
 }
 
 function createKeyReservation(key: UpstreamProviderKey) {

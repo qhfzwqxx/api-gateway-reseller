@@ -37,6 +37,9 @@ const settingsSchema = z.object({
   healthCheckIntervalSeconds: z.coerce.number().int().min(5).max(3600),
   speedRankPenalty: z.coerce.number().int().min(0).max(60000),
   stickyHitPenalty: z.coerce.number().int().min(0).max(60000),
+  channelConcurrencyPenalty: z.coerce.number().int().min(0).max(60000),
+  keyConcurrencyPenalty: z.coerce.number().int().min(0).max(60000),
+  recentFailurePenalty: z.coerce.number().int().min(0).max(60000),
   forceAvailableButtonEnabled: z.boolean(),
 });
 
@@ -397,7 +400,7 @@ function DispatchSettingsPanel({ onNotice }: { onNotice: (message: string) => vo
           label="惩罚冷静期时长"
           register={form.register("penaltySeconds")}
           error={form.formState.errors.penaltySeconds?.message}
-          hint="11号状态规则：上游在惩罚期内不可调用，过固定时间后自动触发 10号健康检测规则，全Key成功才可恢复「可调用」状态。"
+          hint="惩罚期结束后自动触发健康检测；渠道连续通过恢复检测后才会恢复为「可调用」。"
         />
         <NumberField
           label="健康检测间隔"
@@ -413,19 +416,37 @@ function DispatchSettingsPanel({ onNotice }: { onNotice: (message: string) => vo
       </SettingsCard>
         <SettingsCard title="熵值与负载均衡规则">
         <p className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-700">
-          4、7、8 号规则为系统底层默认标准，此处仅配置权重数字。
+          这里配置速度、粘性、实时并发和近期失败的调度权重；数值越大，对应因素影响越强。
         </p>
         <NumberField
           label="粘性命中惩罚分"
           register={form.register("stickyHitPenalty")}
           error={form.formState.errors.stickyHitPenalty?.message}
-          hint="上游每被一个IP粘住叠加的熵增参数。"
+          hint="按候选渠道的粘性用户占比计算的最大惩罚分。"
         />
         <NumberField
-          label="速度排名惩罚分"
+          label="相对速度权重"
           register={form.register("speedRankPenalty")}
           error={form.formState.errors.speedRankPenalty?.message}
-          hint="基于 10 号规则测出的首Token平均时间排名，排名越后叠加的熵增值越大。"
+          hint="按最近 5 次健康检测首 Token 中位数的相对差距计算，不再只看速度名次。"
+        />
+        <NumberField
+          label="渠道并发惩罚分"
+          register={form.register("channelConcurrencyPenalty")}
+          error={form.formState.errors.channelConcurrencyPenalty?.message}
+          hint="渠道每增加 1 个实时请求时叠加的分数。"
+        />
+        <NumberField
+          label="Key 并发惩罚分"
+          register={form.register("keyConcurrencyPenalty")}
+          error={form.formState.errors.keyConcurrencyPenalty?.message}
+          hint="Key 每增加 1 个实时请求时叠加的分数。"
+        />
+        <NumberField
+          label="近期失败惩罚分"
+          register={form.register("recentFailurePenalty")}
+          error={form.formState.errors.recentFailurePenalty?.message}
+          hint="渠道近期可重试失败会短时间软降权，达到阈值后仍按原规则进入惩罚。"
         />
       </SettingsCard>
         </div>

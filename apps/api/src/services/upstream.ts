@@ -13,6 +13,10 @@ import {
 } from "./routing/channel-selector.js";
 import { readDispatchSettings } from "./dispatch-settings.js";
 import {
+  getChannelHealthSpeedScores,
+  getRecentChannelFailureCounts,
+} from "./model-pool-routing-metrics.js";
+import {
   reserveProviderKey,
   type UpstreamKeyReservation,
 } from "./routing/key-selector.js";
@@ -47,6 +51,7 @@ type RouteCandidate = {
   speedScoreMs: number;
   entropyScore: number;
   stickyOccupancy: number;
+  recentFailureCount: number;
 };
 type ModelRouteOptions = {
   tierId?: string | null;
@@ -173,6 +178,7 @@ export async function getProviderForModel(
     speedScoreMs: route.speedScoreMs,
     entropyScoreMs: route.entropyScore,
     stickyOccupancy: route.stickyOccupancy,
+    recentFailureCount: route.recentFailureCount,
     available: true,
   }));
   if (routeCandidates.length === 0) {
@@ -190,6 +196,7 @@ export async function getProviderForModel(
     );
     const balancedRoute = await getBalancedRoute(selectableRoutes, {
       dryRun: options.dryRun,
+      channelConcurrencyPenalty: dispatchSettings.channelConcurrencyPenalty,
     });
     if (!balancedRoute) {
       return null;
@@ -292,20 +299,45 @@ async function getRouteCandidates(
   const stickyOccupancies = await getStickyChannelOccupancies(
     availableRoutes.map((route) => route.channelId),
   );
+  const [healthSpeedScores, recentFailureCounts] = await Promise.all([
+    getChannelHealthSpeedScores(availableRoutes.map((route) => route.channelId)),
+    getRecentChannelFailureCounts(availableRoutes.map((route) => route.channelId)),
+  ]);
   const settings = await readDispatchSettings();
+  const speedScores = availableRoutes.map((route) =>
+    healthSpeedScores.get(route.channelId) ?? route.speedScoreMs,
+  );
+  const fastestSpeedScore = Math.max(1, Math.min(...speedScores));
+  const totalStickyOccupancy = availableRoutes.reduce(
+    (sum, route) => sum + (stickyOccupancies.get(route.channelId) ?? 0),
+    0,
+  );
 
   return availableRoutes
-    .map((route) => ({
-      ...route,
-      stickyOccupancy: stickyOccupancies.get(route.channelId) ?? 0,
-    }))
-    .sort((a, b) => a.speedScoreMs - b.speedScoreMs)
-    .map((route, index) => ({
-      ...route,
-      entropyScore:
-        index * settings.speedRankPenalty +
-        route.stickyOccupancy * settings.stickyHitPenalty,
-    }))
+    .map((route) => {
+      const speedScoreMs =
+        healthSpeedScores.get(route.channelId) ?? route.speedScoreMs;
+      const stickyOccupancy = stickyOccupancies.get(route.channelId) ?? 0;
+      const recentFailureCount = recentFailureCounts.get(route.channelId) ?? 0;
+      const relativeSpeedPenalty =
+        ((speedScoreMs - fastestSpeedScore) /
+          Math.max(fastestSpeedScore, 500)) *
+        settings.speedRankPenalty;
+      const stickyPenalty = totalStickyOccupancy > 0
+        ? (stickyOccupancy / totalStickyOccupancy) * settings.stickyHitPenalty
+        : 0;
+
+      return {
+        ...route,
+        speedScoreMs,
+        stickyOccupancy,
+        recentFailureCount,
+        entropyScore:
+          Math.max(0, relativeSpeedPenalty) +
+          stickyPenalty +
+          recentFailureCount * settings.recentFailurePenalty,
+      };
+    })
     .sort((a, b) => a.entropyScore - b.entropyScore);
 }
 
@@ -319,16 +351,14 @@ async function getBalancedRoute(
     speedScoreMs: number;
     entropyScore: number;
     stickyOccupancy: number;
+    recentFailureCount: number;
   }>,
-  options: { dryRun?: boolean } = {},
+  options: { dryRun?: boolean; channelConcurrencyPenalty?: number } = {},
 ) {
   if (routes.length === 0) {
     return null;
   }
 
-  const fastestScoreMs = Math.min(
-    ...routes.map((route) => route.speedScoreMs),
-  );
   const reservation = options.dryRun
     ? null
     : await reserveBalancedModelPoolChannel(
@@ -337,7 +367,7 @@ async function getBalancedRoute(
           speedScoreMs: route.entropyScore,
           stickyOccupancy: route.stickyOccupancy,
         })),
-        getInflightPenaltyMs(fastestScoreMs),
+        getInflightPenaltyMs(options.channelConcurrencyPenalty),
       );
 
   if (reservation) {

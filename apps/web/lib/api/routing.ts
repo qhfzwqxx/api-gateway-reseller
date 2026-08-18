@@ -122,6 +122,9 @@ export interface DispatchSettings {
   healthCheckIntervalSeconds: number;
   speedRankPenalty: number;
   stickyHitPenalty: number;
+  channelConcurrencyPenalty: number;
+  keyConcurrencyPenalty: number;
+  recentFailurePenalty: number;
   forceAvailableButtonEnabled: boolean;
 }
 

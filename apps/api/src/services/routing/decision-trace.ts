@@ -20,6 +20,7 @@ export type RoutingChannelCandidateTrace = {
   speedScoreMs?: number;
   entropyScoreMs?: number;
   stickyOccupancy?: number;
+  recentFailureCount?: number;
   available: boolean;
   rejectedReason?: string;
 };

@@ -216,6 +216,9 @@ GET 响应：
     "healthCheckIntervalSeconds": 30,
     "speedRankPenalty": 300,
     "stickyHitPenalty": 500,
+    "channelConcurrencyPenalty": 300,
+    "keyConcurrencyPenalty": 200,
+    "recentFailurePenalty": 250,
     "forceAvailableButtonEnabled": true
   },
   "defaults": {}
@@ -238,8 +241,11 @@ PATCH 请求字段均可选，保存后返回完整 `settings` 和 `defaults`。
 | `penaltyFailureThreshold` | number | `2` | 1-100 | 连续失败多少次后惩罚 |
 | `penaltySeconds` | number | `60` | 1-86400 | 惩罚持续秒数 |
 | `healthCheckIntervalSeconds` | number | `30` | 5-3600 | 健康检查调度间隔 |
-| `speedRankPenalty` | number | `300` | 0-60000 | 排名靠后的速度惩罚分 |
-| `stickyHitPenalty` | number | `500` | 0-60000 | 粘性占用惩罚分 |
+| `speedRankPenalty` | number | `300` | 0-60000 | 相对速度差距权重 |
+| `stickyHitPenalty` | number | `500` | 0-60000 | 粘性占比最大惩罚分 |
+| `channelConcurrencyPenalty` | number | `300` | 0-60000 | 渠道每个实时请求的惩罚分 |
+| `keyConcurrencyPenalty` | number | `200` | 0-60000 | Key 每个实时请求的惩罚分 |
+| `recentFailurePenalty` | number | `250` | 0-60000 | 每个近期可重试失败的软惩罚分 |
 | `forceAvailableButtonEnabled` | boolean | `true` | - | 后台是否显示/允许强制可用相关操作 |
 
 ### 4.4 UI 设计建议
@@ -249,7 +255,7 @@ PATCH 请求字段均可选，保存后返回完整 `settings` 和 `defaults`。
 1. 粘性路由：`stickyEnabled`、`stickyTtlSeconds`。
 2. 慢请求解绑：`stickySlowUnbindEnabled`、`slowFirstTokenMs`、`slowTotalLatencyMs`、`slowUnbindThreshold`。
 3. 失败惩罚：`penaltyEnabled`、`penaltyFailureThreshold`、`penaltySeconds`。
-4. 评分与高级：`healthCheckIntervalSeconds`、`speedRankPenalty`、`stickyHitPenalty`、`forceAvailableButtonEnabled`。
+4. 评分与高级：`healthCheckIntervalSeconds`、`speedRankPenalty`、`stickyHitPenalty`、`channelConcurrencyPenalty`、`keyConcurrencyPenalty`、`recentFailurePenalty`、`forceAvailableButtonEnabled`。
 
 高风险提示：
 
@@ -261,7 +267,7 @@ PATCH 请求字段均可选，保存后返回完整 `settings` 和 `defaults`。
 
 ### 5.1 功能定位
 
-模型池页面中的健康检查设置是调度系统的一个专用入口，控制检测频率、失败惩罚和恢复宽限。
+模型池页面中的健康检查设置是调度系统的一个专用入口，控制检测频率、失败惩罚和恢复宽限。每轮只检测一个按轮换顺序选出的 active Key，多轮覆盖同一渠道的 Key；检测样本会用于计算最近 5 次首 token 中位数。
 
 ### 5.2 接口
 

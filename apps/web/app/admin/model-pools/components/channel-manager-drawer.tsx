@@ -206,7 +206,7 @@ function ChannelSection({
                       {forceAvailableButtonEnabled && channel.status !== "FORCED_ACTIVE" ? (
                         <button
                           type="button"
-                          title="管理员手动强制可调用；仍参与健康检测和速度排名，检测失败不会进入惩罚或不可用。"
+                          title="管理员手动强制可调用；仍参与健康检测和速度评分，检测失败不会进入惩罚或不可用。"
                           onClick={() => updateStatus(channel.id, "FORCED_ACTIVE")}
                           className={forceButton}
                         >

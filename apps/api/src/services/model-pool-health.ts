@@ -1,4 +1,4 @@
-import { randomInt, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { prisma, type ModelPoolChannel } from "@gateway/db";
 import {
@@ -18,6 +18,10 @@ import {
   readDispatchSettings,
   writeDispatchSettings,
 } from "./dispatch-settings.js";
+import {
+  recordChannelHealthSample,
+  selectRotatingHealthCheckKeyIndex,
+} from "./model-pool-routing-metrics.js";
 
 type HealthLogger = {
   error: (value: unknown, message?: string) => void;
@@ -455,14 +459,19 @@ async function performModelPoolChannelCheck(
       ...key,
       key: resolveStoredUpstreamKey(key),
     }))
-    .filter((key) => key.key);
+    .filter((key) => key.key)
+    .sort((left, right) => left.id.localeCompare(right.id));
 
   if (resolvedActiveKeys.length === 0) {
     return markChannelFailure(channel, "No decryptable active upstream key is available", undefined, options);
   }
 
   const healthCheckEndpoint = normalizeModelPoolHealthCheckEndpoint(channel.modelPool.healthCheckEndpoint);
-  const key = resolvedActiveKeys[randomInt(resolvedActiveKeys.length)]!;
+  const keyIndex = await selectRotatingHealthCheckKeyIndex(
+    channel.id,
+    resolvedActiveKeys.length,
+  );
+  const key = resolvedActiveKeys[keyIndex] ?? resolvedActiveKeys[0]!;
   const result = await probeProviderKey({
     baseUrl: provider.baseUrl,
     apiKey: key.key,
@@ -483,11 +492,20 @@ async function performModelPoolChannelCheck(
 
   if (!result.ok) {
     const message = `${formatUpstreamKeyLabel(key)}: ${result.message}`;
+    await recordChannelHealthSample(channel.id, {
+      firstTokenLatencyMs: result.firstTokenLatencyMs,
+      latencyMs: result.latencyMs,
+    });
     return markChannelFailure(channel, message, result.latencyMs, options);
   }
 
   const latencyMs = result.latencyMs;
   const firstTokenLatencyMs = result.firstTokenLatencyMs;
+
+  await recordChannelHealthSample(channel.id, {
+    firstTokenLatencyMs,
+    latencyMs,
+  });
 
   return markChannelSuccess(channel, latencyMs, firstTokenLatencyMs);
 }

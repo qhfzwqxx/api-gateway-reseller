@@ -6,6 +6,10 @@ import {
 } from "./model-pool-health.js";
 import { clearStickyModelPoolChannel } from "./model-pool-stickiness.js";
 import { readDispatchSettings } from "./dispatch-settings.js";
+import {
+  recordRecentChannelFailure,
+  recordRecentChannelSuccess,
+} from "./model-pool-routing-metrics.js";
 
 type Logger = {
   warn: (value: unknown, message?: string) => void;
@@ -49,6 +53,7 @@ export async function recordModelPoolUserCallResult(params: {
   try {
     if (!failed) {
       await redis.del(key);
+      await recordRecentChannelSuccess(channelId);
       await markChannelSuccessfulCall(channelId, logger);
       return;
     }
@@ -60,6 +65,8 @@ export async function recordModelPoolUserCallResult(params: {
     if (!retryableFailure) {
       return;
     }
+
+    await recordRecentChannelFailure(channelId);
 
     if (immediatePenalty) {
       await redis.del(key).catch(() => undefined);

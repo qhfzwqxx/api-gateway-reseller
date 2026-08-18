@@ -25,8 +25,8 @@ export function getSpeedWindowMs(fastestScoreMs: number) {
   return Math.max(500, fastestScoreMs * 0.35);
 }
 
-export function getInflightPenaltyMs(fastestScoreMs: number) {
-  return Math.max(300, fastestScoreMs * 0.2);
+export function getInflightPenaltyMs(configuredPenaltyMs = 300) {
+  return Math.max(0, configuredPenaltyMs);
 }
 
 export function reserveModelPoolChannel(channelId: string) {

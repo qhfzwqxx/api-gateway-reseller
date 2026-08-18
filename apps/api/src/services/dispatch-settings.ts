@@ -15,6 +15,9 @@ export type DispatchSettings = {
   healthCheckIntervalSeconds: number;
   speedRankPenalty: number;
   stickyHitPenalty: number;
+  channelConcurrencyPenalty: number;
+  keyConcurrencyPenalty: number;
+  recentFailurePenalty: number;
   forceAvailableButtonEnabled: boolean;
 };
 
@@ -31,6 +34,9 @@ export const defaultDispatchSettings: DispatchSettings = {
   healthCheckIntervalSeconds: 30,
   speedRankPenalty: 300,
   stickyHitPenalty: 500,
+  channelConcurrencyPenalty: 300,
+  keyConcurrencyPenalty: 200,
+  recentFailurePenalty: 250,
   forceAvailableButtonEnabled: true,
 };
 
@@ -87,6 +93,9 @@ export function normalizeDispatchSettings(value: unknown): DispatchSettings {
     healthCheckIntervalSeconds: int(input.healthCheckIntervalSeconds, 5, 3_600, defaultDispatchSettings.healthCheckIntervalSeconds),
     speedRankPenalty: int(input.speedRankPenalty, 0, 60_000, defaultDispatchSettings.speedRankPenalty),
     stickyHitPenalty: int(input.stickyHitPenalty, 0, 60_000, defaultDispatchSettings.stickyHitPenalty),
+    channelConcurrencyPenalty: int(input.channelConcurrencyPenalty, 0, 60_000, defaultDispatchSettings.channelConcurrencyPenalty),
+    keyConcurrencyPenalty: int(input.keyConcurrencyPenalty, 0, 60_000, defaultDispatchSettings.keyConcurrencyPenalty),
+    recentFailurePenalty: int(input.recentFailurePenalty, 0, 60_000, defaultDispatchSettings.recentFailurePenalty),
     forceAvailableButtonEnabled: bool(input.forceAvailableButtonEnabled, defaultDispatchSettings.forceAvailableButtonEnabled),
   };
 }
