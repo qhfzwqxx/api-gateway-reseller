@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, resolve } from "node:path";
 
 const remoteRoot = "https://moxinggang.com/skills/security-research/current";
 const outputRoot = resolve("vendor/security-research/current");
+const cachedRoot = `${outputRoot}.previous`;
 const seeds = [
   "RULES.md",
   "README_AI.md",
@@ -40,7 +41,12 @@ const relativePattern = /`((?:\.\.\/)+(?:references|skills|scripts|assets|schema
 const localPathPattern = /`((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:md|py|ps1|json|ya?ml|txt|ts|js|mjs|cjs))`/gu;
 const competitionSkillPattern = /\$(competition-[a-z0-9-]+)/gu;
 
-await rm(outputRoot, { recursive: true, force: true });
+await rm(cachedRoot, { recursive: true, force: true });
+try {
+  await rename(outputRoot, cachedRoot);
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error;
+}
 await mkdir(outputRoot, { recursive: true });
 
 const queue = [...seeds];
@@ -96,7 +102,22 @@ await writeFile(
 );
 
 const license = await readFile(join(outputRoot, "LICENSE"), "utf8").catch(() => "");
-if (!license.trim()) throw new Error("Remote skill mirror is missing LICENSE");
+if (!license.trim()) {
+  const cachedLicense = await readFile(join(cachedRoot, "LICENSE"), "utf8").catch(() => "");
+  if (!cachedLicense.trim()) {
+    throw new Error(
+      "Remote skill mirror is missing LICENSE and no local cache is available",
+    );
+  }
+  await rm(outputRoot, { recursive: true, force: true });
+  await rename(cachedRoot, outputRoot);
+  console.warn(
+    "Remote skill mirror unavailable; using the previous verified local mirror.",
+  );
+  process.exit(0);
+}
+
+await rm(cachedRoot, { recursive: true, force: true });
 
 console.log(
   `Mirrored ${manifest.fileCount} files (${manifest.totalBytes} bytes) from ${remoteRoot}`,
