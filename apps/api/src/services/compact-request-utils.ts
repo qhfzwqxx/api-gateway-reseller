@@ -281,11 +281,7 @@ function hasCompactResponseUsage(value: unknown) {
     return false;
   }
 
-  return (
-    value.gatewayCompactFallback === true ||
-    value.gatewayCompactKind === "normal" ||
-    value.gatewayCompactKind === "fallback"
-  );
+  return value.gatewayCompactKind === "normal";
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
