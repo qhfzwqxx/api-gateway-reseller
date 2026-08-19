@@ -4,8 +4,10 @@ import { prisma } from "@gateway/db";
 import { z } from "zod";
 import { requireAdmin, requireUser } from "../services/auth.js";
 import {
+  applyWalletBalanceDelta,
   balanceCurrencySelect,
-  upsertWalletWithActiveCurrency,
+  getUsableBalanceCurrencyOrThrow,
+  normalizeCurrencyCode,
 } from "../services/balance-currency.js";
 
 const walletTransactionSelect = {
@@ -38,7 +40,7 @@ const walletTransactionSelect = {
 export async function walletRoutes(app: FastifyInstance) {
   app.get("/wallet", { preHandler: requireUser }, async (request) => {
     const user = request.user as { sub: string };
-    const wallet = await prisma.wallet.findUnique({
+    const wallets = await prisma.wallet.findMany({
       where: { userId: user.sub },
       select: {
         id: true,
@@ -49,6 +51,10 @@ export async function walletRoutes(app: FastifyInstance) {
         createdAt: true,
         updatedAt: true,
       },
+      orderBy: [
+        { balanceCurrency: { sortOrder: "asc" } },
+        { currency: "asc" },
+      ],
     });
     const transactions = await prisma.walletTransaction.findMany({
       where: { userId: user.sub },
@@ -57,7 +63,7 @@ export async function walletRoutes(app: FastifyInstance) {
       select: walletTransactionSelect,
     });
 
-    return { wallet, transactions };
+    return { wallets, transactions };
   });
 
   app.get("/wallet/transactions", { preHandler: requireUser }, async (request) => {
@@ -66,9 +72,15 @@ export async function walletRoutes(app: FastifyInstance) {
       .object({
         page: z.coerce.number().int().min(1).default(1),
         pageSize: z.coerce.number().int().min(1).max(100).default(18),
+        currency: z.string().trim().min(1).max(32).optional(),
       })
       .parse(request.query);
-    const where = { userId: user.sub };
+    const where = {
+      userId: user.sub,
+      ...(query.currency
+        ? { currency: normalizeCurrencyCode(query.currency) }
+        : {}),
+    };
     const [total, transactions] = await Promise.all([
       prisma.walletTransaction.count({ where }),
       prisma.walletTransaction.findMany({
@@ -99,6 +111,7 @@ export async function walletRoutes(app: FastifyInstance) {
         .object({
           userId: z.string(),
           amount: z.string().or(z.number()).transform(String),
+          currency: z.string().trim().min(1).max(32).default("POINTS"),
           remark: z.string().optional(),
         })
         .parse(request.body);
@@ -110,14 +123,17 @@ export async function walletRoutes(app: FastifyInstance) {
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        const wallet = await upsertWalletWithActiveCurrency(tx, body.userId);
-        const balanceBefore = new Decimal(wallet.balance.toString());
-        const balanceAfter = balanceBefore.plus(amount);
-
-        const updatedWallet = await tx.wallet.update({
-          where: { userId: body.userId },
-          data: { balance: balanceAfter.toFixed(8) },
-        });
+        const currency = await getUsableBalanceCurrencyOrThrow(
+          tx,
+          normalizeCurrencyCode(body.currency),
+          "充值",
+        );
+        const { wallet: updatedWallet, balanceBefore, balanceAfter } =
+          await applyWalletBalanceDelta(tx, {
+            userId: body.userId,
+            currencyCode: currency.code,
+            amount,
+          });
 
         const transaction = await tx.walletTransaction.create({
           data: {
@@ -127,7 +143,7 @@ export async function walletRoutes(app: FastifyInstance) {
             amount: amount.toFixed(8),
             balanceBefore: balanceBefore.toFixed(8),
             balanceAfter: balanceAfter.toFixed(8),
-            currency: wallet.currency,
+            currency: currency.code,
             remark: body.remark ?? "Manual recharge",
           },
         });

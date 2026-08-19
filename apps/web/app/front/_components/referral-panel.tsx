@@ -20,6 +20,7 @@ type RewardType = "NONE" | "BALANCE" | "SUBSCRIPTION";
 type RewardSettings = {
   type: RewardType;
   amountUsd: string;
+  currencyCode?: string;
   subscriptionPlanId: string | null;
 };
 type ReferralInvite = {
@@ -203,7 +204,9 @@ function ReferralMetric({ label, value, mono = false }: { label: string; value: 
 }
 
 function rewardDescription(reward: RewardSettings) {
-  if (reward.type === "BALANCE") return `$${money(reward.amountUsd)} 余额`;
+  if (reward.type === "BALANCE") {
+    return `${money(reward.amountUsd)} ${reward.currencyCode ?? "POINTS"} 余额`;
+  }
   if (reward.type === "SUBSCRIPTION") return "订阅套餐";
   return "无额外奖励";
 }

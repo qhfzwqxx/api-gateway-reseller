@@ -130,6 +130,8 @@ model AccessTier {
   apiRequests           ApiRequest[]
   ipAccessTierRules     IpAccessTierRule[]
   redeemCodes           RedeemCode[]
+  balanceCurrencies      BalanceCurrencyAccessTier[]
+  currencyPreferences    UserTierCurrencyPreference[]
   subscriptionPlans     SubscriptionPlan[]
   userSubscriptions     UserSubscription[] @relation("UserSubscriptionTier")
   baseUserSubscriptions UserSubscription[] @relation("UserSubscriptionBaseTier")
@@ -163,8 +165,9 @@ model User {
 
   tier                   AccessTier?             @relation(fields: [tierId], references: [id], onDelete: SetNull)
   apiKeys                ApiKey[]
-  wallet                 Wallet?
+  wallets                Wallet[]
   walletTransactions     WalletTransaction[]
+  currencyPreferences    UserTierCurrencyPreference[]
   apiRequests            ApiRequest[]
   redeemRedemptions      RedeemCodeRedemption[]
   subscriptions          UserSubscription[]
@@ -354,15 +357,19 @@ model ApiKey {
 
 model Wallet {
   id              String   @id @default(cuid())
-  userId          String   @unique
+  userId          String
   balance         Decimal  @default(0) @db.Decimal(18, 8)
   reservedBalance Decimal  @default(0) @db.Decimal(18, 8)
-  currency        String   @default("USD")
+  currency        String   @default("POINTS")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   balanceCurrency BalanceCurrency @relation(fields: [currency], references: [code], onDelete: Restrict)
+
+  @@unique([userId, currency])
+  @@index([userId])
+  @@index([currency])
 }
 
 model WalletTransaction {
@@ -374,7 +381,7 @@ model WalletTransaction {
   amount        Decimal               @db.Decimal(18, 8)
   balanceBefore Decimal               @db.Decimal(18, 8)
   balanceAfter  Decimal               @db.Decimal(18, 8)
-  currency      String               @default("USD")
+  currency      String               @default("POINTS")
   remark        String?
   metadata      Json?
   createdAt     DateTime              @default(now())
@@ -397,14 +404,50 @@ model BalanceCurrency {
   baseUnitsPerUnit  Decimal  @default(1) @db.Decimal(18, 8)
   isBase            Boolean  @default(false)
   enabled           Boolean  @default(true)
+  sortOrder         Int      @default(100)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   wallets           Wallet[]
   walletTransactions WalletTransaction[]
+  accessTiers       BalanceCurrencyAccessTier[]
+  userPreferences   UserTierCurrencyPreference[]
+  apiRequestsByWalletCurrency ApiRequest[]
 
   @@index([isBase])
   @@index([enabled])
+  @@index([sortOrder, createdAt])
+}
+
+model BalanceCurrencyAccessTier {
+  id           String   @id @default(cuid())
+  currencyCode String
+  accessTierId String
+  createdAt    DateTime @default(now())
+
+  currency   BalanceCurrency @relation(fields: [currencyCode], references: [code], onDelete: Cascade)
+  accessTier AccessTier @relation(fields: [accessTierId], references: [id], onDelete: Cascade)
+
+  @@unique([currencyCode, accessTierId])
+  @@index([accessTierId])
+}
+
+model UserTierCurrencyPreference {
+  id           String   @id @default(cuid())
+  userId       String
+  accessTierId String
+  currencyCode String
+  priority     Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessTier AccessTier      @relation(fields: [accessTierId], references: [id], onDelete: Cascade)
+  currency   BalanceCurrency @relation(fields: [currencyCode], references: [code], onDelete: Cascade)
+
+  @@unique([userId, accessTierId, currencyCode])
+  @@unique([userId, accessTierId, priority])
+  @@index([userId, accessTierId, priority])
 }
 
 model ApiRequest {
@@ -431,6 +474,7 @@ model ApiRequest {
   subscriptionChargedAmountUsd Decimal               @default(0) @db.Decimal(18, 8)
   walletChargedAmountUsd       Decimal               @default(0) @db.Decimal(18, 8)
   reservedAmountUsd            Decimal               @default(0) @db.Decimal(18, 8)
+  walletCurrency               String?
   latencyMs                    Int?
   firstTokenLatencyMs          Int?
   upstreamFirstChunkLatencyMs  Int?
@@ -449,12 +493,14 @@ model ApiRequest {
   apiKey              ApiKey?              @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
   upstreamProviderKey UpstreamProviderKey? @relation(fields: [upstreamProviderKeyId], references: [id], onDelete: SetNull)
   accessTier          AccessTier?          @relation(fields: [accessTierId], references: [id], onDelete: SetNull)
+  walletBalanceCurrency BalanceCurrency?  @relation(fields: [walletCurrency], references: [code], onDelete: SetNull)
   walletTransactions  WalletTransaction[]
 
   @@index([userId, createdAt])
   @@index([apiKeyId, createdAt])
   @@index([upstreamProviderKeyId, createdAt])
   @@index([accessTierId, createdAt])
+  @@index([walletCurrency])
   @@index([status, createdAt])
   @@index([resultType, createdAt])
   @@index([model, createdAt])
@@ -677,7 +723,7 @@ model RedeemCode {
   codePrefix         String
   rewardType         RedeemCodeRewardType @default(BALANCE)
   amount             Decimal              @db.Decimal(18, 8)
-  currency           String               @default("USD")
+  currency           String               @default("POINTS")
   status             RedeemCodeStatus     @default(ACTIVE)
   maxRedemptions     Int                  @default(1)
   redeemedCount      Int                  @default(0)

@@ -5,6 +5,7 @@ export type AuthSettings = {
   emailCodeLoginEnabled: boolean;
   emailCodeAutoRegisterEnabled: boolean;
   newUserBonusUsd: string;
+  newUserBonusCurrency: string;
   emailCodeTtlSeconds: number;
   emailCodeCooldownSeconds: number;
   smtpHost: string;
@@ -17,7 +18,10 @@ export type AuthSettings = {
 
 export type PublicAuthSettings = Pick<
   AuthSettings,
-  "emailCodeLoginEnabled" | "emailCodeAutoRegisterEnabled" | "newUserBonusUsd"
+  | "emailCodeLoginEnabled"
+  | "emailCodeAutoRegisterEnabled"
+  | "newUserBonusUsd"
+  | "newUserBonusCurrency"
 > & {
   smtpConfigured: boolean;
 };
@@ -34,6 +38,7 @@ export const defaultAuthSettings: AuthSettings = {
   emailCodeLoginEnabled: true,
   emailCodeAutoRegisterEnabled: true,
   newUserBonusUsd: "0.00000000",
+  newUserBonusCurrency: "POINTS",
   emailCodeTtlSeconds: 600,
   emailCodeCooldownSeconds: 60,
   smtpHost: "",
@@ -89,6 +94,7 @@ export function toPublicAuthSettings(settings: AuthSettings): PublicAuthSettings
     emailCodeLoginEnabled: settings.emailCodeLoginEnabled,
     emailCodeAutoRegisterEnabled: settings.emailCodeAutoRegisterEnabled,
     newUserBonusUsd: settings.newUserBonusUsd,
+    newUserBonusCurrency: settings.newUserBonusCurrency,
     smtpConfigured: isSmtpConfigured(settings),
   };
 }
@@ -125,6 +131,9 @@ function normalizeAuthSettings(settings: AuthSettings): AuthSettings {
       defaultAuthSettings.emailCodeAutoRegisterEnabled,
     ),
     newUserBonusUsd: normalizeMoney(settings.newUserBonusUsd),
+    newUserBonusCurrency:
+      String(settings.newUserBonusCurrency ?? "POINTS").trim().toUpperCase() ||
+      "POINTS",
     emailCodeTtlSeconds: clampInteger(settings.emailCodeTtlSeconds, 60, 3600, defaultAuthSettings.emailCodeTtlSeconds),
     emailCodeCooldownSeconds: clampInteger(settings.emailCodeCooldownSeconds, 10, 600, defaultAuthSettings.emailCodeCooldownSeconds),
     smtpHost: String(settings.smtpHost ?? "").trim(),

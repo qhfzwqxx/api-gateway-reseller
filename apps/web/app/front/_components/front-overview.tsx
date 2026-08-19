@@ -32,14 +32,14 @@ import {
 } from "./ui/front-ui";
 
 export function FrontOverview({
-  wallet,
+  wallets,
   summary,
   apiKeys,
   availableModels,
   loading,
   onNavigate,
 }: {
-  wallet: FrontWallet | null;
+  wallets: FrontWallet[];
   summary: FrontUsageSummary | null;
   apiKeys: ApiKey[];
   availableModels: FrontAvailableModel[];
@@ -52,7 +52,6 @@ export function FrontOverview({
   onNavigate: (tab: FrontTab) => void;
 }) {
   const activeKeys = apiKeys.filter((key) => key.status === "ACTIVE").length;
-  const available = availableBalance(wallet);
 
   return (
     <div className="front-page-stack front-overview">
@@ -65,31 +64,43 @@ export function FrontOverview({
         </div>
 
         <div className="front-overview-summary-main">
-          <section className="front-overview-balance-panel" aria-label="账户余额">
+          <section className="front-overview-balance-panel" aria-label="多货币账户余额">
             <div className="front-overview-balance-label">
               <WalletCards aria-hidden="true" size={18} />
-              <span>可用余额</span>
+              <span>多货币余额</span>
             </div>
             {loading.wallet ? (
-              <FrontSkeleton height={34} width="68%" />
-            ) : (
-              <strong className="front-overview-balance-value front-data-number">
-                <CurrencyAmount value={available} currency={wallet?.balanceCurrency} />
-              </strong>
-            )}
-            {loading.wallet ? (
-              <FrontSkeleton height={46} />
-            ) : (
-              <div className="front-overview-balance-details">
-                <span>
-                  <small>总余额</small>
-                  <strong className="front-data-number"><CurrencyAmount value={wallet?.balance ?? "0"} currency={wallet?.balanceCurrency} /></strong>
-                </span>
-                <span>
-                  <small>冻结金额</small>
-                  <strong className="front-data-number"><CurrencyAmount value={wallet?.reservedBalance ?? "0"} currency={wallet?.balanceCurrency} /></strong>
-                </span>
+              <div className="front-wallet-balance-list">
+                <FrontSkeleton height={34} width="68%" />
+                <FrontSkeleton height={46} />
               </div>
+            ) : wallets.length > 0 ? (
+              <div className="front-wallet-balance-list">
+                {wallets.map((wallet) => (
+                  <div className="front-wallet-balance-row" key={wallet.currency}>
+                    <div>
+                      <strong>{wallet.balanceCurrency?.name ?? wallet.currency}</strong>
+                      <small>{wallet.currency}</small>
+                    </div>
+                    <div>
+                      <strong className="front-data-number">
+                        <CurrencyAmount
+                          value={availableBalance(wallet)}
+                          currency={wallet.balanceCurrency}
+                        />
+                      </strong>
+                      <small>
+                        总额 <CurrencyAmount value={wallet.balance} currency={wallet.balanceCurrency} />
+                        {Number(wallet.reservedBalance ?? 0) > 0 ? (
+                          <> · 冻结 <CurrencyAmount value={wallet.reservedBalance ?? "0"} currency={wallet.balanceCurrency} /></>
+                        ) : null}
+                      </small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="front-muted-text">暂时没有余额钱包，获得奖励或充值后会按币种显示。</p>
             )}
           </section>
 
@@ -371,9 +382,9 @@ function AvailableModelsCard({
   );
 }
 
-function availableBalance(wallet: FrontWallet | null) {
+function availableBalance(wallet: FrontWallet) {
   return Math.max(
     0,
-    Number(wallet?.balance ?? 0) - Number(wallet?.reservedBalance ?? 0),
+    Number(wallet.balance ?? 0) - Number(wallet.reservedBalance ?? 0),
   );
 }

@@ -19,6 +19,7 @@ import { Fragment, type FormEvent, useEffect, useState } from "react";
 import { isAxiosError } from "axios";
 
 import { ConfirmDialog } from "../../../components/shared/confirm-dialog";
+import { getBalanceCurrencySettings } from "../../../lib/api/balance-currencies";
 import {
   createIpAccessTierRule,
   deleteIpAccessTierRule,
@@ -102,8 +103,17 @@ export default function AdminUsersPage() {
     queryFn: getAccessTiers,
     staleTime: 60_000,
   });
+  const currenciesQuery = useQuery({
+    queryKey: ["admin", "balance-currencies"],
+    queryFn: getBalanceCurrencySettings,
+    staleTime: 60_000,
+  });
   const users = usersQuery.data ?? [];
   const tiers = tiersQuery.data ?? [];
+  const balanceCurrencies =
+    currenciesQuery.data?.currencies.filter(
+      (currency) => !currency.isBase && currency.enabled,
+    ) ?? [];
 
   const createMutation = useMutation({
     mutationFn: createAdminUser,
@@ -121,7 +131,10 @@ export default function AdminUsersPage() {
       values,
     }: {
       id: string;
-      values: Omit<UpsertAdminUserInput, "initialBalance">;
+      values: Omit<
+        UpsertAdminUserInput,
+        "initialBalance" | "initialBalanceCurrency"
+      >;
     }) => updateAdminUser(id, values),
     onSuccess: () => {
       setFormUser(undefined);
@@ -135,12 +148,14 @@ export default function AdminUsersPage() {
     mutationFn: ({
       id,
       amount,
+      currency,
       remark,
     }: {
       id: string;
       amount: string;
+      currency: string;
       remark?: string;
-    }) => adjustUserBalance(id, { amount, remark }),
+    }) => adjustUserBalance(id, { amount, currency, remark }),
     onSuccess: () => {
       setBalanceUser(null);
       setNotice("余额已调整");
@@ -220,7 +235,11 @@ export default function AdminUsersPage() {
 
   async function handleSaveUser(values: UpsertAdminUserInput) {
     if (formUser) {
-      const { initialBalance: _initialBalance, ...payload } = values;
+      const {
+        initialBalance: _initialBalance,
+        initialBalanceCurrency: _initialBalanceCurrency,
+        ...payload
+      } = values;
       await updateMutation.mutateAsync({ id: formUser.id, values: payload });
       return;
     }
@@ -547,10 +566,16 @@ export default function AdminUsersPage() {
                                   {tierLabel(user.tier)}
                                 </div>
                                 <div className="mt-1 font-semibold tabular-nums text-slate-950">
-                                  {formatBalance(
-                                    user.wallet?.balance ?? "0",
-                                    user.wallet?.balanceCurrency,
-                                  )}
+                                  {user.wallets.length > 0
+                                    ? user.wallets
+                                        .map((wallet) =>
+                                          formatBalance(
+                                            wallet.balance,
+                                            wallet.balanceCurrency,
+                                          ),
+                                        )
+                                        .join(" · ")
+                                    : "暂无钱包"}
                                 </div>
                               </td>
                               <td className="px-5 py-4">
@@ -662,6 +687,7 @@ export default function AdminUsersPage() {
         user={formUser ?? null}
         loading={createMutation.isPending || updateMutation.isPending}
         tiers={tiers}
+        currencies={balanceCurrencies}
         onClose={() => setFormUser(undefined)}
         onSubmit={handleSaveUser}
       />
@@ -687,6 +713,7 @@ export default function AdminUsersPage() {
       <BalanceAdjustModal
         open={Boolean(balanceUser)}
         user={balanceUser}
+        currencies={balanceCurrencies}
         loading={balanceMutation.isPending}
         onClose={() => setBalanceUser(null)}
         onSubmit={async (values) => {
@@ -2163,7 +2190,9 @@ function userSearchText(user: AdminUser, overrides: Record<string, string>) {
     displayGroupName(user, overrides),
     user.tier?.name,
     user.tier?.code,
-    user.wallet?.balance,
+    user.wallets
+      .map((wallet) => `${wallet.currency} ${wallet.balance}`)
+      .join(" "),
     user.charityDisplayName,
     user.apiKeys?.map((apiKey) => `${apiKey.name} ${apiKey.keyPrefix}`).join(" "),
     user.allowedModels.join(" "),
@@ -2286,7 +2315,7 @@ function formatMoney(value: string | number) {
 
 function formatBalance(
   value: string | number,
-  currency?: NonNullable<AdminUser["wallet"]>["balanceCurrency"],
+  currency?: AdminUser["wallets"][number]["balanceCurrency"],
 ) {
   const formatted = formatMoney(value).replace(/^\$/, "");
   if (!currency || currency.symbol === "$") {

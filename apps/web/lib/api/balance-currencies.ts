@@ -1,5 +1,12 @@
 import http from "../http";
 
+export interface BalanceCurrencyAccessTier {
+  id: string;
+  code: string;
+  name: string;
+  status: "ACTIVE" | "DISABLED";
+}
+
 export interface BalanceCurrency {
   id: string;
   code: string;
@@ -10,6 +17,13 @@ export interface BalanceCurrency {
   unitsPerBase: string;
   isBase: boolean;
   enabled: boolean;
+  sortOrder: number;
+  accessTiers: BalanceCurrencyAccessTier[];
+  walletCount: number;
+  balance: string;
+  reservedBalance: string;
+  balanceBase: string;
+  reservedBalanceBase: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -17,8 +31,6 @@ export interface BalanceCurrency {
 export interface BalanceCurrencySettings {
   currencies: BalanceCurrency[];
   baseCurrencyCode: string;
-  activeCurrencyCode: string;
-  activeCurrency: BalanceCurrency | null;
 }
 
 export interface CreateBalanceCurrencyInput {
@@ -27,13 +39,6 @@ export interface CreateBalanceCurrencyInput {
   symbol: string;
   icon: string;
   unitsPerBase: string;
-}
-
-export interface ActivateBalanceCurrencyResult extends BalanceCurrencySettings {
-  target: BalanceCurrency;
-  convertedWallets: number;
-  totalWallets: number;
-  migratedBaseBalance: string;
 }
 
 export interface SetBalanceCurrencyEnabledResult extends BalanceCurrencySettings {
@@ -54,17 +59,29 @@ export async function createBalanceCurrency(input: CreateBalanceCurrencyInput) {
   return response.data;
 }
 
-export async function activateBalanceCurrency(code: string) {
-  const response = await http.post<ActivateBalanceCurrencyResult>(
-    `/admin/balance-currencies/${encodeURIComponent(code)}/activate`,
-  );
-  return response.data;
-}
-
 export async function setBalanceCurrencyEnabled(code: string, enabled: boolean) {
   const response = await http.post<SetBalanceCurrencyEnabledResult>(
     `/admin/balance-currencies/${encodeURIComponent(code)}/enabled`,
     { enabled },
+  );
+  return response.data;
+}
+
+export async function setBalanceCurrencyOrder(currencyCodes: string[]) {
+  const response = await http.put<BalanceCurrencySettings>(
+    "/admin/balance-currencies/order",
+    { currencyCodes },
+  );
+  return response.data;
+}
+
+export async function setBalanceCurrencyAccessTiers(
+  code: string,
+  accessTierIds: string[],
+) {
+  const response = await http.put<BalanceCurrencySettings>(
+    `/admin/balance-currencies/${encodeURIComponent(code)}/access-tiers`,
+    { accessTierIds },
   );
   return response.data;
 }

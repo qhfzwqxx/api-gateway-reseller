@@ -24,12 +24,16 @@ try {
     .map((entry) => entry.name)
     .sort();
   const violations = [];
+  const requiresApiStop = [];
 
   for (const migrationName of pending) {
     const sql = await readFile(
       path.join(migrationRoot, migrationName, "migration.sql"),
       "utf8",
     );
+    if (sql.includes("codex: requires-api-stop")) {
+      requiresApiStop.push(migrationName);
+    }
     const statements = sql
       .split(";")
       .map((statement) => statement.replace(/--.*$/gm, " ").replace(/\s+/g, " ").trim())
@@ -68,6 +72,11 @@ try {
         ? `Pending migrations are backward-compatible: ${pending.join(", ")}`
         : "No pending migrations require compatibility review.",
     );
+    if (requiresApiStop.length > 0) {
+      console.log(
+        `API stop required during migration: ${requiresApiStop.join(", ")}`,
+      );
+    }
   }
 } finally {
   await prisma.$disconnect();

@@ -317,7 +317,7 @@ install_dependencies() {
 }
 
 apply_database_migrations() {
-  log "Applying database migrations before building or restarting services"
+  log "Applying database migrations before restarting services"
   npm run db:migrate:deploy
 
   log "Verifying database migration status"
@@ -327,6 +327,48 @@ apply_database_migrations() {
     die "Database migrations did not reach a healthy state. The running API was not restarted."
   fi
   printf '%s\n' "$migration_status"
+}
+
+pending_migration_requires_api_stop() {
+  node --input-type=module <<'NODE'
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
+import { PrismaClient } from "@prisma/client";
+
+const prisma = new PrismaClient();
+try {
+  const rows = await prisma.$queryRawUnsafe(
+    'SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL',
+  );
+  const applied = new Set(rows.map((row) => row.migration_name));
+  const root = path.resolve("packages/db/prisma/migrations");
+  const entries = await readdir(root, { withFileTypes: true });
+  let requiresStop = false;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || applied.has(entry.name)) continue;
+    const sql = await readFile(path.join(root, entry.name, "migration.sql"), "utf8");
+    if (sql.includes("codex: requires-api-stop")) {
+      requiresStop = true;
+      break;
+    }
+  }
+  process.stdout.write(requiresStop ? "true" : "false");
+} finally {
+  await prisma.$disconnect();
+}
+NODE
+}
+
+stop_apps_for_incompatible_migrations() {
+  local requires_stop
+  requires_stop="$(pending_migration_requires_api_stop)"
+  if [ "$requires_stop" != "true" ]; then
+    return
+  fi
+
+  log "Stopping PM2 apps for incompatible schema migration"
+  PM2_SWITCH_ATTEMPTED="true"
+  "$PM2_BIN" stop api-gateway-api api-gateway-web
 }
 
 snapshot_runtime_artifacts() {
@@ -550,11 +592,12 @@ main() {
   install_dependencies
   run_predeploy_checks
   backup_before_migrate
-  apply_database_migrations
   snapshot_runtime_artifacts
   DEPLOY_ROLLBACK_ARMED="true"
   trap 'handle_release_error $?' ERR
   build_artifacts
+  stop_apps_for_incompatible_migrations
+  apply_database_migrations
   seed_data
   validate_candidate_api
   start_pm2

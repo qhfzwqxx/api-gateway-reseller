@@ -4848,3 +4848,202 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+.front-wallet-balance-list,
+.front-tier-currency-list {
+  display: grid;
+  gap: 8px;
+}
+
+.front-wallet-balance-row,
+.front-tier-currency-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--front-border);
+  border-radius: 10px;
+  background: var(--front-surface-soft);
+  padding: 10px 12px;
+}
+
+.front-wallet-balance-row {
+  justify-content: space-between;
+}
+
+.front-wallet-balance-row > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.front-wallet-balance-row > div:last-child {
+  justify-items: end;
+  text-align: right;
+}
+
+.front-wallet-balance-row small,
+.front-muted-text,
+.front-tier-currency-title span,
+.front-tier-currency-name span,
+.front-tier-currency-actions > span {
+  color: var(--front-text-muted);
+  font-size: 12px;
+}
+
+.front-wallet-currency-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.front-wallet-currency-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--front-border);
+  border-radius: 14px;
+  background: var(--front-surface-soft);
+  padding: 16px;
+}
+
+.front-wallet-currency-head,
+.front-wallet-currency-meta,
+.front-tier-currency-title,
+.front-tier-currency-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.front-wallet-currency-head > div,
+.front-wallet-currency-amount,
+.front-tier-currency-title > div,
+.front-tier-currency-name {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.front-wallet-currency-head span,
+.front-wallet-currency-amount small,
+.front-wallet-currency-meta {
+  color: var(--front-text-muted);
+  font-size: 12px;
+}
+
+.front-wallet-currency-amount strong {
+  font-size: 22px;
+}
+
+.front-tier-currency-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--front-border);
+  border-bottom: 1px solid var(--front-border);
+  padding: 14px 0;
+}
+
+.front-tier-currency-empty {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--front-warning) 10%, transparent);
+  color: var(--front-warning-text);
+  padding: 11px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.front-tier-currency-row {
+  cursor: grab;
+  transition: opacity 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.front-tier-currency-row:active {
+  cursor: grabbing;
+}
+
+.front-tier-currency-row.front-dragging {
+  opacity: 0.55;
+  border-color: var(--front-primary);
+}
+
+.front-tier-currency-grip {
+  flex: 0 0 auto;
+  color: var(--front-text-muted);
+}
+
+.front-tier-currency-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--front-primary-soft);
+  color: var(--front-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.front-tier-currency-name {
+  flex: 1 1 auto;
+}
+
+.front-tier-currency-balance {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.front-tier-currency-move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--front-border);
+  border-radius: 9px;
+  background: var(--front-surface);
+  color: var(--front-text);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.front-tier-currency-move:hover:not(:disabled),
+.front-tier-currency-move:focus-visible {
+  border-color: var(--front-primary);
+  background: var(--front-primary-soft);
+}
+
+.front-tier-currency-move:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.front-tier-currency-actions > span {
+  min-height: 18px;
+}
+
+@media (max-width: 640px) {
+  .front-wallet-balance-row,
+  .front-wallet-currency-meta,
+  .front-tier-currency-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .front-wallet-balance-row > div:last-child {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .front-tier-currency-row {
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    display: grid;
+  }
+
+  .front-tier-currency-balance {
+    grid-column: 3 / -1;
+    grid-row: 2;
+    text-align: left;
+  }
+}

@@ -105,14 +105,14 @@ const navGroups = [
 
 export function FrontAppShell({
   user,
-  wallet,
+  wallets,
   activeTab,
   onTabChange,
   onLogout,
   children,
 }: {
   user: FrontUser;
-  wallet: FrontWallet | null;
+  wallets: FrontWallet[];
   activeTab: FrontTab;
   onTabChange: (tab: FrontTab) => void;
   onLogout: () => void;
@@ -128,6 +128,7 @@ export function FrontAppShell({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const focusHeadingAfterCloseRef = useRef(false);
   const currentPage = frontPageMeta[activeTab];
+  const primaryWallet = wallets.find((wallet) => availableBalance(wallet) > 0) ?? wallets[0];
 
   function selectTab(tab: FrontTab) {
     setNavTooltip(null);
@@ -227,7 +228,7 @@ export function FrontAppShell({
             <p>{currentPage.description}</p>
           </div>
           <div className="front-topbar-actions">
-            {wallet ? (
+            {primaryWallet ? (
               <button
                 className="front-balance-summary"
                 onClick={() => selectTab("wallet")}
@@ -236,8 +237,8 @@ export function FrontAppShell({
                 <span>可用余额</span>
                 <strong>
                   <CurrencyAmount
-                    value={availableBalance(wallet)}
-                    currency={wallet.balanceCurrency}
+                    value={availableBalance(primaryWallet)}
+                    currency={primaryWallet.balanceCurrency}
                   />
                 </strong>
               </button>

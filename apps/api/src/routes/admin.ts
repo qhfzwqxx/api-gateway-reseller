@@ -182,16 +182,19 @@ import {
   standardAccessTierCode,
 } from "../services/access-routing.js";
 import {
+  applyWalletBalanceDelta,
   baseUnitsPerUnitFromUnitsPerBase,
   balanceCurrencySelect,
-  getActiveBalanceCurrency,
+  defaultBalanceCurrencyCode,
   getRedeemableBalanceCurrencyOrThrow,
-  migrateWalletsToCurrency,
+  getUsableBalanceCurrencyOrThrow,
   normalizeCurrencyCode,
   readBalanceCurrencySettings,
+  setBalanceCurrencyAccessTiers,
   setBalanceCurrencyEnabled,
+  setBalanceCurrencyOrder,
   toBalanceCurrencyDto,
-  upsertWalletWithActiveCurrency,
+  upsertWallet,
 } from "../services/balance-currency.js";
 import { simulateRoute } from "../services/route-simulator.js";
 import {
@@ -392,6 +395,12 @@ const authSettingsSchema = z.object({
   emailCodeLoginEnabled: z.boolean(),
   emailCodeAutoRegisterEnabled: z.boolean(),
   newUserBonusUsd: nonNegativeMoneySchema,
+  newUserBonusCurrency: z
+    .string()
+    .trim()
+    .min(1)
+    .max(32)
+    .default(defaultBalanceCurrencyCode),
   emailCodeTtlSeconds: z.number().int().min(60).max(3600),
   emailCodeCooldownSeconds: z.number().int().min(10).max(600),
   smtpHost: z.string().trim().max(255),
@@ -2067,12 +2076,15 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/admin/overview", async () => {
-    const [users, requests, walletAgg, requestAgg, walletCurrency] = await Promise.all([
+    const [users, requests, walletAgg, currencies, requestAgg] = await Promise.all([
       prisma.user.count(),
       prisma.apiRequest.count(),
-      prisma.wallet.aggregate({
+      prisma.wallet.groupBy({
+        by: ["currency"],
+        _count: { _all: true },
         _sum: { balance: true },
       }),
+      prisma.balanceCurrency.findMany({ select: balanceCurrencySelect }),
       prisma.apiRequest.aggregate({
         _sum: {
           chargedAmountUsd: true,
@@ -2080,8 +2092,26 @@ export async function adminRoutes(app: FastifyInstance) {
           totalTokens: true,
         },
       }),
-      getActiveBalanceCurrency(),
     ]);
+    const currencyByCode = new Map(
+      currencies.map((currency) => [currency.code, currency]),
+    );
+    const walletBalances = walletAgg.map((entry) => {
+      const currency = currencyByCode.get(entry.currency);
+      const balance = new Decimal(entry._sum.balance?.toString() ?? "0");
+      return {
+        currency: currency ? toBalanceCurrencyDto(currency) : { code: entry.currency },
+        walletCount: entry._count._all,
+        balance: balance.toFixed(8),
+        balanceBase: currency
+          ? balance.mul(currency.baseUnitsPerUnit.toString()).toFixed(8)
+          : "0.00000000",
+      };
+    });
+    const totalWalletBalanceBase = walletBalances.reduce(
+      (total, entry) => total.plus(entry.balanceBase),
+      new Decimal(0),
+    );
 
     const revenue = new Decimal(
       requestAgg._sum.chargedAmountUsd?.toString() ?? "0",
@@ -2093,13 +2123,15 @@ export async function adminRoutes(app: FastifyInstance) {
     return {
       users,
       requests,
-      totalWalletBalance: walletAgg._sum.balance ?? "0",
+      totalWalletBalance: totalWalletBalanceBase.toFixed(8),
+      totalWalletBalanceBase: totalWalletBalanceBase.toFixed(8),
       walletCurrency: {
-        code: walletCurrency.code,
-        name: walletCurrency.name,
-        symbol: walletCurrency.symbol,
-        icon: walletCurrency.icon,
+        code: "USD",
+        name: "美元基准单位",
+        symbol: "$",
+        icon: "circle-dollar-sign",
       },
+      walletBalances,
       revenue: revenue.toFixed(8),
       upstreamCost: upstreamCost.toFixed(8),
       grossProfit: revenue.minus(upstreamCost).toFixed(8),
@@ -2261,8 +2293,14 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.put("/admin/auth-settings", async (request) => {
     const body = authSettingsSchema.parse(request.body);
+    await getUsableBalanceCurrencyOrThrow(
+      prisma,
+      normalizeCurrencyCode(body.newUserBonusCurrency),
+      "新用户奖励",
+    );
     const settings = await saveAuthSettings({
       ...body,
+      newUserBonusCurrency: normalizeCurrencyCode(body.newUserBonusCurrency),
       smtpPassword: body.smtpPassword?.trim() ? body.smtpPassword : undefined,
     });
 
@@ -2331,17 +2369,27 @@ export async function adminRoutes(app: FastifyInstance) {
 
     let currency;
     try {
-      currency = await prisma.balanceCurrency.create({
-        data: {
-          code,
-          name: body.name,
-          symbol: body.symbol,
-          icon: body.icon,
-          baseUnitsPerUnit: baseUnitsPerUnitFromUnitsPerBase(body.unitsPerBase),
-          isBase: false,
-          enabled: false,
-        },
-        select: balanceCurrencySelect,
+      currency = await prisma.$transaction(async (tx) => {
+        const lastCurrency = await tx.balanceCurrency.findFirst({
+          where: { isBase: false },
+          orderBy: [{ sortOrder: "desc" }, { createdAt: "desc" }],
+          select: { sortOrder: true },
+        });
+        return tx.balanceCurrency.create({
+          data: {
+            code,
+            name: body.name,
+            symbol: body.symbol,
+            icon: body.icon,
+            baseUnitsPerUnit: baseUnitsPerUnitFromUnitsPerBase(
+              body.unitsPerBase,
+            ),
+            isBase: false,
+            enabled: false,
+            sortOrder: (lastCurrency?.sortOrder ?? -10) + 10,
+          },
+          select: balanceCurrencySelect,
+        });
       });
     } catch (error) {
       if (
@@ -2376,17 +2424,25 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/admin/balance-currencies/:code/activate", async (request) => {
-    const params = z.object({ code: z.string().min(1).max(32) }).parse(request.params);
-    const result = await prisma.$transaction(
-      (tx) => migrateWalletsToCurrency(tx, normalizeCurrencyCode(params.code)),
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+  app.put("/admin/balance-currencies/order", async (request) => {
+    const body = z
+      .object({ currencyCodes: z.array(z.string().trim().min(1).max(32)).max(100) })
+      .parse(request.body);
+    await prisma.$transaction((tx) => setBalanceCurrencyOrder(tx, body.currencyCodes));
+    return readBalanceCurrencySettings();
+  });
 
-    return {
-      ...result,
-      ...(await readBalanceCurrencySettings()),
-    };
+  app.put("/admin/balance-currencies/:code/access-tiers", async (request) => {
+    const params = z.object({ code: z.string().min(1).max(32) }).parse(request.params);
+    const body = z.object({ accessTierIds: z.array(z.string().min(1)).max(200) }).parse(request.body);
+    await prisma.$transaction((tx) =>
+      setBalanceCurrencyAccessTiers(
+        tx,
+        normalizeCurrencyCode(params.code),
+        body.accessTierIds,
+      ),
+    );
+    return readBalanceCurrencySettings();
   });
 
   app.get("/admin/pending-auto-terminate-settings", async () => {
@@ -2919,7 +2975,7 @@ export async function adminRoutes(app: FastifyInstance) {
         charityIpRateLimitPerMinute: true,
         tokenVersion: true,
         createdAt: true,
-        wallet: {
+        wallets: {
           include: {
             balanceCurrency: {
               select: {
@@ -2930,6 +2986,10 @@ export async function adminRoutes(app: FastifyInstance) {
               },
             },
           },
+          orderBy: [
+            { balanceCurrency: { sortOrder: "asc" } },
+            { currency: "asc" },
+          ],
         },
         walletTransactions: {
           orderBy: { createdAt: "desc" },
@@ -3314,7 +3374,13 @@ export async function adminRoutes(app: FastifyInstance) {
         charityIpRateLimitPerMinute: true,
         tokenVersion: true,
         createdAt: true,
-        wallet: true,
+        wallets: {
+          include: { balanceCurrency: { select: balanceCurrencySelect } },
+          orderBy: [
+            { balanceCurrency: { sortOrder: "asc" } },
+            { currency: "asc" },
+          ],
+        },
         _count: {
           select: {
             apiKeys: true,
@@ -3397,12 +3463,31 @@ export async function adminRoutes(app: FastifyInstance) {
         charityIpRateLimitEnabled: z.boolean().default(false),
         charityIpRateLimitPerMinute: userRuntimeLimitSchema.default(0),
         initialBalance: z.string().or(z.number()).optional(),
+        initialBalanceCurrency: z
+          .string()
+          .trim()
+          .min(1)
+          .max(32)
+          .default(defaultBalanceCurrencyCode),
       })
       .parse(request.body);
     const standardTier = await ensureStandardAccessTier();
 
     try {
       const user = await prisma.$transaction(async (tx) => {
+        const initialBalance = new Decimal(body.initialBalance ?? "0");
+        if (!initialBalance.isFinite() || initialBalance.lt(0)) {
+          throw Object.assign(new Error("Initial balance must be non-negative"), {
+            statusCode: 400,
+          });
+        }
+        const initialCurrency = initialBalance.gt(0)
+          ? await getUsableBalanceCurrencyOrThrow(
+              tx,
+              normalizeCurrencyCode(body.initialBalanceCurrency),
+              "初始余额",
+            )
+          : null;
         const created = await tx.user.create({
           data: {
             email: body.email,
@@ -3422,27 +3507,29 @@ export async function adminRoutes(app: FastifyInstance) {
             passwordHash: await hashPassword(
               randomBytes(32).toString("base64url"),
             ),
-            wallet: {
-              create: {
-                balance: body.initialBalance
-                  ? String(body.initialBalance)
-                  : "0",
-                currency: (await getActiveBalanceCurrency(tx)).code,
-              },
-            },
+            ...(initialCurrency
+              ? {
+                  wallets: {
+                    create: {
+                      balance: initialBalance.toFixed(8),
+                      currency: initialCurrency.code,
+                    },
+                  },
+                }
+              : {}),
           },
         });
 
-        if (body.initialBalance) {
+        if (initialCurrency) {
           await tx.walletTransaction.create({
             data: {
               userId: created.id,
               type: "RECHARGE",
               source: "ADMIN_RECHARGE",
-              amount: String(body.initialBalance),
+              amount: initialBalance.toFixed(8),
               balanceBefore: "0",
-              balanceAfter: String(body.initialBalance),
-              currency: (await getActiveBalanceCurrency(tx)).code,
+              balanceAfter: initialBalance.toFixed(8),
+              currency: initialCurrency.code,
               remark: "Initial balance",
             },
           });
@@ -3537,6 +3624,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const body = z
       .object({
         amount: z.string().or(z.number()).transform(String),
+        currency: z.string().trim().min(1).max(32).default(defaultBalanceCurrencyCode),
         remark: z.string().optional(),
       })
       .parse(request.body);
@@ -3556,22 +3644,17 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const wallet = await upsertWalletWithActiveCurrency(tx, params.id);
-      const balanceBefore = new Decimal(wallet.balance.toString());
-      const balanceAfter = balanceBefore.plus(amount);
-
-      if (balanceAfter.lt(0)) {
-        throw Object.assign(new Error("Balance cannot be negative"), {
-          statusCode: 400,
+      const currency = await getUsableBalanceCurrencyOrThrow(
+        tx,
+        normalizeCurrencyCode(body.currency),
+        "充值",
+      );
+      const { wallet: updatedWallet, balanceBefore, balanceAfter } =
+        await applyWalletBalanceDelta(tx, {
+          userId: params.id,
+          currencyCode: currency.code,
+          amount,
         });
-      }
-
-      const updatedWallet = await tx.wallet.update({
-        where: { userId: params.id },
-        data: {
-          balance: balanceAfter.toFixed(8),
-        },
-      });
 
       const transaction = await tx.walletTransaction.create({
         data: {
@@ -3581,7 +3664,7 @@ export async function adminRoutes(app: FastifyInstance) {
           amount: amount.toFixed(8),
           balanceBefore: balanceBefore.toFixed(8),
           balanceAfter: balanceAfter.toFixed(8),
-          currency: wallet.currency,
+          currency: currency.code,
           remark: body.remark ?? "Admin balance adjustment",
         },
       });
@@ -4446,7 +4529,10 @@ export async function adminRoutes(app: FastifyInstance) {
             prisma,
             normalizeCurrencyCode(body.currency),
           )
-        : await getActiveBalanceCurrency();
+        : await getRedeemableBalanceCurrencyOrThrow(
+            prisma,
+            defaultBalanceCurrencyCode,
+          );
 
     if (body.rewardType === "BALANCE" && codeCurrency.isBase) {
       return reply.status(400).send({

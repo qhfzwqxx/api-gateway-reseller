@@ -10,6 +10,7 @@ export type FrontAuthSettings = {
   emailCodeAutoRegisterEnabled: boolean;
   smtpConfigured: boolean;
   newUserBonusUsd?: string;
+  newUserBonusCurrency?: string;
 };
 
 export type PublicApiRequest = {
@@ -44,15 +45,27 @@ export type FrontAccessTier = {
   name: string;
 };
 
-export type FrontSelectableAccessTier = FrontAccessTier & {
-  status: "ACTIVE";
+export type FrontConfiguredAccessTier = FrontAccessTier & {
+  status: "ACTIVE" | "DISABLED" | string;
   sortOrder: number;
   billingMultiplier: string;
   rateLimitPerMinute: number;
   concurrencyLimit: number;
   walletRequired: boolean;
-  userSelectable: true;
+  userSelectable: boolean;
   description: string | null;
+  currencies: Array<FrontBalanceCurrency & {
+    balance: string;
+    reservedBalance: string;
+  }>;
+  currencyPreference: string[];
+  defaultCurrencyOrder: string[];
+  preferenceSource: "USER" | "DEFAULT";
+};
+
+export type FrontSelectableAccessTier = FrontConfiguredAccessTier & {
+  status: "ACTIVE";
+  userSelectable: true;
 };
 
 export type FrontWallet = {
@@ -111,7 +124,7 @@ export type FrontUser = {
   tierId?: string | null;
   tier?: FrontAccessTier | null;
   createdAt?: string;
-  wallet?: FrontWallet | null;
+  wallets?: FrontWallet[];
 };
 
 export type FrontAvailableModel = {

@@ -3,6 +3,12 @@ import { prisma } from "@gateway/db";
 import { z } from "zod";
 import { requireUser } from "../services/auth.js";
 import { syncUserSubscriptionState } from "../services/subscriptions.js";
+import {
+  balanceCurrencySelect,
+  getTierCurrencyOptions,
+  replaceUserTierCurrencyPreference,
+  toBalanceCurrencyDto,
+} from "../services/balance-currency.js";
 
 const accessTierSelect = {
   id: true,
@@ -42,11 +48,103 @@ export async function accessTierRoutes(app: FastifyInstance) {
       throw Object.assign(new Error("User not found"), { statusCode: 404 });
     }
 
+    const tierIds = [
+      ...new Set(
+        [currentUser.tier?.id, ...selectableTiers.map((tier) => tier.id)].filter(
+          (tierId): tierId is string => Boolean(tierId),
+        ),
+      ),
+    ];
+    const [wallets, defaultOptions, userOptions] = await Promise.all([
+      prisma.wallet.findMany({
+        where: { userId: user.sub },
+        select: {
+          currency: true,
+          balance: true,
+          reservedBalance: true,
+          balanceCurrency: { select: balanceCurrencySelect },
+        },
+      }),
+      Promise.all(
+        tierIds.map((accessTierId) =>
+          getTierCurrencyOptions(prisma, { accessTierId }),
+        ),
+      ),
+      Promise.all(
+        tierIds.map((accessTierId) =>
+          getTierCurrencyOptions(prisma, { userId: user.sub, accessTierId }),
+        ),
+      ),
+    ]);
+    const walletByCurrency = new Map(wallets.map((wallet) => [wallet.currency, wallet]));
+    const currencyConfigByTier = new Map(
+      tierIds.map((tierId, index) => {
+        const options = userOptions[index] ?? [];
+        return [
+          tierId,
+          {
+            currencies: options.map((option) => {
+              const wallet = walletByCurrency.get(option.currency.code);
+              return {
+                ...toBalanceCurrencyDto(option.currency),
+                balance: wallet?.balance.toString() ?? "0.00000000",
+                reservedBalance:
+                  wallet?.reservedBalance.toString() ?? "0.00000000",
+              };
+            }),
+            currencyPreference: options.map((option) => option.currency.code),
+            defaultCurrencyOrder: (defaultOptions[index] ?? []).map(
+              (option) => option.currency.code,
+            ),
+            preferenceSource: options[0]?.source ?? "DEFAULT",
+          },
+        ];
+      }),
+    );
+    const withCurrencyConfig = <T extends { id: string }>(tier: T) => ({
+      ...tier,
+      ...(currencyConfigByTier.get(tier.id) ?? {
+        currencies: [],
+        currencyPreference: [],
+        defaultCurrencyOrder: [],
+        preferenceSource: "DEFAULT" as const,
+      }),
+    });
+
     return {
-      currentTier: currentUser.tier,
-      tiers: selectableTiers,
+      currentTier: currentUser.tier ? withCurrencyConfig(currentUser.tier) : null,
+      tiers: selectableTiers.map(withCurrencyConfig),
     };
   });
+
+  app.put(
+    "/me/access-tiers/:tierId/currency-preference",
+    { preHandler: requireUser },
+    async (request) => {
+      const user = request.user as { sub: string };
+      const params = z.object({ tierId: z.string().trim().min(1) }).parse(request.params);
+      const body = z
+        .object({ currencyCodes: z.array(z.string().trim().min(1).max(32)).max(100) })
+        .parse(request.body);
+
+      await prisma.$transaction((tx) =>
+        replaceUserTierCurrencyPreference(tx, {
+          userId: user.sub,
+          accessTierId: params.tierId,
+          currencyCodes: body.currencyCodes,
+        }),
+      );
+
+      const options = await getTierCurrencyOptions(prisma, {
+        userId: user.sub,
+        accessTierId: params.tierId,
+      });
+      return {
+        tierId: params.tierId,
+        currencyPreference: options.map((option) => option.currency.code),
+      };
+    },
+  );
 
   app.patch("/me/access-tier", { preHandler: requireUser }, async (request) => {
     const body = z

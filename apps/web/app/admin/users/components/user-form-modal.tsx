@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import type { BalanceCurrency } from "../../../../lib/api/balance-currencies";
 import type { AdminUser, UpsertAdminUserInput } from "../../../../lib/api/users";
 import type { AccessTierSummary } from "../../../../lib/api/routing";
 
@@ -18,6 +19,7 @@ const userFormSchema = z.object({
   displayGroup: z.string().trim().min(1, "请填写用户分组").max(32, "不能超过 32 个字符"),
   tierId: z.string().trim().optional(),
   initialBalance: z.string().trim().optional(),
+  initialBalanceCurrency: z.string().trim().optional(),
   allowedModelsText: z.string().trim().optional(),
   charityEnabled: z.boolean(),
   charityDisplayName: z.string().trim().optional(),
@@ -34,11 +36,20 @@ interface UserFormModalProps {
   user?: AdminUser | null;
   loading?: boolean;
   tiers?: AccessTierSummary[];
+  currencies?: BalanceCurrency[];
   onClose: () => void;
   onSubmit: (values: UpsertAdminUserInput) => void | Promise<void>;
 }
 
-export function UserFormModal({ open, user, loading = false, tiers = [], onClose, onSubmit }: UserFormModalProps) {
+export function UserFormModal({
+  open,
+  user,
+  loading = false,
+  tiers = [],
+  currencies = [],
+  onClose,
+  onSubmit,
+}: UserFormModalProps) {
   const isEdit = Boolean(user);
   const {
     register,
@@ -70,6 +81,10 @@ export function UserFormModal({ open, user, loading = false, tiers = [], onClose
       displayGroup: values.displayGroup,
       tierId: values.tierId || null,
       initialBalance: !isEdit && values.initialBalance ? values.initialBalance : undefined,
+      initialBalanceCurrency:
+        !isEdit && values.initialBalance
+          ? values.initialBalanceCurrency || "POINTS"
+          : undefined,
       allowedModels: splitModelList(values.allowedModelsText),
       charityEnabled: values.charityEnabled,
       charityDisplayName: values.charityDisplayName || null,
@@ -170,9 +185,20 @@ export function UserFormModal({ open, user, loading = false, tiers = [], onClose
             </Field>
 
             {!isEdit ? (
-              <Field label="初始化余额" error={errors.initialBalance?.message} hint="可选，不填则不传">
-                <input inputMode="decimal" className={inputClass} placeholder="0.00000000" {...register("initialBalance")} />
-              </Field>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="初始化余额" error={errors.initialBalance?.message} hint="可选，不填则不创建钱包">
+                  <input inputMode="decimal" className={inputClass} placeholder="0.00000000" {...register("initialBalance")} />
+                </Field>
+                <Field label="余额货币" error={errors.initialBalanceCurrency?.message} hint="直接写入所选币种，不做转换">
+                  <select className={inputClass} {...register("initialBalanceCurrency")}>
+                    {currencies.map((currency) => (
+                      <option key={currency.code} value={currency.code}>
+                        {currency.name} ({currency.code})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
             ) : null}
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -237,6 +263,7 @@ function getDefaultValues(user?: AdminUser | null): UserFormValues {
     displayGroup: user?.displayGroup ?? defaultDisplayGroup(user),
     tierId: user?.tierId ?? "",
     initialBalance: "",
+    initialBalanceCurrency: "POINTS",
     allowedModelsText: (user?.allowedModels ?? []).join("\n"),
     charityEnabled: user?.charityEnabled ?? false,
     charityDisplayName: user?.charityDisplayName ?? "",

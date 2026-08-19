@@ -18,9 +18,9 @@ import { getClientIp } from "../services/proxy-request-utils.js";
 import { unlockWhitelistFilterUser } from "../services/whitelist-filter-settings.js";
 import { ensureStandardAccessTier } from "../services/access-routing.js";
 import {
-  baseToWalletAmount,
   balanceCurrencySelect,
-  getActiveBalanceCurrency,
+  getUsableBalanceCurrencyOrThrow,
+  normalizeCurrencyCode,
 } from "../services/balance-currency.js";
 
 const emailCodeSchema = z.object({
@@ -217,6 +217,7 @@ export async function authRoutes(app: FastifyInstance) {
             email: body.email,
             passwordHash,
             newUserBonus,
+            newUserBonusCurrency: settings.newUserBonusCurrency,
             tierId: standardTier.id,
           });
           await applyReferralForNewUser(tx, {
@@ -362,7 +363,7 @@ export async function authRoutes(app: FastifyInstance) {
             name: true,
           },
         },
-        wallet: {
+        wallets: {
           select: {
             id: true,
             balance: true,
@@ -372,6 +373,10 @@ export async function authRoutes(app: FastifyInstance) {
               select: balanceCurrencySelect,
             },
           },
+          orderBy: [
+            { balanceCurrency: { sortOrder: "asc" } },
+            { currency: "asc" },
+          ],
         },
       },
     });
@@ -506,6 +511,7 @@ async function createPublicUser(
     email: string;
     passwordHash: string;
     newUserBonus: Decimal;
+    newUserBonusCurrency: string;
     tierId: string;
   },
 ) {
@@ -513,8 +519,13 @@ async function createPublicUser(
     input.newUserBonus.isFinite() && input.newUserBonus.gt(0)
       ? input.newUserBonus
       : new Decimal(0);
-  const activeCurrency = await getActiveBalanceCurrency(tx);
-  const walletBonus = baseToWalletAmount(bonus, activeCurrency);
+  const bonusCurrency = bonus.gt(0)
+    ? await getUsableBalanceCurrencyOrThrow(
+        tx,
+        normalizeCurrencyCode(input.newUserBonusCurrency),
+        "新用户奖励",
+      )
+    : null;
   const created = await tx.user.create({
     data: {
       email: input.email,
@@ -522,12 +533,16 @@ async function createPublicUser(
       role: "USER",
       status: "ACTIVE",
       tierId: input.tierId,
-      wallet: {
-        create: {
-          balance: walletBonus.toFixed(8),
-          currency: activeCurrency.code,
-        },
-      },
+      ...(bonusCurrency
+        ? {
+            wallets: {
+              create: {
+                balance: bonus.toFixed(8),
+                currency: bonusCurrency.code,
+              },
+            },
+          }
+        : {}),
     },
   });
 
@@ -537,15 +552,15 @@ async function createPublicUser(
         userId: created.id,
         type: "RECHARGE",
         source: "NEW_USER_BONUS",
-        amount: walletBonus.toFixed(8),
+        amount: bonus.toFixed(8),
         balanceBefore: "0",
-        balanceAfter: walletBonus.toFixed(8),
-        currency: activeCurrency.code,
+        balanceAfter: bonus.toFixed(8),
+        currency: bonusCurrency!.code,
         remark: "New user bonus",
         metadata: {
-          baseAmountUsd: bonus.toFixed(8),
-          walletAmount: walletBonus.toFixed(8),
-          walletCurrency: activeCurrency.code,
+          rewardAmount: bonus.toFixed(8),
+          walletAmount: bonus.toFixed(8),
+          walletCurrency: bonusCurrency!.code,
         },
       },
     });

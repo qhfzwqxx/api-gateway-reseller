@@ -6,9 +6,15 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-import type { AdminUser, AdjustUserBalanceInput } from "../../../../lib/api/users";
+import type { BalanceCurrency } from "../../../../lib/api/balance-currencies";
+import type {
+  AdminUser,
+  AdminUserWallet,
+  AdjustUserBalanceInput,
+} from "../../../../lib/api/users";
 
 const balanceSchema = z.object({
+  currency: z.string().trim().min(1, "请选择余额货币"),
   amount: z
     .string()
     .trim()
@@ -22,21 +28,31 @@ type BalanceFormValues = z.infer<typeof balanceSchema>;
 interface BalanceAdjustModalProps {
   open: boolean;
   user: AdminUser | null;
+  currencies: BalanceCurrency[];
   loading?: boolean;
   onClose: () => void;
   onSubmit: (values: AdjustUserBalanceInput) => void | Promise<void>;
 }
 
-export function BalanceAdjustModal({ open, user, loading = false, onClose, onSubmit }: BalanceAdjustModalProps) {
+export function BalanceAdjustModal({
+  open,
+  user,
+  currencies,
+  loading = false,
+  onClose,
+  onSubmit,
+}: BalanceAdjustModalProps) {
   const {
     register,
     handleSubmit,
     reset,
     setError,
+    watch,
     formState: { errors },
   } = useForm<BalanceFormValues>({
     resolver: zodResolver(balanceSchema),
     defaultValues: {
+      currency: "POINTS",
       amount: "",
       remark: "",
     },
@@ -44,15 +60,26 @@ export function BalanceAdjustModal({ open, user, loading = false, onClose, onSub
 
   useEffect(() => {
     if (open) {
-      reset({ amount: "", remark: "" });
+      reset({
+        currency:
+          currencies.find((currency) => currency.code === "POINTS")?.code ??
+          currencies[0]?.code ??
+          "",
+        amount: "",
+        remark: "",
+      });
     }
-  }, [open, reset]);
+  }, [currencies, open, reset]);
 
   if (!open || !user) {
     return null;
   }
 
-  const currentBalance = Number(user.wallet?.balance ?? 0);
+  const selectedCurrency = watch("currency");
+  const selectedWallet = user.wallets.find(
+    (wallet) => wallet.currency === selectedCurrency,
+  );
+  const currentBalance = Number(selectedWallet?.balance ?? 0);
 
   async function submit(values: BalanceFormValues) {
     const amount = Number(values.amount);
@@ -63,6 +90,7 @@ export function BalanceAdjustModal({ open, user, loading = false, onClose, onSub
 
     await onSubmit({
       amount: values.amount,
+      currency: values.currency,
       remark: values.remark || undefined,
     });
   }
@@ -87,13 +115,28 @@ export function BalanceAdjustModal({ open, user, loading = false, onClose, onSub
 
         <form className="p-6" onSubmit={handleSubmit(submit)}>
           <div className="mb-5 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-            当前余额：
+            当前所选币种余额：
             <span className="font-semibold tabular-nums">
-              {formatBalance(currentBalance, user.wallet?.balanceCurrency)}
+              {formatBalance(currentBalance, selectedWallet?.balanceCurrency)}
             </span>
           </div>
 
           <div className="grid gap-5">
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-slate-700">余额货币</span>
+              <select
+                className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                {...register("currency")}
+              >
+                {currencies.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.name} ({currency.code})
+                  </option>
+                ))}
+              </select>
+              {errors.currency ? <span className="text-sm text-red-600">{errors.currency.message}</span> : null}
+            </label>
+
             <label className="grid gap-2">
               <span className="text-sm font-medium text-slate-700">调整金额</span>
               <input
@@ -142,7 +185,7 @@ export function BalanceAdjustModal({ open, user, loading = false, onClose, onSub
 
 function formatBalance(
   value: number,
-  currency?: NonNullable<AdminUser["wallet"]>["balanceCurrency"],
+  currency?: AdminUserWallet["balanceCurrency"],
 ) {
   const formatted = new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,

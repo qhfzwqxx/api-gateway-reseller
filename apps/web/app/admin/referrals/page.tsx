@@ -5,6 +5,10 @@ import { Gift, Loader2, RefreshCw, Save, Users } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import http from "../../../lib/http";
+import {
+  getBalanceCurrencySettings,
+  type BalanceCurrency,
+} from "../../../lib/api/balance-currencies";
 import { getSubscriptionPlans, type SubscriptionPlan } from "../../../lib/api/subscriptions";
 
 type RewardType = "NONE" | "BALANCE" | "SUBSCRIPTION";
@@ -12,6 +16,7 @@ type RewardType = "NONE" | "BALANCE" | "SUBSCRIPTION";
 type ReferralRewardSettings = {
   type: RewardType;
   amountUsd: string;
+  currencyCode: string;
   subscriptionPlanId: string | null;
 };
 
@@ -32,6 +37,10 @@ type ReferralInvite = {
   inviteeRewardType: RewardType;
   inviteeRewardAmount: string;
   inviteeRewardPlanId: string | null;
+  rewardSnapshot?: {
+    inviterReward?: ReferralRewardSettings;
+    inviteeReward?: ReferralRewardSettings;
+  } | null;
   inviterRewardedAt: string | null;
   inviteeRewardedAt: string | null;
   createdAt: string;
@@ -42,6 +51,7 @@ type ReferralInvite = {
 const emptyReward: ReferralRewardSettings = {
   type: "NONE",
   amountUsd: "0",
+  currencyCode: "POINTS",
   subscriptionPlanId: null,
 };
 
@@ -58,6 +68,10 @@ export default function AdminReferralsPage() {
   const plansQuery = useQuery({
     queryKey: ["admin", "subscription-plans"],
     queryFn: getSubscriptionPlans,
+  });
+  const currenciesQuery = useQuery({
+    queryKey: ["admin", "balance-currencies"],
+    queryFn: getBalanceCurrencySettings,
   });
 
   const [enabled, setEnabled] = useState(true);
@@ -79,6 +93,9 @@ export default function AdminReferralsPage() {
 
   const activePlans = (plansQuery.data ?? []).filter(
     (plan) => plan.status === "ACTIVE",
+  );
+  const balanceCurrencies = (currenciesQuery.data?.currencies ?? []).filter(
+    (currency) => !currency.isBase && currency.enabled,
   );
   const invites = invitesQuery.data ?? [];
   const totals = useMemo(
@@ -195,12 +212,14 @@ export default function AdminReferralsPage() {
           <div className="grid gap-4 xl:grid-cols-2">
             <RewardEditor
               activePlans={activePlans}
+              currencies={balanceCurrencies}
               label="邀请人奖励"
               reward={inviterReward}
               onChange={setInviterReward}
             />
             <RewardEditor
               activePlans={activePlans}
+              currencies={balanceCurrencies}
               label="被邀请新用户奖励"
               reward={inviteeReward}
               onChange={setInviteeReward}
@@ -248,10 +267,10 @@ export default function AdminReferralsPage() {
                       {invite.code}
                     </td>
                     <td className="px-5 py-4 text-sm text-slate-700">
-                      {rewardLabel(invite.inviterRewardType, invite.inviterRewardAmount, invite.inviterRewardPlanId, activePlans)}
+                      {rewardLabel(invite.inviterRewardType, invite.inviterRewardAmount, invite.inviterRewardPlanId, invite.rewardSnapshot?.inviterReward?.currencyCode, activePlans, balanceCurrencies)}
                     </td>
                     <td className="px-5 py-4 text-sm text-slate-700">
-                      {rewardLabel(invite.inviteeRewardType, invite.inviteeRewardAmount, invite.inviteeRewardPlanId, activePlans)}
+                      {rewardLabel(invite.inviteeRewardType, invite.inviteeRewardAmount, invite.inviteeRewardPlanId, invite.rewardSnapshot?.inviteeReward?.currencyCode, activePlans, balanceCurrencies)}
                     </td>
                     <td className="px-5 py-4 text-sm text-slate-500">
                       {formatDate(invite.createdAt)}
@@ -274,11 +293,13 @@ export default function AdminReferralsPage() {
 
 function RewardEditor({
   activePlans,
+  currencies,
   label,
   reward,
   onChange,
 }: {
   activePlans: SubscriptionPlan[];
+  currencies: BalanceCurrency[];
   label: string;
   reward: ReferralRewardSettings;
   onChange: (reward: ReferralRewardSettings) => void;
@@ -304,16 +325,33 @@ function RewardEditor({
           </select>
         </Field>
         {reward.type === "BALANCE" ? (
-          <Field label="余额金额 USD">
-            <input
-              className={inputClass}
-              inputMode="decimal"
-              onChange={(event) =>
-                onChange({ ...reward, amountUsd: event.target.value })
-              }
-              value={reward.amountUsd}
-            />
-          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="奖励金额">
+              <input
+                className={inputClass}
+                inputMode="decimal"
+                onChange={(event) =>
+                  onChange({ ...reward, amountUsd: event.target.value })
+                }
+                value={reward.amountUsd}
+              />
+            </Field>
+            <Field label="奖励货币">
+              <select
+                className={inputClass}
+                onChange={(event) =>
+                  onChange({ ...reward, currencyCode: event.target.value })
+                }
+                value={reward.currencyCode}
+              >
+                {currencies.map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.name} ({currency.code})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
         ) : null}
         {reward.type === "SUBSCRIPTION" ? (
           <Field label="订阅套餐">
@@ -391,10 +429,16 @@ function rewardLabel(
   type: RewardType,
   amount: string,
   planId: string | null,
+  currencyCode: string | undefined,
   plans: SubscriptionPlan[],
+  currencies: BalanceCurrency[],
 ) {
   if (type === "NONE") return "无";
-  if (type === "BALANCE") return `$${Number(amount || 0).toFixed(8)}`;
+  if (type === "BALANCE") {
+    const code = currencyCode || "POINTS";
+    const currency = currencies.find((item) => item.code === code);
+    return `${Number(amount || 0).toFixed(8)} ${currency?.symbol || code}`;
+  }
   return plans.find((plan) => plan.id === planId)?.name ?? "订阅套餐";
 }
 

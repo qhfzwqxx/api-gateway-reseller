@@ -13,6 +13,7 @@ import {
 } from "../lib/api";
 import type {
   FrontAvailableModel,
+  FrontConfiguredAccessTier,
   FrontModelMapping,
   FrontSelectableAccessTier,
   FrontUsageSummary,
@@ -78,10 +79,12 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
   const [activeTab, setActiveTab] = useState<FrontTab>(referralCode ? "referral" : "overview");
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [modelMappings, setModelMappings] = useState<FrontModelMapping[]>([]);
-  const [wallet, setWallet] = useState<FrontWallet | null>(null);
+  const [wallets, setWallets] = useState<FrontWallet[]>([]);
   const [summary, setSummary] = useState<FrontUsageSummary | null>(null);
   const [availableModels, setAvailableModels] = useState<FrontAvailableModel[]>([]);
   const [accessTiers, setAccessTiers] = useState<FrontSelectableAccessTier[]>([]);
+  const [currentAccessTier, setCurrentAccessTier] =
+    useState<FrontConfiguredAccessTier | null>(null);
   const [loading, setLoading] = useState<LoadingState>(initialLoading);
   const [switchingTierId, setSwitchingTierId] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -96,10 +99,11 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
   const resetUserData = useCallback(() => {
     setApiKeys([]);
     setModelMappings([]);
-    setWallet(null);
+    setWallets([]);
     setSummary(null);
     setAvailableModels([]);
     setAccessTiers([]);
+    setCurrentAccessTier(null);
     setLoading(initialLoading);
     setSwitchingTierId(null);
     setPageError(null);
@@ -159,10 +163,10 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
   const loadWallet = useCallback(async (authToken?: string | null) => {
     setLoading((current) => ({ ...current, wallet: true }));
     try {
-      const result = await apiFetch<{ wallet: FrontWallet | null }>("/wallet", {
+      const result = await apiFetch<{ wallets: FrontWallet[] }>("/wallet", {
         token: authToken,
       });
-      if (!authToken || getToken() === authToken) setWallet(result.wallet);
+      if (!authToken || getToken() === authToken) setWallets(result.wallets);
     } finally {
       if (!authToken || getToken() === authToken) {
         setLoading((current) => ({ ...current, wallet: false }));
@@ -201,11 +205,17 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
   const loadTiers = useCallback(async (authToken?: string | null) => {
     setLoading((current) => ({ ...current, tiers: true }));
     try {
-      const result = await apiFetch<{ tiers: FrontSelectableAccessTier[] }>(
+      const result = await apiFetch<{
+        currentTier: FrontConfiguredAccessTier | null;
+        tiers: FrontSelectableAccessTier[];
+      }>(
         "/me/access-tiers",
         { token: authToken },
       );
-      if (!authToken || getToken() === authToken) setAccessTiers(result.tiers);
+      if (!authToken || getToken() === authToken) {
+        setAccessTiers(result.tiers);
+        setCurrentAccessTier(result.currentTier);
+      }
     } finally {
       if (!authToken || getToken() === authToken) {
         setLoading((current) => ({ ...current, tiers: false }));
@@ -352,10 +362,10 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
       );
       toast(`已切换为 ${result.tier.name}`);
       try {
-        await loadModels(token);
+        await Promise.all([loadModels(token), loadTiers(token)]);
       } catch (refreshError) {
         if (!handleAuthFailure(refreshError, token)) {
-          setPageError(`等级已切换，但模型列表刷新失败：${errorToText(refreshError)}`);
+          setPageError(`等级已切换，但页面数据刷新失败：${errorToText(refreshError)}`);
         }
       }
     } catch (error) {
@@ -412,7 +422,7 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
   return (
     <FrontAppShell
       user={user}
-      wallet={wallet}
+      wallets={wallets}
       activeTab={activeTab}
       onTabChange={navigate}
       onLogout={logout}
@@ -425,7 +435,7 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
 
       {activeTab === "overview" ? (
         <FrontOverview
-          wallet={wallet}
+          wallets={wallets}
           summary={summary}
           apiKeys={apiKeys}
           availableModels={availableModels}
@@ -446,7 +456,8 @@ function DashboardController({ referralCode }: { referralCode?: string }) {
       {activeTab === "wallet" ? (
         <WalletManagement
           user={user}
-          wallet={wallet}
+          wallets={wallets}
+          currentAccessTier={currentAccessTier}
           accessTiers={accessTiers}
           accessTierLoading={loading.tiers}
           switchingTierId={switchingTierId}

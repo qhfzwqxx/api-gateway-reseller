@@ -12,7 +12,7 @@ const successGraceSeconds = process.env.MODEL_POOL_SUCCESS_GRACE_SECONDS ?? "0";
 async function main() {
   const passwordHash = await bcrypt.hash(adminPassword, 12);
 
-  const admin = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { email: adminEmail },
     update: {
       username: adminUsername,
@@ -32,14 +32,7 @@ async function main() {
 
   await prisma.balanceCurrency.upsert({
     where: { code: baseCurrencyCode },
-    update: {
-      name: "美元基准单位",
-      symbol: "$",
-      icon: "circle-dollar-sign",
-      baseUnitsPerUnit: "1",
-      isBase: true,
-      enabled: true,
-    },
+    update: {},
     create: {
       id: "balance_currency_usd",
       code: baseCurrencyCode,
@@ -49,19 +42,13 @@ async function main() {
       baseUnitsPerUnit: "1",
       isBase: true,
       enabled: true,
+      sortOrder: 100000,
     },
   });
 
   await prisma.balanceCurrency.upsert({
     where: { code: "POINTS" },
-    update: {
-      name: "积分",
-      symbol: "积分",
-      icon: "zap",
-      baseUnitsPerUnit: "1",
-      isBase: false,
-      enabled: true,
-    },
+    update: {},
     create: {
       id: "balance_currency_points",
       code: "POINTS",
@@ -71,33 +58,12 @@ async function main() {
       baseUnitsPerUnit: "1",
       isBase: false,
       enabled: true,
+      sortOrder: 0,
     },
   });
 
-  await prisma.systemSetting.upsert({
+  await prisma.systemSetting.deleteMany({
     where: { key: "balance_currency_active_code" },
-    update: {},
-    create: {
-      key: "balance_currency_active_code",
-      value: "POINTS",
-    },
-  });
-  const activeCurrencySetting = await prisma.systemSetting.findUnique({
-    where: { key: "balance_currency_active_code" },
-    select: { value: true },
-  });
-  const activeCurrencyCode = activeCurrencySetting?.value || "POINTS";
-
-  await prisma.wallet.upsert({
-    where: { userId: admin.id },
-    update: {
-      currency: activeCurrencyCode,
-    },
-    create: {
-      userId: admin.id,
-      balance: "0.00000000",
-      currency: activeCurrencyCode,
-    },
   });
 
   await prisma.systemSetting.upsert({

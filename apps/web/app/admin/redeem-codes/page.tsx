@@ -276,12 +276,12 @@ function GenerateCodesModal({
       !selectedCurrency ||
       !selectableCurrencies.some((currency) => currency.code === selectedCurrency)
     ) {
-      const activeCurrency = selectableCurrencies.find(
-        (currency) => currency.code === currenciesQuery.data?.activeCurrencyCode,
+      const defaultCurrency = selectableCurrencies.find(
+        (currency) => currency.code === "POINTS",
       );
       form.setValue(
         "currency",
-        activeCurrency?.code ?? selectableCurrencies[0]?.code ?? "",
+        defaultCurrency?.code ?? selectableCurrencies[0]?.code ?? "",
       );
     }
   }, [currenciesQuery.data, form, open]);

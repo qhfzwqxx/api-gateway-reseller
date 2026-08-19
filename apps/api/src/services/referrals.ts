@@ -4,9 +4,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@gateway/db";
 import { normalizeMoney } from "./auth-settings.js";
 import {
-  baseToWalletAmount,
-  getBalanceCurrencyOrThrow,
-  upsertWalletWithActiveCurrency,
+  applyWalletBalanceDelta,
+  getUsableBalanceCurrencyOrThrow,
+  normalizeCurrencyCode,
 } from "./balance-currency.js";
 import { grantSubscription } from "./subscriptions.js";
 
@@ -17,6 +17,7 @@ export type ReferralRewardType = "NONE" | "BALANCE" | "SUBSCRIPTION";
 export type ReferralRewardSettings = {
   type: ReferralRewardType;
   amountUsd: string;
+  currencyCode: string;
   subscriptionPlanId: string | null;
 };
 
@@ -42,11 +43,13 @@ export const defaultReferralSettings: ReferralSettings = {
   inviterReward: {
     type: "NONE",
     amountUsd: "0.00000000",
+    currencyCode: "POINTS",
     subscriptionPlanId: null,
   },
   inviteeReward: {
     type: "NONE",
     amountUsd: "0.00000000",
+    currencyCode: "POINTS",
     subscriptionPlanId: null,
   },
 };
@@ -274,15 +277,15 @@ async function applyReward(
   const amount = new Decimal(input.reward.amountUsd);
   if (!amount.isFinite() || amount.lte(0)) return null;
 
-  const wallet = await upsertWalletWithActiveCurrency(tx, input.userId);
-  const walletCurrency = await getBalanceCurrencyOrThrow(tx, wallet.currency);
-  const walletAmount = baseToWalletAmount(amount, walletCurrency);
-  const balanceBefore = new Decimal(wallet.balance.toString());
-  const balanceAfter = balanceBefore.plus(walletAmount);
-
-  await tx.wallet.update({
-    where: { userId: input.userId },
-    data: { balance: balanceAfter.toFixed(8) },
+  const walletCurrency = await getUsableBalanceCurrencyOrThrow(
+    tx,
+    normalizeCurrencyCode(input.reward.currencyCode),
+    "邀请奖励",
+  );
+  const { balanceBefore, balanceAfter } = await applyWalletBalanceDelta(tx, {
+    userId: input.userId,
+    currencyCode: walletCurrency.code,
+    amount,
   });
 
   await tx.walletTransaction.create({
@@ -290,10 +293,10 @@ async function applyReward(
       userId: input.userId,
       type: "RECHARGE",
       source: "REFERRAL",
-      amount: walletAmount.toFixed(8),
+      amount: amount.toFixed(8),
       balanceBefore: balanceBefore.toFixed(8),
       balanceAfter: balanceAfter.toFixed(8),
-      currency: wallet.currency,
+      currency: walletCurrency.code,
       remark:
         input.role === "inviter"
           ? "Referral inviter reward"
@@ -301,9 +304,9 @@ async function applyReward(
       metadata: {
         role: input.role,
         counterpartyUserId: input.counterpartyUserId,
-        baseAmountUsd: amount.toFixed(8),
-        walletAmount: walletAmount.toFixed(8),
-        walletCurrency: wallet.currency,
+        rewardAmount: amount.toFixed(8),
+        walletAmount: amount.toFixed(8),
+        walletCurrency: walletCurrency.code,
       },
     },
   });
@@ -329,6 +332,10 @@ function normalizeRewardSettings(
   return {
     type,
     amountUsd: type === "BALANCE" ? normalizeMoney(settings.amountUsd) : "0.00000000",
+    currencyCode:
+      type === "BALANCE"
+        ? normalizeCurrencyCode(settings.currencyCode || "POINTS")
+        : "POINTS",
     subscriptionPlanId:
       type === "SUBSCRIPTION" && settings.subscriptionPlanId
         ? String(settings.subscriptionPlanId)

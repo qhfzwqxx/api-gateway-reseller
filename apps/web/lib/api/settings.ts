@@ -134,6 +134,7 @@ export interface AuthSettings {
   emailCodeLoginEnabled: boolean;
   emailCodeAutoRegisterEnabled: boolean;
   newUserBonusUsd: string;
+  newUserBonusCurrency: string;
   emailCodeTtlSeconds: number;
   emailCodeCooldownSeconds: number;
   smtpHost: string;

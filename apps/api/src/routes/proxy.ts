@@ -13,6 +13,8 @@ import {
   chargeForRequest,
   ensureWalletCanStart,
   markRequestFailed,
+  releaseWalletReservedAmount,
+  reserveWalletBalance,
 } from "../services/billing.js";
 import { requireApiKey } from "../services/auth.js";
 import {
@@ -790,13 +792,13 @@ export async function proxyRoutes(app: FastifyInstance) {
         const subscriptionCanStart =
           activeSubscription &&
           hasAvailableSubscriptionQuota(activeSubscription);
-        const walletCheck =
+        const walletCheck = await ensureWalletCanStart(
+          user.id,
+          accessRoutePolicy.tierId,
           subscriptionCanStart || !accessRoutePolicy.walletRequired
-            ? { ok: true as const, balance: new Decimal(0) }
-            : await ensureWalletCanStart(
-                user.id,
-                accessRoutePolicy.minimumWalletBalanceUsd,
-              );
+            ? null
+            : accessRoutePolicy.minimumWalletBalanceUsd ?? "0.01000000",
+        );
         if (!walletCheck.ok) {
           await createGatewayRejectedRequest({
             body,
@@ -944,6 +946,26 @@ export async function proxyRoutes(app: FastifyInstance) {
       }
 
       const start = performance.now();
+      const shouldReserveWallet =
+        billable &&
+        accessRoutePolicy.walletRequired &&
+        !(activeSubscription && hasAvailableSubscriptionQuota(activeSubscription));
+      const walletReservation = shouldReserveWallet
+        ? await reserveWalletBalance({
+            userId: user.id,
+            accessTierId: accessRoutePolicy.tierId!,
+          })
+        : { ok: true as const, amount: new Decimal(0), currencyCode: null };
+      if (!walletReservation.ok) {
+        await runtimeLimitLock.release();
+        await initialRoute.release?.();
+        return sendApiError(
+          reply,
+          402,
+          walletReservation.reason,
+          "insufficient_quota",
+        );
+      }
       let apiRequest;
       try {
         apiRequest = await prisma.apiRequest.create({
@@ -959,7 +981,8 @@ export async function proxyRoutes(app: FastifyInstance) {
             endpoint,
             method: request.method,
             status: "PENDING",
-            reservedAmountUsd: "0",
+            reservedAmountUsd: walletReservation.amount.toFixed(8),
+            walletCurrency: walletReservation.currencyCode,
             clientIp,
             userAgent: request.headers["user-agent"],
             requestBody: redactBodyForLog(body) as Prisma.InputJsonValue,
@@ -976,6 +999,11 @@ export async function proxyRoutes(app: FastifyInstance) {
           },
         });
       } catch (error) {
+        await releaseWalletReservedAmount({
+          userId: user.id,
+          currencyCode: walletReservation.currencyCode,
+          amountUsd: walletReservation.amount,
+        });
         await runtimeLimitLock.release();
         await initialRoute.release?.();
         throw error;

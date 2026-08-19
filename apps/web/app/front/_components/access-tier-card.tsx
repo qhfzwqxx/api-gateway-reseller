@@ -1,9 +1,21 @@
 "use client";
 
-import { ShieldCheck } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  GripVertical,
+  Save,
+  ShieldCheck,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import { apiFetch } from "../../../lib/api";
 import type { UserSubscription } from "../../../lib/api/subscriptions";
 import { dateTime } from "../../../lib/format";
-import type { FrontSelectableAccessTier } from "../../../lib/types/front";
+import type {
+  FrontConfiguredAccessTier,
+  FrontSelectableAccessTier,
+} from "../../../lib/types/front";
+import { CurrencyAmount } from "./currency-amount";
 import {
   FrontAlert,
   FrontBadge,
@@ -14,12 +26,6 @@ import {
   useFrontConfirm,
 } from "./ui/front-ui";
 
-type CurrentAccessTier = {
-  id: string;
-  code: string;
-  name: string;
-};
-
 export function AccessTierCard({
   currentTier,
   tiers,
@@ -29,8 +35,9 @@ export function AccessTierCard({
   subscriptionError,
   activeSubscription,
   onSelect,
+  onPreferenceChanged,
 }: {
-  currentTier: CurrentAccessTier | null;
+  currentTier: FrontConfiguredAccessTier | null;
   tiers: FrontSelectableAccessTier[];
   switchingTierId: string | null;
   loading: boolean;
@@ -38,30 +45,30 @@ export function AccessTierCard({
   subscriptionError: string | null;
   activeSubscription: UserSubscription | null;
   onSelect: (tier: FrontSelectableAccessTier) => Promise<void>;
+  onPreferenceChanged: () => void | Promise<void>;
 }) {
   const confirm = useFrontConfirm();
   const effectiveTier = activeSubscription?.tier ?? currentTier;
   const currentTierSelectable = tiers.some(
     (tier) => tier.id === currentTier?.id,
   );
+  const displayedTiers: FrontConfiguredAccessTier[] = currentTier
+    ? [currentTier, ...tiers.filter((tier) => tier.id !== currentTier.id)]
+    : tiers;
   const selectionLocked =
     subscriptionLoading ||
     Boolean(subscriptionError) ||
     Boolean(activeSubscription);
 
   async function select(tier: FrontSelectableAccessTier) {
-    if (selectionLocked || tier.id === effectiveTier?.id) {
-      return;
-    }
+    if (selectionLocked || tier.id === effectiveTier?.id) return;
     if (currentTier && !currentTierSelectable) {
       const accepted = await confirm({
         title: "切换管理员分配等级",
-        description: `当前「${currentTier.name}」由管理员分配。切换后无法在前台自行恢复，确认切换到「${tier.name}」吗？`,
+        description: `当前「${currentTier.name}」由管理员分配。切换后只能联系管理员恢复，确认继续吗？`,
         confirmText: "确认切换",
       });
-      if (!accepted) {
-        return;
-      }
+      if (!accepted) return;
     }
     await onSelect(tier);
   }
@@ -70,8 +77,8 @@ export function AccessTierCard({
     <FrontCard className="front-access-tier-card">
       <div className="front-page-section-head">
         <div>
-          <h2>访问等级</h2>
-          <p>默认决定可用模型、扣费倍率与运行限制；没有订阅也会持续生效。</p>
+          <h2>访问等级与扣款顺序</h2>
+          <p>访问等级持续生效；每个等级可以单独设置余额货币优先级。</p>
         </div>
         <FrontBadge tone={activeSubscription ? "warning" : "primary"}>
           <ShieldCheck aria-hidden="true" size={14} />
@@ -102,25 +109,27 @@ export function AccessTierCard({
 
       {loading ? (
         <div className="front-tier-grid">
-          <FrontSkeleton height={96} />
-          <FrontSkeleton height={96} />
+          <FrontSkeleton height={180} />
+          <FrontSkeleton height={180} />
         </div>
-      ) : tiers.length > 0 ? (
-        <div
-          className="front-tier-grid"
-          role="group"
-          aria-label="可选择的访问等级"
-        >
-          {tiers.map((tier) => {
+      ) : displayedTiers.length > 0 ? (
+        <div className="front-tier-grid" role="group" aria-label="可选择的访问等级">
+          {displayedTiers.map((tier) => {
+            const selectableTier = tiers.find((item) => item.id === tier.id);
             const active = tier.id === effectiveTier?.id;
             const switching = tier.id === switchingTierId;
             const description = formatTierDescription(tier.description);
             const disabled =
-              active || selectionLocked || Boolean(switchingTierId);
+              active ||
+              !selectableTier ||
+              selectionLocked ||
+              Boolean(switchingTierId);
             const buttonLabel = active
               ? activeSubscription
                 ? "订阅等级"
                 : "已选择"
+              : !selectableTier
+                ? "管理员分配"
               : activeSubscription
                 ? "订阅期间不可切换"
                 : selectionLocked
@@ -137,17 +146,13 @@ export function AccessTierCard({
                 <div className="front-tier-option-head">
                   <strong>{tier.name}</strong>
                   {active ? (
-                    <FrontBadge
-                      tone={activeSubscription ? "warning" : "success"}
-                    >
+                    <FrontBadge tone={activeSubscription ? "warning" : "success"}>
                       {activeSubscription ? "订阅生效" : "当前等级"}
                     </FrontBadge>
                   ) : null}
                 </div>
                 {description ? (
-                  <p className="front-tier-option-description">
-                    {description}
-                  </p>
+                  <p className="front-tier-option-description">{description}</p>
                 ) : null}
                 <dl className="front-tier-limit-grid">
                   <div>
@@ -159,6 +164,12 @@ export function AccessTierCard({
                     <dd>{formatConcurrencyLimit(tier.concurrencyLimit)}</dd>
                   </div>
                 </dl>
+
+                <TierCurrencyPreference
+                  tier={tier}
+                  onChanged={onPreferenceChanged}
+                />
+
                 <div className="front-tier-option-foot">
                   <span className="front-data-number">
                     扣费倍率 × {formatMultiplier(tier.billingMultiplier)}
@@ -167,7 +178,9 @@ export function AccessTierCard({
                     variant={active ? "secondary" : "primary"}
                     loading={switching}
                     disabled={disabled}
-                    onClick={() => void select(tier)}
+                    onClick={() => {
+                      if (selectableTier) void select(selectableTier);
+                    }}
                   >
                     {buttonLabel}
                   </FrontButton>
@@ -184,6 +197,149 @@ export function AccessTierCard({
         />
       )}
     </FrontCard>
+  );
+}
+
+function TierCurrencyPreference({
+  tier,
+  onChanged,
+}: {
+  tier: FrontConfiguredAccessTier;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [orderedCodes, setOrderedCodes] = useState(tier.currencyPreference);
+  const [draggedCode, setDraggedCode] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const currencyByCode = new Map(
+    tier.currencies.map((currency) => [currency.code, currency]),
+  );
+
+  useEffect(() => {
+    setOrderedCodes(tier.currencyPreference);
+  }, [tier.currencyPreference]);
+
+  function move(code: string, offset: -1 | 1) {
+    setOrderedCodes((current) => {
+      const index = current.indexOf(code);
+      const nextIndex = index + offset;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!];
+      return next;
+    });
+    setMessage(null);
+  }
+
+  function dropBefore(targetCode: string) {
+    if (!draggedCode || draggedCode === targetCode) return;
+    setOrderedCodes((current) => {
+      const next = current.filter((code) => code !== draggedCode);
+      next.splice(next.indexOf(targetCode), 0, draggedCode);
+      return next;
+    });
+    setDraggedCode(null);
+    setMessage(null);
+  }
+
+  async function save() {
+    setSaving(true);
+    setMessage(null);
+    try {
+      await apiFetch(`/me/access-tiers/${tier.id}/currency-preference`, {
+        method: "PUT",
+        body: JSON.stringify({ currencyCodes: orderedCodes }),
+      });
+      setMessage("扣款顺序已保存");
+      await onChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存失败，请稍后重试");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (orderedCodes.length === 0) {
+    return (
+      <div className="front-tier-currency-empty">
+        该等级尚未绑定可用货币，当前无法进行按量扣款。
+      </div>
+    );
+  }
+
+  const changed = orderedCodes.join("|") !== tier.currencyPreference.join("|");
+
+  return (
+    <section className="front-tier-currency-panel" aria-label={`${tier.name}货币扣款优先级`}>
+      <div className="front-tier-currency-title">
+        <div>
+          <strong>货币扣款优先级</strong>
+          <span>{tier.preferenceSource === "USER" ? "使用你的个人顺序" : "使用管理员默认顺序"}</span>
+        </div>
+        <FrontBadge tone="primary">首选 {orderedCodes[0]}</FrontBadge>
+      </div>
+      <div className="front-tier-currency-list">
+        {orderedCodes.map((code, index) => {
+          const currency = currencyByCode.get(code);
+          if (!currency) return null;
+          const available = Math.max(
+            0,
+            Number(currency.balance) - Number(currency.reservedBalance),
+          );
+          return (
+            <div
+              className={`front-tier-currency-row${draggedCode === code ? " front-dragging" : ""}`}
+              draggable
+              key={code}
+              onDragEnd={() => setDraggedCode(null)}
+              onDragOver={(event) => event.preventDefault()}
+              onDragStart={() => setDraggedCode(code)}
+              onDrop={() => dropBefore(code)}
+            >
+              <GripVertical aria-hidden="true" className="front-tier-currency-grip" size={17} />
+              <span className="front-tier-currency-index">{index + 1}</span>
+              <div className="front-tier-currency-name">
+                <strong>{currency.name}</strong>
+                <span>{currency.code}</span>
+              </div>
+              <strong className="front-data-number front-tier-currency-balance">
+                <CurrencyAmount value={available} currency={currency} />
+              </strong>
+              <button
+                aria-label={`上移 ${currency.name}`}
+                className="front-tier-currency-move"
+                disabled={index === 0 || saving}
+                onClick={() => move(code, -1)}
+                type="button"
+              >
+                <ChevronUp aria-hidden="true" size={16} />
+              </button>
+              <button
+                aria-label={`下移 ${currency.name}`}
+                className="front-tier-currency-move"
+                disabled={index === orderedCodes.length - 1 || saving}
+                onClick={() => move(code, 1)}
+                type="button"
+              >
+                <ChevronDown aria-hidden="true" size={16} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="front-tier-currency-actions">
+        <span aria-live="polite">{message}</span>
+        <FrontButton
+          variant="secondary"
+          disabled={!changed || saving}
+          loading={saving}
+          onClick={() => void save()}
+        >
+          <Save aria-hidden="true" size={15} />
+          保存扣款顺序
+        </FrontButton>
+      </div>
+    </section>
   );
 }
 

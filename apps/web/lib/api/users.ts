@@ -109,7 +109,7 @@ export interface AdminUser {
   charityIpRateLimitPerMinute: number;
   tokenVersion: number;
   createdAt: string;
-  wallet: AdminUserWallet | null;
+  wallets: AdminUserWallet[];
   walletTransactions?: AdminUserWalletTransaction[];
   apiKeys?: AdminUserApiKey[];
   modelMappings?: AdminUserModelMapping[];
@@ -144,6 +144,7 @@ export interface UpsertAdminUserInput {
   displayGroup?: string;
   tierId?: string | null;
   initialBalance?: string;
+  initialBalanceCurrency?: string;
   allowedModels?: string[];
   charityEnabled?: boolean;
   charityDisplayName?: string | null;
@@ -171,6 +172,7 @@ export interface UpsertAdminApiKeyInput {
 
 export interface AdjustUserBalanceInput {
   amount: string;
+  currency: string;
   remark?: string;
 }
 
@@ -215,7 +217,10 @@ export async function createAdminUser(input: UpsertAdminUserInput) {
   return response.data.user;
 }
 
-export async function updateAdminUser(id: string, input: Omit<UpsertAdminUserInput, "initialBalance">) {
+export async function updateAdminUser(
+  id: string,
+  input: Omit<UpsertAdminUserInput, "initialBalance" | "initialBalanceCurrency">,
+) {
   const response = await http.patch<{ user: AdminUser }>(`/admin/users/${id}`, {
     ...input,
     tierId: input.tierId || null,

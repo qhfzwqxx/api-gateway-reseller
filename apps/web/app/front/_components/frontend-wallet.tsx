@@ -24,6 +24,7 @@ import type { UserSubscription } from "../../../lib/api/subscriptions";
 import { dateTime, formatDuration, money } from "../../../lib/format";
 import type {
   FrontPaginationMeta,
+  FrontConfiguredAccessTier,
   FrontSelectableAccessTier,
   FrontTransaction,
   FrontUser,
@@ -56,7 +57,8 @@ type RedeemResult =
 
 export function WalletManagement({
   user,
-  wallet,
+  wallets,
+  currentAccessTier,
   accessTiers,
   accessTierLoading = false,
   switchingTierId,
@@ -66,7 +68,8 @@ export function WalletManagement({
   onChanged,
 }: {
   user: FrontUser;
-  wallet: FrontWallet | null;
+  wallets: FrontWallet[];
+  currentAccessTier: FrontConfiguredAccessTier | null;
   accessTiers: FrontSelectableAccessTier[];
   accessTierLoading?: boolean;
   switchingTierId: string | null;
@@ -198,10 +201,7 @@ export function WalletManagement({
     }
   }
 
-  const available = Math.max(
-    0,
-    Number(wallet?.balance ?? 0) - Number(wallet?.reservedBalance ?? 0),
-  );
+  const primaryWallet = wallets.find((wallet) => availableBalance(wallet) > 0) ?? wallets[0];
   const effectiveTier = activeSubscription?.tier ?? user.tier ?? null;
 
   return (
@@ -220,34 +220,31 @@ export function WalletManagement({
           featured
         />
         <WalletMetric
-          label="可用余额"
+          label="钱包币种"
           value={
-            <CurrencyAmount
-              value={available}
-              currency={wallet?.balanceCurrency}
-            />
+            wallets.length > 0 ? `${wallets.length} 种` : "暂无"
           }
-          hint="可直接用于按量调用"
+          hint="不同币种分别记账，不直接相加"
           loading={loading}
+          mono={false}
         />
         <WalletMetric
-          label="总余额"
+          label="首个可用钱包"
           value={
-            <CurrencyAmount
-              value={wallet?.balance ?? "0"}
-              currency={wallet?.balanceCurrency}
-            />
+            primaryWallet ? (
+              <CurrencyAmount
+                value={availableBalance(primaryWallet)}
+                currency={primaryWallet.balanceCurrency}
+              />
+            ) : "暂无余额"
           }
           hint={
-            <span>
-              其中冻结{" "}
-              <CurrencyAmount
-                value={wallet?.reservedBalance ?? "0"}
-                currency={wallet?.balanceCurrency}
-              />
-            </span>
+            primaryWallet
+              ? `${primaryWallet.balanceCurrency?.name ?? primaryWallet.currency} · ${primaryWallet.currency}`
+              : "充值、兑换或获得奖励后自动创建"
           }
           loading={loading}
+          mono={Boolean(primaryWallet)}
         />
         <WalletMetric
           label="订阅权益"
@@ -261,6 +258,57 @@ export function WalletManagement({
           mono={false}
         />
       </section>
+
+      <FrontCard>
+        <div className="front-page-section-head">
+          <div>
+            <h2>多货币钱包</h2>
+            <p>每种货币独立保存余额与冻结金额，停用货币的历史余额仍会保留。</p>
+          </div>
+          <FrontBadge tone={wallets.length > 0 ? "success" : "neutral"}>
+            <WalletCards aria-hidden="true" size={14} />
+            {wallets.length} 个钱包
+          </FrontBadge>
+        </div>
+        {loading ? (
+          <div className="front-wallet-currency-grid">
+            <FrontSkeleton height={118} />
+            <FrontSkeleton height={118} />
+          </div>
+        ) : wallets.length > 0 ? (
+          <div className="front-wallet-currency-grid">
+            {wallets.map((wallet) => (
+              <article className="front-wallet-currency-card" key={wallet.currency}>
+                <div className="front-wallet-currency-head">
+                  <div>
+                    <strong>{wallet.balanceCurrency?.name ?? wallet.currency}</strong>
+                    <span>{wallet.currency}</span>
+                  </div>
+                  <FrontBadge tone={wallet.balanceCurrency?.enabled === false ? "neutral" : "success"}>
+                    {wallet.balanceCurrency?.enabled === false ? "已停用" : "可用"}
+                  </FrontBadge>
+                </div>
+                <div className="front-wallet-currency-amount">
+                  <small>可用余额</small>
+                  <strong className="front-data-number">
+                    <CurrencyAmount value={availableBalance(wallet)} currency={wallet.balanceCurrency} />
+                  </strong>
+                </div>
+                <div className="front-wallet-currency-meta">
+                  <span>总额 <CurrencyAmount value={wallet.balance} currency={wallet.balanceCurrency} /></span>
+                  <span>冻结 <CurrencyAmount value={wallet.reservedBalance ?? "0"} currency={wallet.balanceCurrency} /></span>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <FrontEmptyState
+            icon={<WalletCards aria-hidden="true" size={24} />}
+            title="暂无余额钱包"
+            description="管理员充值、兑换码或奖励会直接创建对应币种的钱包。"
+          />
+        )}
+      </FrontCard>
 
       <FrontAlert
         tone="info"
@@ -286,7 +334,7 @@ export function WalletManagement({
         aria-label="访问等级与订阅权益"
       >
         <AccessTierCard
-          currentTier={user.tier ?? null}
+          currentTier={currentAccessTier}
           tiers={accessTiers}
           switchingTierId={switchingTierId}
           loading={accessTierLoading}
@@ -294,6 +342,7 @@ export function WalletManagement({
           subscriptionError={subscriptionError}
           activeSubscription={activeSubscription}
           onSelect={onSelectTier}
+          onPreferenceChanged={onChanged}
         />
 
         <FrontCard className="front-subscription-card">
@@ -435,7 +484,7 @@ export function WalletManagement({
                         已获得{" "}
                         <CurrencyAmount
                           value={redeemResult.amount}
-                          currency={wallet?.balanceCurrency}
+                          currency={wallets.find((wallet) => wallet.currency === redeemResult.currency)?.balanceCurrency}
                         />
                       </>
                     )}
@@ -508,6 +557,13 @@ export function WalletManagement({
         )}
       </FrontDialog>
     </div>
+  );
+}
+
+function availableBalance(wallet: FrontWallet) {
+  return Math.max(
+    0,
+    Number(wallet.balance ?? 0) - Number(wallet.reservedBalance ?? 0),
   );
 }
 

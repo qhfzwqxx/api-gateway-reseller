@@ -10,10 +10,15 @@ import {
   saveReferralSettings,
 } from "../services/referrals.js";
 import { subscriptionPlanInclude } from "../services/subscriptions.js";
+import {
+  getUsableBalanceCurrencyOrThrow,
+  normalizeCurrencyCode,
+} from "../services/balance-currency.js";
 
 const rewardSchema = z.object({
   type: z.enum(["NONE", "BALANCE", "SUBSCRIPTION"]),
   amountUsd: z.string().or(z.number()).transform(String).optional(),
+  currencyCode: z.string().trim().min(1).max(32).optional(),
   subscriptionPlanId: z.string().trim().min(1).nullable().optional(),
 });
 
@@ -93,11 +98,13 @@ export async function referralRoutes(app: FastifyInstance) {
         inviterReward: {
           type: body.inviterReward.type,
           amountUsd: body.inviterReward.amountUsd ?? "0",
+          currencyCode: body.inviterReward.currencyCode ?? "POINTS",
           subscriptionPlanId: body.inviterReward.subscriptionPlanId ?? null,
         },
         inviteeReward: {
           type: body.inviteeReward.type,
           amountUsd: body.inviteeReward.amountUsd ?? "0",
+          currencyCode: body.inviteeReward.currencyCode ?? "POINTS",
           subscriptionPlanId: body.inviteeReward.subscriptionPlanId ?? null,
         },
       });
@@ -169,7 +176,17 @@ async function validateReward(input: z.infer<typeof rewardSchema>) {
 
   if (input.type === "BALANCE") {
     const amount = new Decimal(input.amountUsd ?? "0");
-    return amount.isFinite() && amount.gt(0) ? null : "余额奖励必须大于 0";
+    if (!amount.isFinite() || amount.lte(0)) return "余额奖励必须大于 0";
+    try {
+      await getUsableBalanceCurrencyOrThrow(
+        prisma,
+        normalizeCurrencyCode(input.currencyCode ?? "POINTS"),
+        "邀请奖励",
+      );
+    } catch (error) {
+      return error instanceof Error ? error.message : "奖励货币不可用";
+    }
+    return null;
   }
 
   if (!input.subscriptionPlanId) {

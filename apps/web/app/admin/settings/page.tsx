@@ -30,11 +30,13 @@ import {
   type ReasoningEffortTransformSettings,
   type RequestBodyRetentionSettings,
 } from "../../../lib/api/settings";
+import { getBalanceCurrencySettings } from "../../../lib/api/balance-currencies";
 
 const authSchema = z.object({
   emailCodeLoginEnabled: z.boolean(),
   emailCodeAutoRegisterEnabled: z.boolean(),
   newUserBonusUsd: z.string().trim().min(1),
+  newUserBonusCurrency: z.string().trim().min(1),
   emailCodeTtlSeconds: z.coerce.number().int().min(60).max(3600),
   emailCodeCooldownSeconds: z.coerce.number().int().min(10).max(600),
   smtpHost: z.string().trim().max(255),
@@ -80,6 +82,7 @@ export default function AdminSettingsPage() {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState("");
   const authQuery = useQuery({ queryKey: ["admin", "auth-settings"], queryFn: getAuthSettings });
+  const currenciesQuery = useQuery({ queryKey: ["admin", "balance-currencies"], queryFn: getBalanceCurrencySettings });
   const reasoningQuery = useQuery({ queryKey: ["admin", "reasoning-effort-transform-settings"], queryFn: getReasoningEffortTransformSettings });
   const requestBodyRetentionQuery = useQuery({ queryKey: ["admin", "request-body-retention-settings"], queryFn: getRequestBodyRetentionSettings });
   const imageGenerationToolQuery = useQuery({ queryKey: ["admin", "image-generation-tool-settings"], queryFn: getImageGenerationToolSettings });
@@ -206,7 +209,20 @@ export default function AdminSettingsPage() {
         <SettingCard title="Auth & SMTP 设置" description="SMTP 密码留空表示不覆盖旧密码。" form={authForm} loading={authMutation.isPending} onSubmit={(values) => authMutation.mutate(cleanAuth(values))} footer={<button type="button" onClick={() => authForm.handleSubmit((values) => testMutation.mutate({ ...cleanAuth(values), testEmail: values.testEmail }))()} className={secondaryButton}><Send className="h-4 w-4" />测试邮件</button>}>
           <Toggle label="启用邮箱验证码登录" register={authForm.register("emailCodeLoginEnabled")} />
           <Toggle label="验证码自动注册" register={authForm.register("emailCodeAutoRegisterEnabled")} />
-          <TextInput label="新用户赠送余额" register={authForm.register("newUserBonusUsd")} />
+          <TextInput label="新用户赠送金额" register={authForm.register("newUserBonusUsd")} />
+          <label className="grid gap-2">
+            <span className={labelClass}>新用户赠送货币</span>
+            <select className={inputClass} {...authForm.register("newUserBonusCurrency")}>
+              {(currenciesQuery.data?.currencies ?? [])
+                .filter((currency) => !currency.isBase && currency.enabled)
+                .map((currency) => (
+                  <option key={currency.code} value={currency.code}>
+                    {currency.name} ({currency.code})
+                  </option>
+                ))}
+            </select>
+            <span className="text-xs text-slate-500">奖励金额直接写入该币种，不按汇率转换。</span>
+          </label>
           <NumberInput label="验证码 TTL 秒" register={authForm.register("emailCodeTtlSeconds")} />
           <NumberInput label="验证码冷却秒" register={authForm.register("emailCodeCooldownSeconds")} />
           <div className="grid gap-2">

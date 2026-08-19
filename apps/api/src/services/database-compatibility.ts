@@ -1,40 +1,39 @@
 import { prisma } from "@gateway/db";
-import { activeBalanceCurrencySettingKey } from "./balance-currency.js";
+import {
+  baseBalanceCurrencyCode,
+  defaultBalanceCurrencyCode,
+} from "./balance-currency.js";
 
 export async function assertDatabaseCompatibility() {
-  const activeSetting = await prisma.systemSetting.findUnique({
-    where: { key: activeBalanceCurrencySettingKey },
-    select: { value: true },
-  });
-
-  if (!activeSetting?.value) {
-    throw new Error(
-      "Database compatibility check failed: active balance currency is missing",
-    );
-  }
-
-  const [activeCurrency, mismatchedWallets] = await Promise.all([
+  const [baseCurrency, pointsCurrency, baseCurrencyWallets] = await Promise.all([
     prisma.balanceCurrency.findUnique({
-      where: { code: activeSetting.value },
-      select: { code: true, enabled: true },
+      where: { code: baseBalanceCurrencyCode },
+      select: { code: true, enabled: true, isBase: true },
+    }),
+    prisma.balanceCurrency.findUnique({
+      where: { code: defaultBalanceCurrencyCode },
+      select: { code: true, enabled: true, isBase: true },
     }),
     prisma.wallet.count({
-      where: { currency: { not: activeSetting.value } },
-    }),
-    prisma.walletTransaction.findFirst({
-      select: { currency: true },
+      where: { currency: baseBalanceCurrencyCode },
     }),
   ]);
 
-  if (!activeCurrency?.enabled) {
+  if (!baseCurrency?.isBase || !baseCurrency.enabled) {
     throw new Error(
-      `Database compatibility check failed: active balance currency ${activeSetting.value} is unavailable`,
+      `Database compatibility check failed: base currency ${baseBalanceCurrencyCode} is unavailable`,
     );
   }
 
-  if (mismatchedWallets > 0) {
+  if (!pointsCurrency || pointsCurrency.isBase) {
     throw new Error(
-      `Database compatibility check failed: ${mismatchedWallets} wallets have not migrated to ${activeSetting.value}`,
+      `Database compatibility check failed: default balance currency ${defaultBalanceCurrencyCode} is missing or configured as base currency`,
+    );
+  }
+
+  if (baseCurrencyWallets > 0) {
+    throw new Error(
+      `Database compatibility check failed: ${baseCurrencyWallets} user wallets use the internal base currency`,
     );
   }
 }
