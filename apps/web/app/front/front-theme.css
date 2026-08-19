@@ -2364,13 +2364,13 @@
 .front-wallet-entitlement-grid {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
-  align-items: stretch;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.55fr);
+  align-items: start;
+  gap: 24px;
 }
 
 .front-wallet-entitlement-grid > .front-card {
-  height: 100%;
+  height: auto;
 }
 
 .front-wallet-entitlement-grid .front-access-tier-card {
@@ -3770,20 +3770,20 @@
 
 .front-tier-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 14px;
+  margin-top: 16px;
 }
 
 .front-tier-option {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   border: 1px solid var(--front-border);
-  border-radius: 10px;
+  border-radius: 14px;
   background: var(--front-surface);
-  padding: 14px;
+  padding: 16px;
 }
 
 .front-tier-option.front-active {
@@ -3802,7 +3802,7 @@
 
 .front-tier-option-head strong {
   color: var(--front-text);
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .front-tier-option-description {
@@ -4893,7 +4893,7 @@
 
 .front-wallet-currency-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
   margin-top: 16px;
 }
@@ -4939,10 +4939,10 @@
 
 .front-tier-currency-panel {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   border-top: 1px solid var(--front-border);
   border-bottom: 1px solid var(--front-border);
-  padding: 14px 0;
+  padding: 16px 0;
 }
 
 .front-tier-currency-empty {
@@ -4955,6 +4955,10 @@
 }
 
 .front-tier-currency-row {
+  display: grid;
+  grid-template-columns: 18px 24px minmax(0, 1fr) minmax(120px, auto) 34px 34px;
+  align-items: center;
+  gap: 7px;
   cursor: grab;
   transition: opacity 160ms ease, border-color 160ms ease, background 160ms ease;
 }
@@ -4987,12 +4991,29 @@
 }
 
 .front-tier-currency-name {
-  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.front-tier-currency-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .front-tier-currency-balance {
-  flex: 0 0 auto;
+  min-width: 0;
   text-align: right;
+}
+
+.front-tier-currency-balance .front-currency-amount {
+  justify-content: flex-end;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.front-tier-currency-balance .front-currency-amount svg {
+  width: 14px;
+  height: 14px;
 }
 
 .front-tier-currency-move {
@@ -5037,13 +5058,13 @@
   }
 
   .front-tier-currency-row {
-    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
-    display: grid;
+    grid-template-columns: 18px 24px minmax(0, 1fr) 34px 34px;
   }
 
   .front-tier-currency-balance {
     grid-column: 3 / -1;
     grid-row: 2;
+    justify-self: start;
     text-align: left;
   }
 }
