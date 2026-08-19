@@ -189,6 +189,7 @@ import {
   migrateWalletsToCurrency,
   normalizeCurrencyCode,
   readBalanceCurrencySettings,
+  setBalanceCurrencyEnabled,
   toBalanceCurrencyDto,
   upsertWalletWithActiveCurrency,
 } from "../services/balance-currency.js";
@@ -2338,6 +2339,7 @@ export async function adminRoutes(app: FastifyInstance) {
           icon: body.icon,
           baseUnitsPerUnit: baseUnitsPerUnitFromUnitsPerBase(body.unitsPerBase),
           isBase: false,
+          enabled: false,
         },
         select: balanceCurrencySelect,
       });
@@ -2350,6 +2352,23 @@ export async function adminRoutes(app: FastifyInstance) {
       }
       throw error;
     }
+
+    return {
+      currency: toBalanceCurrencyDto(currency),
+      ...(await readBalanceCurrencySettings()),
+    };
+  });
+
+  app.post("/admin/balance-currencies/:code/enabled", async (request) => {
+    const params = z.object({ code: z.string().min(1).max(32) }).parse(request.params);
+    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+    const currency = await prisma.$transaction((tx) =>
+      setBalanceCurrencyEnabled(
+        tx,
+        normalizeCurrencyCode(params.code),
+        body.enabled,
+      ),
+    );
 
     return {
       currency: toBalanceCurrencyDto(currency),

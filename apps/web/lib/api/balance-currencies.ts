@@ -36,6 +36,10 @@ export interface ActivateBalanceCurrencyResult extends BalanceCurrencySettings {
   migratedBaseBalance: string;
 }
 
+export interface SetBalanceCurrencyEnabledResult extends BalanceCurrencySettings {
+  currency: BalanceCurrency;
+}
+
 export async function getBalanceCurrencySettings() {
   const response = await http.get<BalanceCurrencySettings>(
     "/admin/balance-currencies",
@@ -53,6 +57,14 @@ export async function createBalanceCurrency(input: CreateBalanceCurrencyInput) {
 export async function activateBalanceCurrency(code: string) {
   const response = await http.post<ActivateBalanceCurrencyResult>(
     `/admin/balance-currencies/${encodeURIComponent(code)}/activate`,
+  );
+  return response.data;
+}
+
+export async function setBalanceCurrencyEnabled(code: string, enabled: boolean) {
+  const response = await http.post<SetBalanceCurrencyEnabledResult>(
+    `/admin/balance-currencies/${encodeURIComponent(code)}/enabled`,
+    { enabled },
   );
   return response.data;
 }

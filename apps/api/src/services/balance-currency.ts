@@ -95,11 +95,47 @@ export async function getRedeemableBalanceCurrencyOrThrow(
 
 export async function getActiveBalanceCurrency(db: CurrencyDb = prisma) {
   const settings = await readBalanceCurrencySettings(db);
-  if (!settings.activeCurrency) {
+  if (
+    !settings.activeCurrency ||
+    settings.activeCurrency.isBase ||
+    !settings.activeCurrency.enabled
+  ) {
     throw new Error("No balance currency configured");
   }
 
   return settings.activeCurrency;
+}
+
+export async function setBalanceCurrencyEnabled(
+  tx: Prisma.TransactionClient,
+  code: string,
+  enabled: boolean,
+) {
+  const currency = await getBalanceCurrencyOrThrow(tx, code);
+  if (currency.isBase) {
+    throw Object.assign(new Error("基准货币固定启用，不能修改启用状态"), {
+      statusCode: 400,
+    });
+  }
+
+  if (!enabled) {
+    const activeSetting = await tx.systemSetting.findUnique({
+      where: { key: activeBalanceCurrencySettingKey },
+      select: { value: true },
+    });
+    if (activeSetting?.value === currency.code) {
+      throw Object.assign(
+        new Error("当前钱包货币不能停用，请先切换到其他已启用货币"),
+        { statusCode: 409 },
+      );
+    }
+  }
+
+  return tx.balanceCurrency.update({
+    where: { code: currency.code },
+    data: { enabled },
+    select: balanceCurrencySelect,
+  });
 }
 
 export function normalizeCurrencyCode(value: string) {

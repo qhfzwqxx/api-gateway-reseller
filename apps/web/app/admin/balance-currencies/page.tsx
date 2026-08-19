@@ -3,8 +3,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import {
-  ArrowRight,
-  CheckCircle2,
   CircleDollarSign,
   Coins,
   Gem,
@@ -23,6 +21,7 @@ import {
   activateBalanceCurrency,
   createBalanceCurrency,
   getBalanceCurrencySettings,
+  setBalanceCurrencyEnabled,
   type BalanceCurrency,
 } from "../../../lib/api/balance-currencies";
 
@@ -70,6 +69,20 @@ export default function AdminBalanceCurrenciesPage() {
       setActivateTarget(null);
       setNotice(
         `已启用“${result.target.name}”，迁移 ${result.convertedWallets}/${result.totalWallets} 个钱包`,
+      );
+    },
+    onError: (error) => setNotice(errorToText(error)),
+  });
+
+  const enabledMutation = useMutation({
+    mutationFn: ({ code, enabled }: { code: string; enabled: boolean }) =>
+      setBalanceCurrencyEnabled(code, enabled),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["admin", "balance-currencies"], result);
+      setNotice(
+        result.currency.enabled
+          ? `余额货币“${result.currency.name}”已启用，可与其他非基准货币同时启用`
+          : `余额货币“${result.currency.name}”已停用`,
       );
     },
     onError: (error) => setNotice(errorToText(error)),
@@ -158,7 +171,7 @@ export default function AdminBalanceCurrenciesPage() {
         <div className="mb-4">
           <h3 className="text-lg font-semibold text-slate-950">货币列表</h3>
           <p className="mt-1 text-sm text-slate-500">
-            启用新货币时会按汇率迁移全部用户余额；存在进行中的余额冻结请求时系统会拒绝切换。
+            “启用”只控制该货币能否用于兑换码和新钱包；“切换钱包货币”才会按汇率迁移全部用户余额。多个非基准货币可以同时启用。
           </p>
         </div>
 
@@ -197,7 +210,8 @@ export default function AdminBalanceCurrenciesPage() {
                             {currency.code}
                           </span>
                           {currency.isBase ? <Badge tone="slate">基准</Badge> : null}
-                          {isActive ? <Badge tone="blue">当前启用</Badge> : null}
+                          {currency.enabled ? <Badge tone="blue">已启用</Badge> : <Badge tone="slate">已停用</Badge>}
+                          {isActive ? <Badge tone="blue">当前钱包货币</Badge> : null}
                         </div>
                         <p className="mt-2 text-sm text-slate-600">
                           符号：{currency.symbol} · 1 基准单位 = {formatRate(currency.unitsPerBase)} {currency.symbol}
@@ -205,19 +219,35 @@ export default function AdminBalanceCurrenciesPage() {
                       </div>
                     </div>
 
-                    {!currency.isBase && !isActive ? (
-                      <button
-                        type="button"
-                        onClick={() => setActivateTarget(currency)}
-                        className={primaryButton}
-                      >
-                        启用
-                        <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                      </button>
+                    {!currency.isBase ? (
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            enabledMutation.mutate({
+                              code: currency.code,
+                              enabled: !currency.enabled,
+                            })
+                          }
+                          disabled={enabledMutation.isPending}
+                          className={currency.enabled ? secondaryButton : primaryButton}
+                        >
+                          {currency.enabled ? "停用" : "启用"}
+                        </button>
+                        {!isActive && currency.enabled ? (
+                          <button
+                            type="button"
+                            onClick={() => setActivateTarget(currency)}
+                            className={secondaryButton}
+                          >
+                            切换钱包货币
+                          </button>
+                        ) : null}
+                      </div>
                     ) : (
                       <div className="flex h-10 items-center gap-2 px-2 text-sm font-medium text-slate-500">
                         <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-                        {currency.isBase ? "固定计价" : "使用中"}
+                        固定计价
                       </div>
                     )}
                   </div>
@@ -311,13 +341,13 @@ export default function AdminBalanceCurrenciesPage() {
 
       <ConfirmDialog
         open={Boolean(activateTarget)}
-        title={`启用${activateTarget?.name ?? "余额货币"}`}
+        title={`切换钱包货币为 ${activateTarget?.name ?? "余额货币"}`}
         description={
           activateTarget && baseCurrency
             ? `系统将按“1 ${baseCurrency.symbol} = ${formatRate(activateTarget.unitsPerBase)} ${activateTarget.symbol}”迁移全部用户的可用余额和冻结余额。迁移期间如果存在进行中的扣费冻结，请稍后重试。`
             : "系统将按配置比例迁移全部用户钱包。"
         }
-        confirmText="确认迁移并启用"
+        confirmText="确认迁移钱包"
         requireInputText={activateTarget?.code}
         loading={activateMutation.isPending}
         onOpenChange={(open) => {
