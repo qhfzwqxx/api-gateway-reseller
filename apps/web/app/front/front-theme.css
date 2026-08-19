@@ -2364,9 +2364,9 @@
 .front-wallet-entitlement-grid {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.55fr);
+  grid-template-columns: minmax(0, 1fr) 360px;
   align-items: start;
-  gap: 24px;
+  gap: 20px;
 }
 
 .front-wallet-entitlement-grid > .front-card {
@@ -2380,18 +2380,13 @@
   background: var(--front-primary-subtle);
 }
 
-.front-wallet-entitlement-grid .front-access-tier-card > .front-tier-grid,
-.front-wallet-entitlement-grid .front-access-tier-card > .front-empty-state {
-  flex: 1;
-}
-
 .front-wallet-entitlement-grid .front-subscription-card {
   display: flex;
   flex-direction: column;
 }
 
 .front-subscription-card > .front-empty-state {
-  min-height: 220px;
+  min-height: 156px;
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "icon"
@@ -2399,8 +2394,8 @@
     "description"
     "action";
   place-items: center;
-  gap: 8px;
-  padding: 24px 24px 28px;
+  gap: 6px;
+  padding: 18px 18px 20px;
   text-align: center;
 }
 
@@ -2657,6 +2652,16 @@
 
   .front-wallet-entitlement-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 1360px) {
+  .front-wallet-entitlement-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .front-wallet-entitlement-grid .front-subscription-card {
+    max-width: none;
   }
 }
 
@@ -3770,20 +3775,20 @@
 
 .front-tier-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
-  gap: 14px;
-  margin-top: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .front-tier-option {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   border: 1px solid var(--front-border);
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--front-surface);
-  padding: 16px;
+  padding: 14px;
 }
 
 .front-tier-option.front-active {
@@ -3802,7 +3807,7 @@
 
 .front-tier-option-head strong {
   color: var(--front-text);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .front-tier-option-description {
@@ -3816,7 +3821,7 @@
   display: grid;
   min-width: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
   margin: 0;
 }
 
@@ -3829,7 +3834,7 @@
   border: 1px solid var(--front-border);
   border-radius: 8px;
   background: var(--front-surface-muted);
-  padding: 8px 10px;
+  padding: 7px 9px;
 }
 
 .front-tier-limit-grid dt {
@@ -3855,7 +3860,9 @@
 
 .front-tier-option-foot {
   align-items: center;
+  border-top: 1px solid var(--front-border);
   margin-top: auto;
+  padding-top: 10px;
 }
 
 .front-tier-option-foot .front-button {
@@ -4939,10 +4946,10 @@
 
 .front-tier-currency-panel {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   border-top: 1px solid var(--front-border);
   border-bottom: 1px solid var(--front-border);
-  padding: 16px 0;
+  padding: 12px 0;
 }
 
 .front-tier-currency-empty {
@@ -4956,9 +4963,11 @@
 
 .front-tier-currency-row {
   display: grid;
-  grid-template-columns: 18px 24px minmax(0, 1fr) minmax(120px, auto) 34px 34px;
+  grid-template-columns: 17px 22px minmax(0, 1fr) minmax(96px, auto) auto;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  border-radius: 9px;
+  padding: 8px 10px;
   cursor: grab;
   transition: opacity 160ms ease, border-color 160ms ease, background 160ms ease;
 }
@@ -4981,8 +4990,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 999px;
   background: var(--front-primary-soft);
   color: var(--front-primary);
@@ -4991,13 +5000,23 @@
 }
 
 .front-tier-currency-name {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
   overflow: hidden;
 }
 
 .front-tier-currency-name strong {
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.front-tier-currency-name span {
+  flex: 0 0 auto;
+  font-size: 11px;
 }
 
 .front-tier-currency-balance {
@@ -5008,7 +5027,7 @@
 .front-tier-currency-balance .front-currency-amount {
   justify-content: flex-end;
   gap: 4px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .front-tier-currency-balance .front-currency-amount svg {
@@ -5020,13 +5039,18 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--front-border);
   border-radius: 9px;
   background: var(--front-surface);
   color: var(--front-text);
   transition: border-color 160ms ease, background 160ms ease;
+}
+
+.front-tier-currency-controls {
+  display: inline-flex;
+  gap: 4px;
 }
 
 .front-tier-currency-move:hover:not(:disabled),
@@ -5058,7 +5082,7 @@
   }
 
   .front-tier-currency-row {
-    grid-template-columns: 18px 24px minmax(0, 1fr) 34px 34px;
+    grid-template-columns: 17px 22px minmax(0, 1fr) auto;
   }
 
   .front-tier-currency-balance {
@@ -5066,5 +5090,11 @@
     grid-row: 2;
     justify-self: start;
     text-align: left;
+  }
+}
+
+@media (max-width: 900px) {
+  .front-tier-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

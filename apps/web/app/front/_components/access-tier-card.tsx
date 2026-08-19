@@ -305,24 +305,26 @@ function TierCurrencyPreference({
               <strong className="front-data-number front-tier-currency-balance">
                 <CurrencyAmount value={available} currency={currency} />
               </strong>
-              <button
-                aria-label={`上移 ${currency.name}`}
-                className="front-tier-currency-move"
-                disabled={index === 0 || saving}
-                onClick={() => move(code, -1)}
-                type="button"
-              >
-                <ChevronUp aria-hidden="true" size={16} />
-              </button>
-              <button
-                aria-label={`下移 ${currency.name}`}
-                className="front-tier-currency-move"
-                disabled={index === orderedCodes.length - 1 || saving}
-                onClick={() => move(code, 1)}
-                type="button"
-              >
-                <ChevronDown aria-hidden="true" size={16} />
-              </button>
+              <div className="front-tier-currency-controls">
+                <button
+                  aria-label={`上移 ${currency.name}`}
+                  className="front-tier-currency-move"
+                  disabled={index === 0 || saving}
+                  onClick={() => move(code, -1)}
+                  type="button"
+                >
+                  <ChevronUp aria-hidden="true" size={16} />
+                </button>
+                <button
+                  aria-label={`下移 ${currency.name}`}
+                  className="front-tier-currency-move"
+                  disabled={index === orderedCodes.length - 1 || saving}
+                  onClick={() => move(code, 1)}
+                  type="button"
+                >
+                  <ChevronDown aria-hidden="true" size={16} />
+                </button>
+              </div>
             </div>
           );
         })}
