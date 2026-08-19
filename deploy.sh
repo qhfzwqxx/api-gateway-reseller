@@ -519,6 +519,7 @@ seed_data() {
 start_pm2() {
   log "Starting PM2 apps"
   PM2_SWITCH_ATTEMPTED="true"
+  "$PM2_BIN" delete api-gateway-api api-gateway-web >/dev/null 2>&1 || true
   PROJECT_ROOT="$PROJECT_ROOT" "$PM2_BIN" startOrReload ecosystem.config.cjs --update-env
 
   log "Waiting for API health"
