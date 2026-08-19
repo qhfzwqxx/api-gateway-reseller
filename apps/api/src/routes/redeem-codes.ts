@@ -9,6 +9,12 @@ import {
   grantSubscription,
   summarizeSubscriptionQuota,
 } from "../services/subscriptions.js";
+import {
+  baseToWalletAmount,
+  getBalanceCurrencyOrThrow,
+  upsertWalletWithActiveCurrency,
+  walletToBaseAmount,
+} from "../services/balance-currency.js";
 
 export async function redeemCodeRoutes(app: FastifyInstance) {
   app.post(
@@ -140,23 +146,22 @@ export async function redeemCodeRoutes(app: FastifyInstance) {
               throw new RedeemError("兑换码金额异常，请联系管理员。");
             }
 
-            const wallet = await tx.wallet.upsert({
-              where: { userId: user.sub },
-              update: {},
-              create: {
-                userId: user.sub,
-                balance: "0",
-                currency: redeemCode.currency,
-              },
-            });
+            const codeCurrency = await getBalanceCurrencyOrThrow(
+              tx,
+              redeemCode.currency,
+            );
+            const wallet = await upsertWalletWithActiveCurrency(tx, user.sub);
             const balanceBefore = new Decimal(wallet.balance.toString());
-            const balanceAfter = balanceBefore.plus(amount);
+            const walletAmount = baseToWalletAmount(
+              walletToBaseAmount(amount, codeCurrency),
+              await getBalanceCurrencyOrThrow(tx, wallet.currency),
+            );
+            const balanceAfter = balanceBefore.plus(walletAmount);
 
             const updatedWallet = await tx.wallet.update({
               where: { userId: user.sub },
               data: {
                 balance: balanceAfter.toFixed(8),
-                currency: redeemCode.currency,
               },
             });
 
@@ -187,13 +192,18 @@ export async function redeemCodeRoutes(app: FastifyInstance) {
                 userId: user.sub,
                 type: "RECHARGE",
                 source: "REDEEM",
-                amount: amount.toFixed(8),
+                amount: walletAmount.toFixed(8),
                 balanceBefore: balanceBefore.toFixed(8),
                 balanceAfter: balanceAfter.toFixed(8),
+                currency: wallet.currency,
                 remark: `Redeem code ${redeemCode.codePrefix}`,
                 metadata: {
                   redeemCodeId: redeemCode.id,
                   codePrefix: redeemCode.codePrefix,
+                  codeAmount: amount.toFixed(8),
+                  codeCurrency: redeemCode.currency,
+                  walletAmount: walletAmount.toFixed(8),
+                  walletCurrency: wallet.currency,
                 },
               },
             });
@@ -203,8 +213,8 @@ export async function redeemCodeRoutes(app: FastifyInstance) {
               transaction,
               redeemed: {
                 type: "BALANCE",
-                amount: amount.toFixed(8),
-                currency: redeemCode.currency,
+                amount: walletAmount.toFixed(8),
+                currency: wallet.currency,
                 codePrefix: redeemCode.codePrefix,
               },
             };

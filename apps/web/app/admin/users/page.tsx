@@ -547,7 +547,10 @@ export default function AdminUsersPage() {
                                   {tierLabel(user.tier)}
                                 </div>
                                 <div className="mt-1 font-semibold tabular-nums text-slate-950">
-                                  {formatMoney(user.wallet?.balance ?? "0")}
+                                  {formatBalance(
+                                    user.wallet?.balance ?? "0",
+                                    user.wallet?.balanceCurrency,
+                                  )}
                                 </div>
                               </td>
                               <td className="px-5 py-4">
@@ -2279,6 +2282,17 @@ function formatMoney(value: string | number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 8,
   }).format(Number.isFinite(numeric) ? numeric : 0)}`;
+}
+
+function formatBalance(
+  value: string | number,
+  currency?: NonNullable<AdminUser["wallet"]>["balanceCurrency"],
+) {
+  const formatted = formatMoney(value).replace(/^\$/, "");
+  if (!currency || currency.symbol === "$") {
+    return `$${formatted}`;
+  }
+  return `${formatted} ${currency.symbol || currency.name}`;
 }
 
 function formatDate(value: string) {

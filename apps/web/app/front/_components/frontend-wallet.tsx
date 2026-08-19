@@ -11,10 +11,17 @@ import {
   Ticket,
   WalletCards,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { apiFetch } from "../../../lib/api";
 import type { UserSubscription } from "../../../lib/api/subscriptions";
-import { dateTime, formatDuration, money, signedMoney } from "../../../lib/format";
+import { dateTime, formatDuration, money } from "../../../lib/format";
 import type {
   FrontPaginationMeta,
   FrontSelectableAccessTier,
@@ -23,6 +30,7 @@ import type {
   FrontWallet,
 } from "../../../lib/types/front";
 import { AccessTierCard } from "./access-tier-card";
+import { CurrencyAmount } from "./currency-amount";
 import {
   FrontAlert,
   FrontBadge,
@@ -213,14 +221,32 @@ export function WalletManagement({
         />
         <WalletMetric
           label="可用余额"
-          value={`$${money(available)}`}
+          value={
+            <CurrencyAmount
+              value={available}
+              currency={wallet?.balanceCurrency}
+            />
+          }
           hint="可直接用于按量调用"
           loading={loading}
         />
         <WalletMetric
           label="总余额"
-          value={`$${money(wallet?.balance ?? "0")}`}
-          hint={`其中冻结 $${money(wallet?.reservedBalance ?? "0")}`}
+          value={
+            <CurrencyAmount
+              value={wallet?.balance ?? "0"}
+              currency={wallet?.balanceCurrency}
+            />
+          }
+          hint={
+            <span>
+              其中冻结{" "}
+              <CurrencyAmount
+                value={wallet?.reservedBalance ?? "0"}
+                currency={wallet?.balanceCurrency}
+              />
+            </span>
+          }
           loading={loading}
         />
         <WalletMetric
@@ -404,7 +430,15 @@ export function WalletManagement({
               <p>
                 {redeemResult.type === "SUBSCRIPTION"
                   ? `已获得订阅：${redeemResult.planName}`
-                  : `已获得 $${money(redeemResult.amount)} ${redeemResult.currency ?? wallet?.currency ?? "USD"}`}
+                  : (
+                      <>
+                        已获得{" "}
+                        <CurrencyAmount
+                          value={redeemResult.amount}
+                          currency={wallet?.balanceCurrency}
+                        />
+                      </>
+                    )}
               </p>
             </div>
           </div>
@@ -536,8 +570,8 @@ function WalletMetric({
   featured = false,
 }: {
   label: string;
-  value: string;
-  hint: string;
+  value: ReactNode;
+  hint: ReactNode;
   loading: boolean;
   mono?: boolean;
   featured?: boolean;
@@ -573,7 +607,7 @@ function MobileValue({
   wide = false,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   wide?: boolean;
 }) {
   return (
@@ -647,14 +681,25 @@ export function BillingDetails({ refreshSignal = 0 }: { refreshSignal?: number }
         header: "余额变化",
         cell: ({ row }) => (
           <span className={`front-transaction-delta ${Number(row.original.amount) >= 0 ? "front-positive" : "front-negative"}`}>
-            {signedMoney(row.original.amount)}
+            <CurrencyAmount
+              value={row.original.amount}
+              currency={row.original.balanceCurrency}
+              signed
+            />
           </span>
         ),
       },
       {
         accessorKey: "balanceAfter",
         header: "变化后余额",
-        cell: ({ row }) => <span className="front-money">${money(row.original.balanceAfter)}</span>,
+        cell: ({ row }) => (
+          <span className="front-money">
+            <CurrencyAmount
+              value={row.original.balanceAfter}
+              currency={row.original.balanceCurrency}
+            />
+          </span>
+        ),
       },
       {
         accessorKey: "remark",
@@ -697,9 +742,35 @@ export function BillingDetails({ refreshSignal = 0 }: { refreshSignal?: number }
               <div className="front-mobile-record-grid">
                 <MobileValue label="支付方式" value={paymentType(transaction)} />
                 <MobileValue label="花费" value={chargeDisplay(transaction)} />
-                <MobileValue label="余额变化" value={signedMoney(transaction.amount)} />
-                <MobileValue label="变化后" value={`$${money(transaction.balanceAfter)}`} />
-                <MobileValue label="之前余额" value={`$${money(transaction.balanceBefore)}`} wide />
+                <MobileValue
+                  label="余额变化"
+                  value={
+                    <CurrencyAmount
+                      value={transaction.amount}
+                      currency={transaction.balanceCurrency}
+                      signed
+                    />
+                  }
+                />
+                <MobileValue
+                  label="变化后"
+                  value={
+                    <CurrencyAmount
+                      value={transaction.balanceAfter}
+                      currency={transaction.balanceCurrency}
+                    />
+                  }
+                />
+                <MobileValue
+                  label="之前余额"
+                  value={
+                    <CurrencyAmount
+                      value={transaction.balanceBefore}
+                      currency={transaction.balanceCurrency}
+                    />
+                  }
+                  wide
+                />
                 <MobileValue label="备注" value={transaction.remark || "-"} wide />
               </div>
             </FrontCard>

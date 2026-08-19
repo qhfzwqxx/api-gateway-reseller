@@ -87,7 +87,10 @@ export function BalanceAdjustModal({ open, user, loading = false, onClose, onSub
 
         <form className="p-6" onSubmit={handleSubmit(submit)}>
           <div className="mb-5 rounded-md border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-            当前余额：<span className="font-semibold tabular-nums">{formatMoney(currentBalance)}</span>
+            当前余额：
+            <span className="font-semibold tabular-nums">
+              {formatBalance(currentBalance, user.wallet?.balanceCurrency)}
+            </span>
           </div>
 
           <div className="grid gap-5">
@@ -137,9 +140,16 @@ export function BalanceAdjustModal({ open, user, loading = false, onClose, onSub
   );
 }
 
-function formatMoney(value: number) {
-  return `$${new Intl.NumberFormat("en-US", {
+function formatBalance(
+  value: number,
+  currency?: NonNullable<AdminUser["wallet"]>["balanceCurrency"],
+) {
+  const formatted = new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 8,
-  }).format(value)}`;
+  }).format(value);
+  if (!currency || currency.symbol === "$") {
+    return `$${formatted}`;
+  }
+  return `${formatted} ${currency.symbol || currency.name}`;
 }

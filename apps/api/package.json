@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "dotenv -e ../../.env -- tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "bash ../../scripts/release-build-guard.sh && tsc",
     "start": "dotenv -e ../../.env -- node dist/server.js",
     "typecheck": "tsc --noEmit"
   },

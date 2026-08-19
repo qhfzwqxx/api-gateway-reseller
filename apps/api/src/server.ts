@@ -1,3 +1,4 @@
+import "dotenv/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -23,6 +24,7 @@ import {
 } from "./services/pending-request-cleanup.js";
 import { startExternalAlertScheduler } from "./services/operational-alerts.js";
 import { startRequestBodyRetentionScheduler } from "./services/request-body-retention-settings.js";
+import { assertDatabaseCompatibility } from "./services/database-compatibility.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -66,6 +68,7 @@ let stopModelPoolHealthScheduler: (() => void) | undefined;
 let stopPendingRequestCleanupScheduler: (() => void) | undefined;
 let stopExternalAlertScheduler: (() => void) | undefined;
 let stopRequestBodyRetentionScheduler: (() => void) | undefined;
+let shuttingDown = false;
 
 app.decorate("redis", redis);
 
@@ -148,10 +151,41 @@ app.addHook("onClose", async () => {
   stopPendingRequestCleanupScheduler?.();
   stopExternalAlertScheduler?.();
   stopRequestBodyRetentionScheduler?.();
+  redis.disconnect();
+});
+
+async function shutdown(signal: string) {
+  if (shuttingDown) {
+    return;
+  }
+
+  shuttingDown = true;
+  app.log.info({ signal }, "Gracefully shutting down API");
+
+  try {
+    await app.close();
+    process.exit(0);
+  } catch (error) {
+    app.log.error(error, "API graceful shutdown failed");
+    process.exit(1);
+  }
+}
+
+process.once("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+process.on("message", (message) => {
+  if (message === "shutdown") {
+    void shutdown("shutdown");
+  }
 });
 
 async function start() {
   try {
+    await assertDatabaseCompatibility();
     await redis.connect().catch((error: unknown) => {
       app.log.warn(
         { error },
@@ -162,6 +196,12 @@ async function start() {
       host: env.API_HOST,
       port: env.API_PORT,
     });
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
+    if (process.env.DEPLOY_SMOKE_TEST === "true") {
+      return;
+    }
     const stalePendingResult = await cleanupStalePendingRequests();
     if (stalePendingResult.count > 0) {
       app.log.info(

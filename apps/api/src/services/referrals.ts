@@ -3,6 +3,11 @@ import { Decimal } from "decimal.js";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@gateway/db";
 import { normalizeMoney } from "./auth-settings.js";
+import {
+  baseToWalletAmount,
+  getBalanceCurrencyOrThrow,
+  upsertWalletWithActiveCurrency,
+} from "./balance-currency.js";
 import { grantSubscription } from "./subscriptions.js";
 
 type Tx = Prisma.TransactionClient;
@@ -269,16 +274,11 @@ async function applyReward(
   const amount = new Decimal(input.reward.amountUsd);
   if (!amount.isFinite() || amount.lte(0)) return null;
 
-  const wallet = await tx.wallet.upsert({
-    where: { userId: input.userId },
-    update: {},
-    create: {
-      userId: input.userId,
-      balance: "0",
-    },
-  });
+  const wallet = await upsertWalletWithActiveCurrency(tx, input.userId);
+  const walletCurrency = await getBalanceCurrencyOrThrow(tx, wallet.currency);
+  const walletAmount = baseToWalletAmount(amount, walletCurrency);
   const balanceBefore = new Decimal(wallet.balance.toString());
-  const balanceAfter = balanceBefore.plus(amount);
+  const balanceAfter = balanceBefore.plus(walletAmount);
 
   await tx.wallet.update({
     where: { userId: input.userId },
@@ -290,9 +290,10 @@ async function applyReward(
       userId: input.userId,
       type: "RECHARGE",
       source: "REFERRAL",
-      amount: amount.toFixed(8),
+      amount: walletAmount.toFixed(8),
       balanceBefore: balanceBefore.toFixed(8),
       balanceAfter: balanceAfter.toFixed(8),
+      currency: wallet.currency,
       remark:
         input.role === "inviter"
           ? "Referral inviter reward"
@@ -300,6 +301,9 @@ async function applyReward(
       metadata: {
         role: input.role,
         counterpartyUserId: input.counterpartyUserId,
+        baseAmountUsd: amount.toFixed(8),
+        walletAmount: walletAmount.toFixed(8),
+        walletCurrency: wallet.currency,
       },
     },
   });

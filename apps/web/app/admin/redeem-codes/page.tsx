@@ -14,12 +14,17 @@ import {
   updateRedeemCode,
   type RedeemCode,
 } from "../../../lib/api/operations";
+import {
+  getBalanceCurrencySettings,
+  type BalanceCurrency,
+} from "../../../lib/api/balance-currencies";
 import { getSubscriptionPlans } from "../../../lib/api/subscriptions";
 
 const generateSchema = z
   .object({
     rewardType: z.enum(["BALANCE", "SUBSCRIPTION"]),
     amount: z.string().trim(),
+    currency: z.string().trim().optional(),
     subscriptionPlanId: z.string().trim().optional(),
     count: z.coerce.number().int().min(1).max(100),
     maxRedemptions: z.coerce.number().int().min(1).max(1000),
@@ -45,6 +50,13 @@ const generateSchema = z
       message: "请选择订阅套餐",
       path: ["subscriptionPlanId"],
     },
+  )
+  .refine(
+    (value) => value.rewardType === "SUBSCRIPTION" || Boolean(value.currency),
+    {
+      message: "请选择余额货币",
+      path: ["currency"],
+    },
   );
 type GenerateInput = z.input<typeof generateSchema>;
 type GenerateValues = z.output<typeof generateSchema>;
@@ -57,6 +69,10 @@ export default function AdminRedeemCodesPage() {
   const codesQuery = useQuery({
     queryKey: ["admin", "redeem-codes"],
     queryFn: getRedeemCodes,
+  });
+  const currenciesQuery = useQuery({
+    queryKey: ["admin", "balance-currencies"],
+    queryFn: getBalanceCurrencySettings,
   });
   const updateMutation = useMutation({
     mutationFn: ({
@@ -145,7 +161,11 @@ export default function AdminRedeemCodesPage() {
                     <td className="px-5 py-4 font-semibold tabular-nums">
                       {code.rewardType === "SUBSCRIPTION"
                         ? `订阅：${code.subscriptionPlan?.name ?? "-"}`
-                        : money(code.amount)}
+                        : money(
+                            code.amount,
+                            code.currency,
+                            currenciesQuery.data?.currencies,
+                          )}
                     </td>
                     <td className="px-5 py-4">
                       <Badge active={code.status === "ACTIVE"}>
@@ -210,11 +230,17 @@ function GenerateCodesModal({
     queryFn: getSubscriptionPlans,
     enabled: open,
   });
+  const currenciesQuery = useQuery({
+    queryKey: ["admin", "balance-currencies"],
+    queryFn: getBalanceCurrencySettings,
+    enabled: open,
+  });
   const form = useForm<GenerateInput, unknown, GenerateValues>({
     resolver: zodResolver(generateSchema),
     defaultValues: {
       rewardType: "BALANCE",
       amount: "10",
+      currency: "",
       subscriptionPlanId: "",
       count: 1,
       maxRedemptions: 1,
@@ -240,6 +266,25 @@ function GenerateCodesModal({
       form.reset();
     }
   }, [form, open]);
+  useEffect(() => {
+    if (!open || !currenciesQuery.data) return;
+    const selectableCurrencies = getSelectableCurrencies(
+      currenciesQuery.data.currencies,
+    );
+    const selectedCurrency = form.getValues("currency");
+    if (
+      !selectedCurrency ||
+      !selectableCurrencies.some((currency) => currency.code === selectedCurrency)
+    ) {
+      const activeCurrency = selectableCurrencies.find(
+        (currency) => currency.code === currenciesQuery.data?.activeCurrencyCode,
+      );
+      form.setValue(
+        "currency",
+        activeCurrency?.code ?? selectableCurrencies[0]?.code ?? "",
+      );
+    }
+  }, [currenciesQuery.data, form, open]);
   if (!open) return null;
   const rewardType = form.watch("rewardType");
   const activePlans = (plansQuery.data ?? []).filter(
@@ -339,6 +384,8 @@ function GenerateCodesModal({
               mutation.mutate({
                 ...values,
                 amount: values.rewardType === "BALANCE" ? values.amount : "0",
+                currency:
+                  values.rewardType === "BALANCE" ? values.currency : undefined,
                 subscriptionPlanId:
                   values.rewardType === "SUBSCRIPTION"
                     ? values.subscriptionPlanId
@@ -366,9 +413,29 @@ function GenerateCodesModal({
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               {rewardType === "BALANCE" ? (
-                <Field label="金额">
-                  <input className={inputClass} {...form.register("amount")} />
-                </Field>
+                <>
+                  <Field label="金额">
+                    <input className={inputClass} {...form.register("amount")} />
+                  </Field>
+                  <Field label="余额货币">
+                    <select
+                      className={inputClass}
+                      {...form.register("currency")}
+                      disabled={currenciesQuery.isLoading}
+                    >
+                      <option value="">
+                        {currenciesQuery.isLoading ? "加载货币中…" : "请选择货币"}
+                      </option>
+                      {getSelectableCurrencies(
+                        currenciesQuery.data?.currencies ?? [],
+                      ).map((currency) => (
+                        <option key={currency.code} value={currency.code}>
+                          {currency.name} ({currency.code}) · 1 基准单位 = {currency.unitsPerBase} {currency.symbol}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </>
               ) : (
                 <Field label="订阅套餐">
                   <select
@@ -429,6 +496,11 @@ function GenerateCodesModal({
             {form.formState.errors.amount ? (
               <p className="-mt-3 text-sm font-medium text-rose-600">
                 {form.formState.errors.amount.message}
+              </p>
+            ) : null}
+            {form.formState.errors.currency ? (
+              <p className="-mt-3 text-sm font-medium text-rose-600">
+                {form.formState.errors.currency.message}
               </p>
             ) : null}
             {form.formState.errors.subscriptionPlanId ? (
@@ -533,8 +605,17 @@ function SkeletonRows() {
     </div>
   );
 }
-function money(value: string) {
-  return `$${Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`;
+function getSelectableCurrencies(currencies: BalanceCurrency[]) {
+  return currencies.filter((currency) => !currency.isBase && currency.enabled);
+}
+function money(
+  value: string,
+  code: string,
+  currencies?: BalanceCurrency[],
+) {
+  const currency = currencies?.find((item) => item.code === code);
+  const symbol = currency?.symbol || code || "余额";
+  return `${symbol}${Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`;
 }
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {

@@ -4,6 +4,12 @@ export interface OverviewData {
   users: number;
   requests: number;
   totalWalletBalance: string;
+  walletCurrency: {
+    code: string;
+    name: string;
+    symbol: string;
+    icon: string;
+  } | null;
   revenue: string;
   upstreamCost: string;
   grossProfit: string;

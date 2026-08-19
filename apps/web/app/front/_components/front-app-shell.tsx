@@ -19,7 +19,7 @@ import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { FrontUser, FrontWallet } from "../../../lib/types/front";
-import { money } from "../../../lib/format";
+import { CurrencyAmount } from "./currency-amount";
 import {
   FrontIconButton,
   FrontLogo,
@@ -234,7 +234,12 @@ export function FrontAppShell({
                 type="button"
               >
                 <span>可用余额</span>
-                <strong>${money(availableBalance(wallet))}</strong>
+                <strong>
+                  <CurrencyAmount
+                    value={availableBalance(wallet)}
+                    currency={wallet.balanceCurrency}
+                  />
+                </strong>
               </button>
             ) : null}
             <Link

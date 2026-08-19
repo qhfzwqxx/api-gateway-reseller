@@ -60,6 +60,18 @@ export type FrontWallet = {
   balance: string;
   reservedBalance?: string;
   currency: string;
+  balanceCurrency?: FrontBalanceCurrency | null;
+};
+
+export type FrontBalanceCurrency = {
+  code: string;
+  name: string;
+  symbol: string;
+  icon: string;
+  baseUnitsPerUnit?: string;
+  unitsPerBase?: string;
+  isBase?: boolean;
+  enabled?: boolean;
 };
 
 export type FrontTransaction = {
@@ -69,11 +81,15 @@ export type FrontTransaction = {
   amount: string;
   balanceBefore: string;
   balanceAfter: string;
+  currency?: string;
+  balanceCurrency?: Pick<FrontBalanceCurrency, "name" | "symbol" | "icon"> | null;
   remark?: string | null;
   metadata?: {
     chargedAmountUsd?: string;
     subscriptionChargedAmountUsd?: string;
     walletChargedAmountUsd?: string;
+    walletAmount?: string;
+    walletCurrency?: string;
   } | null;
   apiRequest?: {
     chargedAmountUsd?: string;

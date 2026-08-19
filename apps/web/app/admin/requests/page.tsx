@@ -302,7 +302,7 @@ export default function AdminRequestsPage() {
           <div className="p-4 text-sm font-medium text-red-600">调用记录加载失败，请检查筛选条件后重试。</div>
         ) : (
           <>
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="admin-request-desktop-table min-h-0 flex-1 overflow-hidden">
               <div className="h-full overflow-y-auto">
                 <table className="w-full table-fixed text-left">
                 <colgroup>
@@ -390,6 +390,20 @@ export default function AdminRequestsPage() {
                 </tbody>
                 </table>
               </div>
+            </div>
+
+            <div className="admin-request-mobile-list">
+              {rows.map((item) => (
+                <MobileRequestCard
+                  key={item.id}
+                  request={item}
+                  onOpen={() => setSelectedRequestId(item.id)}
+                  onTerminate={() => setTerminatingRequest(item)}
+                />
+              ))}
+              {rows.length === 0 ? (
+                <div className="admin-request-mobile-empty">暂无调用记录</div>
+              ) : null}
             </div>
 
             <div className="shrink-0 flex justify-center border-t border-slate-200 p-3">
@@ -624,6 +638,80 @@ function Badge({ children, tone }: { children: React.ReactNode; tone: "green" | 
     slate: "border-slate-200 bg-slate-50 text-slate-600",
   };
   return <span className={`inline-flex rounded-md border px-2 py-1 text-xs font-semibold ${styles[tone]}`}>{children}</span>;
+}
+
+function MobileRequestCard({
+  request,
+  onOpen,
+  onTerminate,
+}: {
+  request: ApiRequestRecord;
+  onOpen: () => void;
+  onTerminate: () => void;
+}) {
+  const userLabel = request.user?.email ?? "未知用户";
+  const modelLabel = request.model || "未标记模型";
+  const traceLabel = request.traceCode ?? request.id;
+
+  return (
+    <article className="admin-request-mobile-card">
+      <div className="admin-request-mobile-card-head">
+        <div className="admin-request-mobile-title-wrap">
+          <strong title={modelLabel}>{modelLabel}</strong>
+          <span title={userLabel}>{userLabel}</span>
+        </div>
+        <Badge tone={statusTone(request.status)}>{request.status}</Badge>
+      </div>
+
+      <div className="admin-request-mobile-meta">
+        <span>{formatDate(request.createdAt)}</span>
+        <button type="button" onClick={onOpen} title={traceLabel}>
+          {traceLabel}
+        </button>
+      </div>
+
+      <div className="admin-request-mobile-route" title={`${request.method} ${request.endpoint}`}>
+        <span>{request.method}</span>
+        <b>{request.endpoint}</b>
+        <em>{request.upstreamProvider ?? "未分配上游"}</em>
+      </div>
+
+      <div className="admin-request-mobile-summary">
+        <div className="admin-request-mobile-stats">
+          <div>
+            <span>Token</span>
+            <strong>{formatInteger(request.totalTokens ?? 0)}</strong>
+          </div>
+          <div>
+            <span>费用</span>
+            <strong>{formatMoney(request.chargedAmountUsd)}</strong>
+          </div>
+          <div>
+            <span>耗时</span>
+            <strong>{seconds(request.latencyMs)}</strong>
+          </div>
+        </div>
+
+        <div className="admin-request-mobile-actions">
+          <button type="button" className="button secondary" onClick={onOpen} title="查看请求详情">
+            <Eye className="h-4 w-4" aria-hidden="true" />
+            详情
+          </button>
+          {request.status === "PENDING" ? (
+            <button
+              type="button"
+              className="button danger"
+              onClick={onTerminate}
+              title="终止这条请求"
+            >
+              <Square className="h-3 w-3" aria-hidden="true" />
+              终止
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
 }
 
 function statusTone(status: ApiRequestStatus) {

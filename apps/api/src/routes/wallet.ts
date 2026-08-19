@@ -3,6 +3,10 @@ import { Decimal } from "decimal.js";
 import { prisma } from "@gateway/db";
 import { z } from "zod";
 import { requireAdmin, requireUser } from "../services/auth.js";
+import {
+  balanceCurrencySelect,
+  upsertWalletWithActiveCurrency,
+} from "../services/balance-currency.js";
 
 const walletTransactionSelect = {
   id: true,
@@ -11,9 +15,17 @@ const walletTransactionSelect = {
   amount: true,
   balanceBefore: true,
   balanceAfter: true,
+  currency: true,
   remark: true,
   metadata: true,
   createdAt: true,
+  balanceCurrency: {
+    select: {
+      symbol: true,
+      icon: true,
+      name: true,
+    },
+  },
   apiRequest: {
     select: {
       chargedAmountUsd: true,
@@ -33,6 +45,7 @@ export async function walletRoutes(app: FastifyInstance) {
         balance: true,
         reservedBalance: true,
         currency: true,
+        balanceCurrency: { select: balanceCurrencySelect },
         createdAt: true,
         updatedAt: true,
       },
@@ -97,14 +110,7 @@ export async function walletRoutes(app: FastifyInstance) {
       }
 
       const result = await prisma.$transaction(async (tx) => {
-        const wallet = await tx.wallet.upsert({
-          where: { userId: body.userId },
-          update: {},
-          create: {
-            userId: body.userId,
-            balance: "0",
-          },
-        });
+        const wallet = await upsertWalletWithActiveCurrency(tx, body.userId);
         const balanceBefore = new Decimal(wallet.balance.toString());
         const balanceAfter = balanceBefore.plus(amount);
 
@@ -121,6 +127,7 @@ export async function walletRoutes(app: FastifyInstance) {
             amount: amount.toFixed(8),
             balanceBefore: balanceBefore.toFixed(8),
             balanceAfter: balanceAfter.toFixed(8),
+            currency: wallet.currency,
             remark: body.remark ?? "Manual recharge",
           },
         });

@@ -54,15 +54,22 @@ migration_status_code=$?
 set -e
 printf '%s\n' "$migration_status"
 if [ "$migration_status_code" -ne 0 ]; then
-  if grep -q "have not yet been applied" <<<"$migration_status"; then
-    warn "Pending migrations detected; the deployment flow will apply them after backup and build."
+  if grep -q "have not yet been applied" <<<"$migration_status" && ! grep -qiE "failed to apply|failed migration" <<<"$migration_status"; then
+    warn "Pending migrations detected; deployment will apply them before generating Prisma Client or building artifacts."
   else
-    die "Database migration status check failed."
+    die "Database migration status check failed. Resolve the migration state before deployment."
   fi
+fi
+
+if grep -qiE "failed to apply|failed migration|rolled back migration|database schema is not in sync" <<<"$migration_status"; then
+  die "Database has a failed or inconsistent migration state. Deployment is blocked."
 fi
 
 log "Validating Prisma schema"
 npx prisma validate --schema packages/db/prisma/schema.prisma
+
+log "Checking pending migrations for backward compatibility"
+node scripts/check-pending-migration-safety.mjs
 
 log "Checking Redis connectivity"
 node --input-type=module <<'NODE'
@@ -84,8 +91,5 @@ try {
   redis.disconnect();
 }
 NODE
-
-log "Running typecheck"
-npm run typecheck
 
 log "Predeploy checks passed"

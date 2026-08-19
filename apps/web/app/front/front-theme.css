@@ -429,6 +429,19 @@
   font-variant-numeric: tabular-nums;
 }
 
+.front-currency-amount {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
+.front-currency-amount svg {
+  flex: 0 0 auto;
+  color: #f59e0b;
+  fill: color-mix(in srgb, #f59e0b 18%, transparent);
+}
+
 .front-input-affix {
   position: relative;
   min-width: 0;

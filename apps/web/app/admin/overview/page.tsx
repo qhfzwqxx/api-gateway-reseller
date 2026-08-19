@@ -97,7 +97,14 @@ function KpiSection({ data, isLoading }: { data?: OverviewData; isLoading: boole
   const items = [
     { label: "用户数", value: formatInteger(data?.users), icon: Users, caption: "注册用户总量" },
     { label: "总请求数", value: formatInteger(data?.requests), icon: Zap, caption: "累计 API 调用" },
-    { label: "钱包余额", value: formatMoney(data?.totalWalletBalance), icon: Wallet, caption: "用户余额总额" },
+    {
+      label: "钱包余额",
+      value: formatBalance(data?.totalWalletBalance, data?.walletCurrency),
+      icon: Wallet,
+      caption: data?.walletCurrency
+        ? `用户余额总额 · ${data.walletCurrency.name}`
+        : "用户余额总额",
+    },
     { label: "总 Token", value: formatInteger(data?.totalTokens), icon: Layers3, caption: "累计消耗 Token" },
     { label: "收入", value: formatMoney(data?.revenue), icon: CircleDollarSign, caption: "客户累计扣费" },
     { label: "上游成本", value: formatMoney(data?.upstreamCost), icon: Server, caption: "供应商侧成本" },
@@ -347,6 +354,17 @@ function formatMoney(value?: string | number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 8,
   }).format(Number.isFinite(numeric) ? numeric : 0)}`;
+}
+
+function formatBalance(
+  value?: string | number,
+  currency?: OverviewData["walletCurrency"],
+) {
+  const formatted = formatMoney(value).replace(/^\$/, "");
+  if (!currency || currency.symbol === "$") {
+    return `$${formatted}`;
+  }
+  return `${formatted} ${currency.symbol || currency.name}`;
 }
 
 function formatPercent(value?: number | null) {

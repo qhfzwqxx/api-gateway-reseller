@@ -181,6 +181,17 @@ import {
   ipMatchesPattern,
   standardAccessTierCode,
 } from "../services/access-routing.js";
+import {
+  baseUnitsPerUnitFromUnitsPerBase,
+  balanceCurrencySelect,
+  getActiveBalanceCurrency,
+  getRedeemableBalanceCurrencyOrThrow,
+  migrateWalletsToCurrency,
+  normalizeCurrencyCode,
+  readBalanceCurrencySettings,
+  toBalanceCurrencyDto,
+  upsertWalletWithActiveCurrency,
+} from "../services/balance-currency.js";
 import { simulateRoute } from "../services/route-simulator.js";
 import {
   alertSeverityValues,
@@ -2055,7 +2066,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/admin/overview", async () => {
-    const [users, requests, walletAgg, requestAgg] = await Promise.all([
+    const [users, requests, walletAgg, requestAgg, walletCurrency] = await Promise.all([
       prisma.user.count(),
       prisma.apiRequest.count(),
       prisma.wallet.aggregate({
@@ -2068,6 +2079,7 @@ export async function adminRoutes(app: FastifyInstance) {
           totalTokens: true,
         },
       }),
+      getActiveBalanceCurrency(),
     ]);
 
     const revenue = new Decimal(
@@ -2081,6 +2093,12 @@ export async function adminRoutes(app: FastifyInstance) {
       users,
       requests,
       totalWalletBalance: walletAgg._sum.balance ?? "0",
+      walletCurrency: {
+        code: walletCurrency.code,
+        name: walletCurrency.name,
+        symbol: walletCurrency.symbol,
+        icon: walletCurrency.icon,
+      },
       revenue: revenue.toFixed(8),
       upstreamCost: upstreamCost.toFixed(8),
       grossProfit: revenue.minus(upstreamCost).toFixed(8),
@@ -2287,6 +2305,69 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     return { ok: true };
+  });
+
+  app.get("/admin/balance-currencies", async () => {
+    return readBalanceCurrencySettings();
+  });
+
+  app.post("/admin/balance-currencies", async (request, reply) => {
+    const body = z
+      .object({
+        code: z.string().trim().min(2).max(32),
+        name: z.string().trim().min(1).max(80),
+        symbol: z.string().trim().min(1).max(20),
+        icon: z.string().trim().min(1).max(40).default("circle-dollar-sign"),
+        unitsPerBase: z.string().or(z.number()).default("1"),
+      })
+      .parse(request.body);
+    const code = normalizeCurrencyCode(body.code);
+    if (!/^[A-Z][A-Z0-9_]{1,31}$/.test(code)) {
+      return reply
+        .status(400)
+        .send({ message: "货币代码只能使用大写字母、数字和下划线" });
+    }
+
+    let currency;
+    try {
+      currency = await prisma.balanceCurrency.create({
+        data: {
+          code,
+          name: body.name,
+          symbol: body.symbol,
+          icon: body.icon,
+          baseUnitsPerUnit: baseUnitsPerUnitFromUnitsPerBase(body.unitsPerBase),
+          isBase: false,
+        },
+        select: balanceCurrencySelect,
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return reply.status(409).send({ message: `余额货币代码已存在：${code}` });
+      }
+      throw error;
+    }
+
+    return {
+      currency: toBalanceCurrencyDto(currency),
+      ...(await readBalanceCurrencySettings()),
+    };
+  });
+
+  app.post("/admin/balance-currencies/:code/activate", async (request) => {
+    const params = z.object({ code: z.string().min(1).max(32) }).parse(request.params);
+    const result = await prisma.$transaction(
+      (tx) => migrateWalletsToCurrency(tx, normalizeCurrencyCode(params.code)),
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+
+    return {
+      ...result,
+      ...(await readBalanceCurrencySettings()),
+    };
   });
 
   app.get("/admin/pending-auto-terminate-settings", async () => {
@@ -2819,7 +2900,18 @@ export async function adminRoutes(app: FastifyInstance) {
         charityIpRateLimitPerMinute: true,
         tokenVersion: true,
         createdAt: true,
-        wallet: true,
+        wallet: {
+          include: {
+            balanceCurrency: {
+              select: {
+                code: true,
+                name: true,
+                symbol: true,
+                icon: true,
+              },
+            },
+          },
+        },
         walletTransactions: {
           orderBy: { createdAt: "desc" },
           take: 5,
@@ -2829,6 +2921,7 @@ export async function adminRoutes(app: FastifyInstance) {
             amount: true,
             balanceBefore: true,
             balanceAfter: true,
+            currency: true,
             remark: true,
             createdAt: true,
           },
@@ -3315,6 +3408,7 @@ export async function adminRoutes(app: FastifyInstance) {
                 balance: body.initialBalance
                   ? String(body.initialBalance)
                   : "0",
+                currency: (await getActiveBalanceCurrency(tx)).code,
               },
             },
           },
@@ -3329,6 +3423,7 @@ export async function adminRoutes(app: FastifyInstance) {
               amount: String(body.initialBalance),
               balanceBefore: "0",
               balanceAfter: String(body.initialBalance),
+              currency: (await getActiveBalanceCurrency(tx)).code,
               remark: "Initial balance",
             },
           });
@@ -3442,14 +3537,7 @@ export async function adminRoutes(app: FastifyInstance) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      const wallet = await tx.wallet.upsert({
-        where: { userId: params.id },
-        update: {},
-        create: {
-          userId: params.id,
-          balance: "0",
-        },
-      });
+      const wallet = await upsertWalletWithActiveCurrency(tx, params.id);
       const balanceBefore = new Decimal(wallet.balance.toString());
       const balanceAfter = balanceBefore.plus(amount);
 
@@ -3474,6 +3562,7 @@ export async function adminRoutes(app: FastifyInstance) {
           amount: amount.toFixed(8),
           balanceBefore: balanceBefore.toFixed(8),
           balanceAfter: balanceAfter.toFixed(8),
+          currency: wallet.currency,
           remark: body.remark ?? "Admin balance adjustment",
         },
       });
@@ -4320,6 +4409,7 @@ export async function adminRoutes(app: FastifyInstance) {
       .object({
         rewardType: z.enum(["BALANCE", "SUBSCRIPTION"]).default("BALANCE"),
         amount: z.string().or(z.number()).transform(String).optional(),
+        currency: z.string().trim().min(1).max(32).optional(),
         count: z.number().int().min(1).max(100).default(1),
         maxRedemptions: z.number().int().min(1).max(1000).default(1),
         expiresAt: z.string().datetime().nullable().optional(),
@@ -4331,6 +4421,19 @@ export async function adminRoutes(app: FastifyInstance) {
       })
       .parse(request.body);
     const amount = new Decimal(body.amount ?? "0");
+    const codeCurrency =
+      body.rewardType === "BALANCE" && body.currency
+        ? await getRedeemableBalanceCurrencyOrThrow(
+            prisma,
+            normalizeCurrencyCode(body.currency),
+          )
+        : await getActiveBalanceCurrency();
+
+    if (body.rewardType === "BALANCE" && codeCurrency.isBase) {
+      return reply.status(400).send({
+        message: "余额兑换码必须选择基准货币之外的启用货币",
+      });
+    }
 
     if (
       body.rewardType === "BALANCE" &&
@@ -4387,6 +4490,7 @@ export async function adminRoutes(app: FastifyInstance) {
             codePrefix: item.prefix,
             rewardType: body.rewardType,
             amount: amount.toFixed(8),
+            currency: codeCurrency.code,
             maxRedemptions: body.maxRedemptions,
             expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
             createdByUserId: admin.sub,

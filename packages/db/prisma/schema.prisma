@@ -361,7 +361,8 @@ model Wallet {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balanceCurrency BalanceCurrency @relation(fields: [currency], references: [code], onDelete: Restrict)
 }
 
 model WalletTransaction {
@@ -373,16 +374,37 @@ model WalletTransaction {
   amount        Decimal               @db.Decimal(18, 8)
   balanceBefore Decimal               @db.Decimal(18, 8)
   balanceAfter  Decimal               @db.Decimal(18, 8)
+  currency      String               @default("USD")
   remark        String?
   metadata      Json?
   createdAt     DateTime              @default(now())
 
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  apiRequest ApiRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  apiRequest     ApiRequest?    @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  balanceCurrency BalanceCurrency @relation(fields: [currency], references: [code], onDelete: Restrict)
 
   @@index([userId, createdAt])
   @@index([requestId])
   @@index([source, createdAt])
+}
+
+model BalanceCurrency {
+  id                String   @id @default(cuid())
+  code              String   @unique
+  name              String
+  symbol            String
+  icon              String   @default("circle-dollar-sign")
+  baseUnitsPerUnit  Decimal  @default(1) @db.Decimal(18, 8)
+  isBase            Boolean  @default(false)
+  enabled           Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  wallets           Wallet[]
+  walletTransactions WalletTransaction[]
+
+  @@index([isBase])
+  @@index([enabled])
 }
 
 model ApiRequest {

@@ -88,13 +88,22 @@ Then set `NEXT_PUBLIC_API_BASE_URL` in `.env` to the public API URL and rerun:
 bash deploy.sh --update
 ```
 
-## Backup
+## Versioning and Backup
 
-Use the optional scripts:
+发布前先提交 Git，代码、迁移和部署配置以 Git 历史作为版本备份：
+
+```bash
+git add .
+git commit -m "describe the release"
+git push origin master
+```
+
+普通更新发布不会创建本地数据库 dump，也不会把数据库备份文件提交到 Git。
+如果确实需要手动备份数据库，再使用以下工具：
 
 ```bash
 bash scripts/backup-db.sh
 bash scripts/restore-db.sh backups/<file>.dump
 ```
 
-Backup files are ignored by Git.
+数据库备份文件会被 `.gitignore` 忽略；Git 备份的是代码，不包含生产数据库数据。

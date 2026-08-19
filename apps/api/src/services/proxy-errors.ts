@@ -87,7 +87,26 @@ export function isRetryableUpstreamFailure(
     statusCode === 429 ||
     statusCode >= 500 ||
     isTransientUpstreamNginxBadRequest(statusCode, responseBody) ||
-    isUpstreamQuotaExhaustedError(responseBody)
+    isUpstreamQuotaExhaustedError(responseBody) ||
+    isInvalidFunctionSchemaError(statusCode, responseBody)
+  );
+}
+
+export function isInvalidFunctionSchemaError(
+  statusCode: number,
+  responseBody?: unknown,
+) {
+  if (statusCode !== 400) {
+    return false;
+  }
+
+  const text =
+    typeof responseBody === "string"
+      ? responseBody
+      : JSON.stringify(responseBody ?? "");
+  return (
+    /invalid_function_parameters/iu.test(text) &&
+    /invalid schema for function/iu.test(text)
   );
 }
 

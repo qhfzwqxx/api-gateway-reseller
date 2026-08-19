@@ -36,6 +36,7 @@ export interface RedeemCode {
 export interface CreateRedeemCodesInput {
   rewardType?: "BALANCE" | "SUBSCRIPTION";
   amount: string;
+  currency?: string;
   count: number;
   maxRedemptions: number;
   expiresAt?: string | null;

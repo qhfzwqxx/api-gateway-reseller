@@ -16,6 +16,7 @@ import {
   Settings,
   ShieldCheck,
   ShieldAlert,
+  Zap,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -31,6 +32,7 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { title: "运营总览", href: "/admin/overview", icon: Gauge },
   { title: "用户与钱包", href: "/admin/users", icon: Users },
+  { title: "余额货币", href: "/admin/balance-currencies", icon: Zap },
   { title: "邀请奖励", href: "/admin/referrals", icon: Gift },
   { title: "兑换码", href: "/admin/redeem-codes", icon: Coins },
   { title: "订阅管理", href: "/admin/subscriptions", icon: Crown },

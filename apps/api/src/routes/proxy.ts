@@ -141,6 +141,7 @@ import {
   createClientStreamClosedError,
   isClientStreamClosedError,
   isClosedControllerError,
+  isInvalidFunctionSchemaError,
   isMissingUsageError,
   isRetryableProxyError,
   isRetryableUpstreamFailure,
@@ -2334,6 +2335,10 @@ async function runUpstreamAttempt(params: {
       }
       const upstreamBalanceInsufficient =
         isUpstreamBalanceInsufficientError(text);
+      const invalidFunctionSchema = isInvalidFunctionSchemaError(
+        statusCode,
+        text,
+      );
       const retryableFailure = isRetryableUpstreamFailure(statusCode, text);
 
       if (
@@ -2462,10 +2467,12 @@ async function runUpstreamAttempt(params: {
           channelId,
           upstreamProviderKeyId,
           retryableFailure,
-          immediatePenalty: upstreamBalanceInsufficient,
+          immediatePenalty: upstreamBalanceInsufficient || invalidFunctionSchema,
           penaltyReason: upstreamBalanceInsufficient
             ? "Upstream balance insufficient; immediate penalty after first failure"
-            : undefined,
+            : invalidFunctionSchema
+              ? "Upstream rejected a function tool schema; immediate penalty after first failure"
+              : undefined,
           startedAt,
           logger: app.log,
         });
@@ -2506,10 +2513,12 @@ async function runUpstreamAttempt(params: {
           channelId,
           upstreamProviderKeyId,
           retryableFailure,
-          immediatePenalty: upstreamBalanceInsufficient,
+          immediatePenalty: upstreamBalanceInsufficient || invalidFunctionSchema,
           penaltyReason: upstreamBalanceInsufficient
             ? "Upstream balance insufficient; immediate penalty after first failure"
-            : undefined,
+            : invalidFunctionSchema
+              ? "Upstream rejected a function tool schema; immediate penalty after final failure"
+              : undefined,
           startedAt,
           logger: app.log,
         });

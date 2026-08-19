@@ -21,6 +21,7 @@ import type {
 } from "../../../lib/types/front";
 import type { ApiKey } from "./frontend-keys";
 import type { FrontTab } from "./front-app-shell";
+import { CurrencyAmount } from "./currency-amount";
 import {
   FrontBadge,
   FrontButton,
@@ -73,7 +74,7 @@ export function FrontOverview({
               <FrontSkeleton height={34} width="68%" />
             ) : (
               <strong className="front-overview-balance-value front-data-number">
-                ${money(available)}
+                <CurrencyAmount value={available} currency={wallet?.balanceCurrency} />
               </strong>
             )}
             {loading.wallet ? (
@@ -82,11 +83,11 @@ export function FrontOverview({
               <div className="front-overview-balance-details">
                 <span>
                   <small>总余额</small>
-                  <strong className="front-data-number">${money(wallet?.balance ?? "0")}</strong>
+                  <strong className="front-data-number"><CurrencyAmount value={wallet?.balance ?? "0"} currency={wallet?.balanceCurrency} /></strong>
                 </span>
                 <span>
                   <small>冻结金额</small>
-                  <strong className="front-data-number">${money(wallet?.reservedBalance ?? "0")}</strong>
+                  <strong className="front-data-number"><CurrencyAmount value={wallet?.reservedBalance ?? "0"} currency={wallet?.balanceCurrency} /></strong>
                 </span>
               </div>
             )}

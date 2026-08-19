@@ -9,6 +9,11 @@ import {
 } from "@gateway/db";
 import { sanitizeJsonForPostgres, sanitizePostgresText } from "../lib/db-sanitize.js";
 import { calculateCharges } from "../lib/money.js";
+import {
+  baseToWalletAmount,
+  getActiveBalanceCurrency,
+  walletToBaseAmount,
+} from "./balance-currency.js";
 import { applyUnifiedCustomerPricing } from "./unified-pricing.js";
 import { consumeSubscriptionQuota, getActiveSubscriptionWithPlan } from "./subscriptions.js";
 import type { Usage } from "../types.js";
@@ -18,6 +23,7 @@ export const defaultWalletReservationUsd = new Decimal("0.01");
 export async function ensureWalletCanStart(userId: string, minimumBalanceUsd: string | null) {
   const wallet = await prisma.wallet.findUnique({
     where: { userId },
+    include: { balanceCurrency: { select: { baseUnitsPerUnit: true } } },
   });
 
   if (!wallet) {
@@ -27,7 +33,7 @@ export async function ensureWalletCanStart(userId: string, minimumBalanceUsd: st
     };
   }
 
-  const balance = new Decimal(wallet.balance.toString());
+  const balance = walletToBaseAmount(wallet.balance.toString(), wallet.balanceCurrency);
 
   if (minimumBalanceUsd !== null && balance.lt(new Decimal(minimumBalanceUsd))) {
     return {
@@ -51,6 +57,7 @@ export async function reserveWalletBalance(params: {
   return prisma.$transaction(async (tx) => {
     const wallet = await tx.wallet.findUnique({
       where: { userId: params.userId },
+      include: { balanceCurrency: { select: { baseUnitsPerUnit: true } } },
     });
     if (!wallet) {
       return { ok: false as const, reason: "Wallet not found" };
@@ -58,17 +65,18 @@ export async function reserveWalletBalance(params: {
 
     const reservedBalance = new Decimal(wallet.reservedBalance.toString());
     const balance = new Decimal(wallet.balance.toString());
+    const walletAmount = baseToWalletAmount(amount, wallet.balanceCurrency);
     const available = balance.minus(reservedBalance);
-    if (available.lt(amount)) {
+    if (available.lt(walletAmount)) {
       return { ok: false as const, reason: "Insufficient available balance" };
     }
 
     const updatedRows = await tx.$executeRaw(
       Prisma.sql`
         UPDATE "Wallet"
-        SET "reservedBalance" = "reservedBalance" + ${amount.toFixed(8)}::numeric
+        SET "reservedBalance" = "reservedBalance" + ${walletAmount.toFixed(8)}::numeric
         WHERE "userId" = ${params.userId}
-          AND ("balance" - "reservedBalance") >= ${amount.toFixed(8)}::numeric
+          AND ("balance" - "reservedBalance") >= ${walletAmount.toFixed(8)}::numeric
       `,
     );
 
@@ -91,18 +99,21 @@ export async function releaseWalletReservedAmount(params: {
   await prisma.$transaction(async (tx) => {
     const wallet = await tx.wallet.findUnique({
       where: { userId: params.userId },
-      select: { reservedBalance: true },
+      include: { balanceCurrency: { select: { baseUnitsPerUnit: true } } },
     });
     const currentReserved = new Decimal(
       wallet?.reservedBalance?.toString() ?? "0",
     );
+    const walletAmount = wallet
+      ? baseToWalletAmount(params.amountUsd, wallet.balanceCurrency)
+      : new Decimal(0);
 
     await tx.wallet.update({
       where: { userId: params.userId },
       data: {
         reservedBalance: Decimal.max(
           0,
-          currentReserved.minus(params.amountUsd),
+          currentReserved.minus(walletAmount),
         ).toFixed(8),
       },
     });
@@ -125,14 +136,17 @@ export async function releaseWalletReservation(params: {
 
     const wallet = await tx.wallet.findUnique({
       where: { userId: params.userId },
-      select: { reservedBalance: true },
+      include: { balanceCurrency: { select: { baseUnitsPerUnit: true } } },
     });
     const currentReserved = new Decimal(wallet?.reservedBalance?.toString() ?? "0");
+    const walletAmount = wallet
+      ? baseToWalletAmount(reservedAmount, wallet.balanceCurrency)
+      : new Decimal(0);
 
     await tx.wallet.update({
       where: { userId: params.userId },
       data: {
-        reservedBalance: Decimal.max(0, currentReserved.minus(reservedAmount)).toFixed(8),
+        reservedBalance: Decimal.max(0, currentReserved.minus(walletAmount)).toFixed(8),
       },
     });
     await tx.apiRequest.update({
@@ -222,14 +236,16 @@ export async function chargeForRequest(params: {
           amountUsd: chargedAmountUsd,
         })).subscriptionAmount
       : new Decimal(0);
-    const walletCharge = chargedAmountUsd.minus(subscriptionCharge);
-    const finalChargedAmountUsd = subscriptionCharge.plus(walletCharge);
+    const walletChargeUsd = chargedAmountUsd.minus(subscriptionCharge);
+    const finalChargedAmountUsd = subscriptionCharge.plus(walletChargeUsd);
 
     let balanceBefore = new Decimal(0);
     let balanceAfter = new Decimal(0);
-    if (walletCharge.gt(0)) {
+    let walletCharge = new Decimal(0);
+    if (walletChargeUsd.gt(0)) {
       const wallet = await tx.wallet.findUnique({
         where: { userId },
+        include: { balanceCurrency: { select: { baseUnitsPerUnit: true } } },
       });
 
       if (!wallet) {
@@ -238,13 +254,21 @@ export async function chargeForRequest(params: {
 
       balanceBefore = new Decimal(wallet.balance.toString());
       const reservedBalance = new Decimal(wallet.reservedBalance.toString());
+      walletCharge = baseToWalletAmount(walletChargeUsd, wallet.balanceCurrency);
+      const reservedWalletAmount = baseToWalletAmount(
+        reservedAmount,
+        wallet.balanceCurrency,
+      );
       balanceAfter = balanceBefore.minus(walletCharge);
 
       await tx.wallet.update({
         where: { userId },
         data: {
           balance: balanceAfter.toFixed(8),
-          reservedBalance: Decimal.max(0, reservedBalance.minus(reservedAmount)).toFixed(8),
+          reservedBalance: Decimal.max(
+            0,
+            reservedBalance.minus(reservedWalletAmount),
+          ).toFixed(8),
         },
       });
 
@@ -257,6 +281,7 @@ export async function chargeForRequest(params: {
           amount: walletCharge.negated().toFixed(8),
           balanceBefore: balanceBefore.toFixed(8),
           balanceAfter: balanceAfter.toFixed(8),
+          currency: wallet.currency,
           remark: `API usage ${price.model}`,
           metadata: {
             inputTokens: usage.inputTokens,
@@ -268,11 +293,14 @@ export async function chargeForRequest(params: {
             chargedAmountUsd: finalChargedAmountUsd.toFixed(8),
             calculatedChargedAmountUsd: chargedAmountUsd.toFixed(8),
             subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
-            walletChargedAmountUsd: walletCharge.toFixed(8),
+            walletChargedAmountUsd: walletChargeUsd.toFixed(8),
+            walletAmount: walletCharge.toFixed(8),
+            walletCurrency: wallet.currency,
           },
         },
       });
     } else if (subscriptionState) {
+      const activeCurrency = await getActiveBalanceCurrency(tx);
       await tx.walletTransaction.create({
         data: {
           userId,
@@ -282,6 +310,7 @@ export async function chargeForRequest(params: {
           amount: "0",
           balanceBefore: "0",
           balanceAfter: "0",
+          currency: activeCurrency.code,
           remark: `API usage ${price.model}`,
           metadata: {
             inputTokens: usage.inputTokens,
@@ -299,20 +328,23 @@ export async function chargeForRequest(params: {
       });
     }
 
-    if (reservedAmount.gt(0) && walletCharge.lte(0)) {
+    if (reservedAmount.gt(0) && walletChargeUsd.lte(0)) {
       const wallet = await tx.wallet.findUnique({
         where: { userId },
-        select: { reservedBalance: true },
+        include: { balanceCurrency: { select: { baseUnitsPerUnit: true } } },
       });
       const reservedBalance = new Decimal(
         wallet?.reservedBalance?.toString() ?? "0",
       );
+      const walletReservedAmount = wallet
+        ? baseToWalletAmount(reservedAmount, wallet.balanceCurrency)
+        : new Decimal(0);
       await tx.wallet.update({
         where: { userId },
         data: {
           reservedBalance: Decimal.max(
             0,
-            reservedBalance.minus(reservedAmount),
+            reservedBalance.minus(walletReservedAmount),
           ).toFixed(8),
         },
       });
@@ -323,7 +355,7 @@ export async function chargeForRequest(params: {
       data: {
         chargedAmountUsd: finalChargedAmountUsd.toFixed(8),
         subscriptionChargedAmountUsd: subscriptionCharge.toFixed(8),
-        walletChargedAmountUsd: walletCharge.toFixed(8),
+        walletChargedAmountUsd: walletChargeUsd.toFixed(8),
         reservedAmountUsd: "0",
       },
     });
@@ -414,18 +446,18 @@ export async function markRequestFailed(
     if (reservedAmount.gt(0)) {
       const wallet = await tx.wallet.findUnique({
         where: { userId: existingRequest.userId },
-        select: { reservedBalance: true },
+        include: { balanceCurrency: { select: { baseUnitsPerUnit: true } } },
       });
       const currentReserved = new Decimal(
         wallet?.reservedBalance?.toString() ?? "0",
       );
+      const walletAmount = wallet
+        ? baseToWalletAmount(reservedAmount, wallet.balanceCurrency)
+        : new Decimal(0);
       await tx.wallet.update({
         where: { userId: existingRequest.userId },
         data: {
-          reservedBalance: Decimal.max(
-            0,
-            currentReserved.minus(reservedAmount),
-          ).toFixed(8),
+          reservedBalance: Decimal.max(0, currentReserved.minus(walletAmount)).toFixed(8),
         },
       });
     }

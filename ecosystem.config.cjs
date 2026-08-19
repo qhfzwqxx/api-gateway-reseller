@@ -13,8 +13,13 @@ module.exports = {
       ...commonAppOptions,
       name: "api-gateway-api",
       cwd: projectRoot,
-      script: "npm",
-      args: "run start --workspace apps/api",
+      script: "apps/api/dist/server.js",
+      interpreter: "node",
+      exec_mode: "cluster",
+      instances: 1,
+      wait_ready: true,
+      listen_timeout: 45000,
+      kill_timeout: 150000,
       env: {
         NODE_ENV: "production",
         NODE_OPTIONS: "--max-old-space-size=768"

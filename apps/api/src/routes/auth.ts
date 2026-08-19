@@ -17,6 +17,11 @@ import { sendEmailLoginCode } from "../services/mailer.js";
 import { getClientIp } from "../services/proxy-request-utils.js";
 import { unlockWhitelistFilterUser } from "../services/whitelist-filter-settings.js";
 import { ensureStandardAccessTier } from "../services/access-routing.js";
+import {
+  baseToWalletAmount,
+  balanceCurrencySelect,
+  getActiveBalanceCurrency,
+} from "../services/balance-currency.js";
 
 const emailCodeSchema = z.object({
   email: z
@@ -357,7 +362,17 @@ export async function authRoutes(app: FastifyInstance) {
             name: true,
           },
         },
-        wallet: true,
+        wallet: {
+          select: {
+            id: true,
+            balance: true,
+            reservedBalance: true,
+            currency: true,
+            balanceCurrency: {
+              select: balanceCurrencySelect,
+            },
+          },
+        },
       },
     });
 
@@ -498,6 +513,8 @@ async function createPublicUser(
     input.newUserBonus.isFinite() && input.newUserBonus.gt(0)
       ? input.newUserBonus
       : new Decimal(0);
+  const activeCurrency = await getActiveBalanceCurrency(tx);
+  const walletBonus = baseToWalletAmount(bonus, activeCurrency);
   const created = await tx.user.create({
     data: {
       email: input.email,
@@ -507,7 +524,8 @@ async function createPublicUser(
       tierId: input.tierId,
       wallet: {
         create: {
-          balance: bonus.toFixed(8),
+          balance: walletBonus.toFixed(8),
+          currency: activeCurrency.code,
         },
       },
     },
@@ -519,10 +537,16 @@ async function createPublicUser(
         userId: created.id,
         type: "RECHARGE",
         source: "NEW_USER_BONUS",
-        amount: bonus.toFixed(8),
+        amount: walletBonus.toFixed(8),
         balanceBefore: "0",
-        balanceAfter: bonus.toFixed(8),
+        balanceAfter: walletBonus.toFixed(8),
+        currency: activeCurrency.code,
         remark: "New user bonus",
+        metadata: {
+          baseAmountUsd: bonus.toFixed(8),
+          walletAmount: walletBonus.toFixed(8),
+          walletCurrency: activeCurrency.code,
+        },
       },
     });
   }

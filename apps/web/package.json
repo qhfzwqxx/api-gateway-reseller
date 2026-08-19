@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "dotenv -e ../../.env -- next dev -p ${WEB_PORT:-4101}",
-    "build": "/usr/local/bin/api-gateway-resource-guard.sh --preflight-build && dotenv -e ../../.env -- next build",
+    "build": "bash ../../scripts/release-build-guard.sh && /usr/local/bin/api-gateway-resource-guard.sh --preflight-build && dotenv -e ../../.env -- next build",
     "start": "dotenv -e ../../.env -- next start -p ${WEB_PORT:-4101}",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"

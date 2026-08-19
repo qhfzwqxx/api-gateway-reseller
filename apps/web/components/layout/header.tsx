@@ -10,6 +10,7 @@ const pageTitles: Record<string, string> = {
   "/admin": "运营总览",
   "/admin/overview": "运营总览",
   "/admin/users": "用户与钱包",
+  "/admin/balance-currencies": "余额货币",
   "/admin/referrals": "邀请奖励",
   "/admin/redeem-codes": "兑换码",
   "/admin/subscriptions": "订阅管理",
@@ -46,6 +47,18 @@ export function Header() {
     setMobileNavOpen(false);
   }, [pathname]);
 
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+
+    if (mobileNavOpen) {
+      document.body.style.overflow = "hidden";
+    }
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileNavOpen]);
+
   function handleLogout() {
     window.localStorage.removeItem(getAdminTokenKey());
     router.replace("/login");
@@ -59,6 +72,7 @@ export function Header() {
           <button
             type="button"
             onClick={() => setMobileNavOpen(true)}
+            aria-expanded={mobileNavOpen}
             className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 lg:hidden"
             aria-label="打开后台导航"
           >

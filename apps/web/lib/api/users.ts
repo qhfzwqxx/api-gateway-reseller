@@ -5,6 +5,14 @@ export interface AdminUserWallet {
   id: string;
   userId: string;
   balance: string;
+  reservedBalance?: string;
+  currency: string;
+  balanceCurrency?: {
+    code: string;
+    name: string;
+    symbol: string;
+    icon: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }

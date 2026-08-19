@@ -8,6 +8,10 @@ MODE="install"
 SKIP_DOCKER="false"
 RUN_BACKUP="false"
 PM2_BIN=""
+DEPLOY_LOCK_FILE="/tmp/api-gateway-reseller.deploy.lock"
+ARTIFACT_BACKUP_DIR=""
+DEPLOY_ROLLBACK_ARMED="false"
+PM2_SWITCH_ATTEMPTED="false"
 
 for arg in "$@"; do
   case "$arg" in
@@ -26,7 +30,7 @@ Usage:
   bash deploy.sh            First deployment or idempotent redeploy
   bash deploy.sh --update   Pull-safe rebuild/migrate/restart flow without database backup
   bash deploy.sh --skip-docker  Do not start bundled Postgres/Redis
-  bash deploy.sh --update --backup  Create a database backup before migrations
+  bash deploy.sh --update --backup  Manually create a database backup before migrations
 USAGE
       exit 0
       ;;
@@ -52,6 +56,30 @@ die() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+acquire_deploy_lock() {
+  if ! command_exists flock; then
+    warn "flock is unavailable; concurrent deploy protection is disabled."
+    return
+  fi
+
+  exec 9>"$DEPLOY_LOCK_FILE"
+  flock -n 9 || die "Another deployment is already running. Refusing to overlap releases."
+}
+
+ensure_clean_release_tree() {
+  if ! command_exists git || [ ! -d .git ]; then
+    return
+  fi
+
+  local dirty
+  dirty="$(git status --porcelain --untracked-files=normal -- \
+    apps packages scripts deploy.sh ecosystem.config.cjs package.json package-lock.json tsconfig.base.json)"
+  if [ -n "$dirty" ]; then
+    printf '%s\n' "$dirty" >&2
+    die "Deployment blocked: tracked runtime sources or migrations are uncommitted. Commit or discard them before release."
+  fi
 }
 
 random_secret() {
@@ -144,6 +172,7 @@ resolve_pm2_bin() {
 require_node() {
   command_exists node || die "Node.js 20+ is required. Install Node first, then rerun deploy.sh."
   command_exists npm || die "npm is required. Install npm first, then rerun deploy.sh."
+  command_exists curl || die "curl is required for post-deploy API smoke tests."
 
   local major
   major="$(node -p "Number(process.versions.node.split('.')[0])")"
@@ -287,19 +316,134 @@ install_dependencies() {
   npm install
 }
 
-build_and_migrate() {
-  log "Generating Prisma client"
-  npm run db:generate
+apply_database_migrations() {
+  log "Applying database migrations before building or restarting services"
+  npm run db:migrate:deploy
+
+  log "Verifying database migration status"
+  local migration_status
+  if ! migration_status="$(npx prisma migrate status --schema packages/db/prisma/schema.prisma 2>&1)"; then
+    printf '%s\n' "$migration_status" >&2
+    die "Database migrations did not reach a healthy state. The running API was not restarted."
+  fi
+  printf '%s\n' "$migration_status"
+}
+
+snapshot_runtime_artifacts() {
+  ARTIFACT_BACKUP_DIR="$(mktemp -d /tmp/api-gateway-reseller-release.XXXXXX)"
+  log "Snapshotting current runtime artifacts"
+
+  for artifact in apps/api/dist packages/db/dist apps/web/.next node_modules/.prisma/client node_modules/@prisma/client; do
+    if [ -e "$artifact" ]; then
+      mkdir -p "$ARTIFACT_BACKUP_DIR/$(dirname "$artifact")"
+      cp -a "$artifact" "$ARTIFACT_BACKUP_DIR/$artifact"
+    fi
+  done
+}
+
+restore_runtime_artifacts() {
+  if [ -z "$ARTIFACT_BACKUP_DIR" ]; then
+    return
+  fi
+
+  warn "Restoring the previous runtime artifacts"
+  for artifact in apps/api/dist packages/db/dist apps/web/.next node_modules/.prisma/client node_modules/@prisma/client; do
+    rm -rf "$artifact"
+    if [ -e "$ARTIFACT_BACKUP_DIR/$artifact" ]; then
+      mkdir -p "$(dirname "$artifact")"
+      cp -a "$ARTIFACT_BACKUP_DIR/$artifact" "$artifact"
+    fi
+  done
+}
+
+cleanup_runtime_snapshot() {
+  if [ -n "$ARTIFACT_BACKUP_DIR" ]; then
+    rm -rf "$ARTIFACT_BACKUP_DIR"
+    ARTIFACT_BACKUP_DIR=""
+  fi
+}
+
+handle_release_error() {
+  local status="$1"
+  trap - ERR
+
+  if [ "$DEPLOY_ROLLBACK_ARMED" = "true" ]; then
+    restore_runtime_artifacts
+    if [ "$PM2_SWITCH_ATTEMPTED" = "true" ]; then
+      PROJECT_ROOT="$PROJECT_ROOT" "$PM2_BIN" startOrReload ecosystem.config.cjs --update-env || true
+    fi
+    cleanup_runtime_snapshot
+  fi
+
+  exit "$status"
+}
+
+build_artifacts() {
+  log "Generating Prisma client after migrations"
+  SAFE_RELEASE_BUILD=1 npm run db:generate
 
   log "Syncing Security Research Skill mirror"
   npm run sync:security-research-skill
   npm run verify:security-research-skill
 
   log "Building API and web"
-  npm run build
+  SAFE_RELEASE_BUILD=1 npm run build
+}
 
-  log "Applying database migrations"
-  npm run db:migrate:deploy
+run_api_smoke_tests() {
+  local base_url="$1"
+  local health_code root_code auth_settings_code wallet_code models_code
+
+  health_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$base_url/health")"
+  root_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$base_url/")"
+  auth_settings_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$base_url/auth/settings")"
+  wallet_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$base_url/wallet")"
+  models_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$base_url/v1/models")"
+
+  if [ "$health_code" != "200" ] || [ "$root_code" != "200" ] || [ "$auth_settings_code" != "200" ] || [ "$wallet_code" != "401" ] || [ "$models_code" != "401" ]; then
+    printf 'Smoke tests failed: health=%s root=%s auth_settings=%s wallet=%s models=%s\n' \
+      "$health_code" "$root_code" "$auth_settings_code" "$wallet_code" "$models_code" >&2
+    return 1
+  fi
+}
+
+validate_candidate_api() {
+  local candidate_port candidate_pid candidate_log ready
+  candidate_port="$(( ${API_PORT:-4100} + 1000 ))"
+  candidate_log="$(mktemp /tmp/api-gateway-candidate.XXXXXX.log)"
+  ready="false"
+
+  log "Starting candidate API on 127.0.0.1:${candidate_port}"
+  DEPLOY_SMOKE_TEST="true" API_HOST="127.0.0.1" API_PORT="$candidate_port" \
+    node apps/api/dist/server.js >"$candidate_log" 2>&1 &
+  candidate_pid=$!
+
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$candidate_pid" >/dev/null 2>&1; then
+      break
+    fi
+    if curl -fsS --max-time 2 "http://127.0.0.1:${candidate_port}/health" >/dev/null 2>&1; then
+      ready="true"
+      break
+    fi
+    sleep 1
+  done
+
+  if [ "$ready" = "true" ]; then
+    run_api_smoke_tests "http://127.0.0.1:${candidate_port}" || ready="false"
+  fi
+
+  kill "$candidate_pid" >/dev/null 2>&1 || true
+  wait "$candidate_pid" >/dev/null 2>&1 || true
+
+  if [ "$ready" != "true" ]; then
+    cat "$candidate_log" >&2
+    rm -f "$candidate_log"
+    return 1
+  fi
+
+  rm -f "$candidate_log"
+  log "Candidate API passed database compatibility and smoke tests"
 }
 
 run_predeploy_checks() {
@@ -332,8 +476,30 @@ seed_data() {
 
 start_pm2() {
   log "Starting PM2 apps"
+  PM2_SWITCH_ATTEMPTED="true"
   PROJECT_ROOT="$PROJECT_ROOT" "$PM2_BIN" startOrReload ecosystem.config.cjs --update-env
+
+  log "Waiting for API health"
+  for _ in $(seq 1 30); do
+    if curl -fsS --max-time 3 "http://127.0.0.1:${API_PORT:-4100}/health" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+
+  if ! curl -fsS --max-time 3 "http://127.0.0.1:${API_PORT:-4100}/health" >/dev/null 2>&1; then
+    printf 'API health check failed after release.\n' >&2
+    return 1
+  fi
+
+  log "Running API smoke tests"
+  run_api_smoke_tests "http://127.0.0.1:${API_PORT:-4100}"
+
   "$PM2_BIN" save
+  DEPLOY_ROLLBACK_ARMED="false"
+  PM2_SWITCH_ATTEMPTED="false"
+  cleanup_runtime_snapshot
+  trap - ERR
 }
 
 print_summary() {
@@ -372,7 +538,9 @@ main() {
   log "Checking runtime"
   require_node
   require_docker
+  acquire_deploy_lock
   ensure_pm2
+  ensure_clean_release_tree
 
   write_env_file
   load_env
@@ -382,9 +550,14 @@ main() {
   install_dependencies
   run_predeploy_checks
   backup_before_migrate
-  build_and_migrate
-  start_pm2
+  apply_database_migrations
+  snapshot_runtime_artifacts
+  DEPLOY_ROLLBACK_ARMED="true"
+  trap 'handle_release_error $?' ERR
+  build_artifacts
   seed_data
+  validate_candidate_api
+  start_pm2
   print_summary
 }
 
