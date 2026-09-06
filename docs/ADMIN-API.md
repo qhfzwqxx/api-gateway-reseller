@@ -1148,7 +1148,7 @@ PUT /admin/reasoning-effort-transform-settings
 }
 ```
 
-`gpt56Force` 仅强制改写 Responses API 中 `gpt-5.6` 及 `gpt-5.6-*` 模型的 `reasoning.effort`。可选值为 `none`、`low`、`medium`、`high`、`xhigh`、`max`。
+`gpt56Force` 仅强制改写 Responses API 中 `gpt-5.6`、`gpt-5.6-*` 及 `gpt-6-astra` 模型的 `reasoning.effort`。可选值为 `none`、`low`、`medium`、`high`、`xhigh`、`max`。
 
 ### 9.3 Request Body 保留策略
 

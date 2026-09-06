@@ -297,7 +297,7 @@ export default function AdminSettingsPage() {
                 className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 {...reasoningForm.register("gpt56Force.enabled")}
               />
-              强制 GPT-5.6 系列使用指定推理强度
+              强制 GPT-5.6 系列及 gpt-6-astra 使用指定推理强度
             </label>
             <div className="grid gap-2 sm:max-w-sm">
               <label htmlFor="gpt56-force-effort" className={labelClass}>强制等级</label>
@@ -313,7 +313,7 @@ export default function AdminSettingsPage() {
               </select>
             </div>
             <p id="gpt56-force-help" className="text-xs leading-5 text-slate-600">
-              开启后，仅对 Responses API 的 GPT-5.6 系列模型生效。无论客户端是否传入 reasoning.effort，网关都会在转发前覆盖为所选等级；关闭时仍可预先选择下次启用的等级。
+              开启后，仅对 Responses API 的 GPT-5.6 系列及 gpt-6-astra 模型生效。无论客户端是否传入 reasoning.effort，网关都会在转发前覆盖为所选等级；关闭时仍可预先选择下次启用的等级。
             </p>
           </div>
           <ReasoningRulesEditor

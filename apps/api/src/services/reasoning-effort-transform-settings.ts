@@ -77,7 +77,7 @@ export async function applyReasoningEffortTransform<T extends Record<string, unk
   if (
     settings.gpt56Force.enabled &&
     context?.endpoint === "/v1/responses" &&
-    isGpt56Model(transformedBody.model)
+    isForcedReasoningModel(transformedBody.model)
   ) {
     return forceResponsesReasoningEffort(
       transformedBody,
@@ -238,12 +238,12 @@ function forceResponsesReasoningEffort<T extends Record<string, unknown>>(
   } as T;
 }
 
-function isGpt56Model(value: unknown) {
+function isForcedReasoningModel(value: unknown) {
   if (typeof value !== "string") {
     return false;
   }
 
-  return /(^|\/)gpt-5\.6(?:$|[-.])/.test(value.trim().toLowerCase());
+  return /(^|\/)(?:gpt-5\.6(?:$|[-.])|gpt-6-astra$)/.test(value.trim().toLowerCase());
 }
 
 function matchesReasoningEffort(value: unknown, expected: ReasoningEffortValue) {
