@@ -13408,3 +13408,112 @@ td .button-row.compact {
     scroll-behavior: auto !important;
   }
 }
+
+/* Mobile-only containment fixes. Desktop admin layout intentionally stays unchanged. */
+@media (max-width: 767px) {
+  #admin-main-scroll,
+  #admin-main-scroll .admin-page-content,
+  #admin-main-scroll .admin-page-content > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  #admin-main-scroll .admin-page-content {
+    overflow: visible;
+  }
+
+  #admin-main-scroll :is(section, article, form, fieldset, label, [class*="rounded-"]) {
+    min-width: 0;
+  }
+
+  #admin-main-scroll :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), select, textarea) {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  #admin-main-scroll :is(button, a.button, .button) {
+    max-width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  #admin-main-scroll :is(.flex, .grid) {
+    min-width: 0;
+  }
+
+  #admin-main-scroll .overflow-x-auto {
+    max-width: 100%;
+    overflow-x: auto !important;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #admin-main-scroll :is(.min-w-\[980px\], .min-w-\[1080px\], .min-w-\[1200px\]) {
+    width: max-content;
+    max-width: none;
+  }
+
+  #admin-main-scroll .admin-pool-channel-actions,
+  #admin-main-scroll .button-row,
+  #admin-main-scroll .mobile-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  #admin-main-scroll .admin-pool-channel-actions > *,
+  #admin-main-scroll .button-row > *,
+  #admin-main-scroll .mobile-actions > * {
+    flex: 1 1 120px;
+    min-width: 0;
+  }
+
+  /* Dialogs are rendered through a portal, so they cannot depend on #admin-main-scroll. */
+  html.admin-page-active :is(.form-modal, .config-modal, .admin-confirm-dialog, [role="dialog"]) {
+    max-width: calc(100vw - 24px);
+    min-width: 0;
+  }
+
+  html.admin-page-active :is(.form-modal, .config-modal, .admin-confirm-dialog, [role="dialog"]) :is(.overflow-auto, .overflow-y-auto) {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  html.admin-page-active :is(.form-modal, .config-modal, .admin-confirm-dialog, [role="dialog"]) :is(.grid, .flex) {
+    min-width: 0;
+  }
+
+  html.admin-page-active :is(.form-modal, .config-modal, .admin-confirm-dialog, [role="dialog"]) :is(input, select, textarea) {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 420px) {
+  #admin-main-scroll {
+    padding-inline: 10px !important;
+  }
+
+  #admin-main-scroll .admin-overview-metrics,
+  #admin-main-scroll .admin-pool-status-grid,
+  #admin-main-scroll .admin-pool-facts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #admin-main-scroll .admin-pool-channel-actions > *,
+  #admin-main-scroll .button-row > *,
+  #admin-main-scroll .mobile-actions > * {
+    flex-basis: 100%;
+  }
+}
