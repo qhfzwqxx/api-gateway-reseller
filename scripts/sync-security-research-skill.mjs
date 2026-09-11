@@ -56,7 +56,7 @@ const missing = [];
 
 while (queue.length > 0) {
   const path = queue.shift();
-  const response = await fetch(`${remoteRoot}/${path}`);
+  const response = await fetchWithTimeout(`${remoteRoot}/${path}`);
   if (!response.ok) {
     missing.push({ path, status: response.status });
     continue;
@@ -164,4 +164,9 @@ function hasDownloadedAlias(path, downloadedPaths) {
   return [...downloadedPaths].some((candidate) =>
     candidate.endsWith(suffix) || candidate.endsWith(`/${basename}`),
   );
+}
+
+async function fetchWithTimeout(url, timeoutMs = 15000) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  return fetch(url, { signal });
 }
