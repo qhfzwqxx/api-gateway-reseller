@@ -13174,3 +13174,178 @@ td .button-row.compact {
     font-size: 11px;
   }
 }
+
+.admin-app-shell {
+  --admin-page-bg: #f6f8fc;
+  background: radial-gradient(circle at 86% -20%, rgb(219 234 254 / 70%), transparent 31rem), var(--admin-page-bg) !important;
+}
+
+.admin-app-frame { background: transparent; }
+
+#admin-main-scroll .admin-overview-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-app-shell > .admin-app-frame > header {
+  flex-shrink: 0;
+}
+
+.admin-nav-drawer {
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.admin-nav-drawer > div {
+  flex-shrink: 0;
+}
+
+#admin-main-scroll {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+
+.admin-page-content {
+  width: min(100%, 1680px);
+  min-width: 0;
+  height: 100%;
+  margin-inline: auto;
+}
+
+#admin-main-scroll .rounded-lg.border.border-slate-200.bg-white,
+#admin-main-scroll .rounded-xl.border.border-slate-200.bg-white,
+#admin-main-scroll .overflow-hidden.rounded-lg.border.border-slate-200.bg-white {
+  box-shadow: 0 1px 2px rgb(15 23 42 / 3%), 0 10px 26px rgb(15 23 42 / 4%);
+}
+
+#admin-main-scroll :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), select, textarea) { min-height: 42px; }
+
+#admin-main-scroll :is(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+}
+
+#admin-main-scroll :is(button, a) { touch-action: manipulation; }
+
+#admin-main-scroll :is(section, article, form) { min-width: 0; }
+
+#admin-main-scroll .metric-value { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+@media (max-width: 1023px) {
+  #admin-main-scroll .admin-overview-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  html.admin-page-active,
+  html.admin-page-active body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .admin-app-shell,
+  .admin-app-frame {
+    display: flex;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #admin-main-scroll {
+    min-height: 0;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .admin-page-content {
+    height: auto;
+    min-height: 100%;
+  }
+}
+
+@media (max-width: 767px) {
+  #admin-main-scroll {
+    padding: 12px 12px calc(20px + env(safe-area-inset-bottom)) !important;
+    scroll-padding-top: 16px;
+  }
+
+  #admin-main-scroll :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]), select, textarea),
+  html.admin-page-active :is(.form-modal, .admin-confirm-dialog) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  #admin-main-scroll :is(button.h-9, button.h-10, button.button),
+  html.admin-page-active .form-modal .button { min-height: 44px; }
+
+  #admin-main-scroll .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table > tbody > tr {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: white;
+    padding: 0;
+    box-shadow: 0 1px 3px rgb(15 23 42 / 4%);
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table > tbody > tr > td::before {
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table > tbody > tr > td:first-child:not([colspan]) {
+    background: #f8fafc;
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table td :is(button, a) {
+    min-height: 44px;
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table td > .flex {
+    flex-wrap: wrap;
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table td[data-label] > * {
+    grid-column: 2;
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table td:not([colspan]):not([data-label]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #admin-main-scroll .admin-mobile-card-table-wrap > table.admin-mobile-card-table td:not([data-label])::before {
+    display: none;
+  }
+
+  #admin-main-scroll .fixed:has(> aside) {
+    padding: 0;
+    margin: 0;
+    align-items: stretch;
+  }
+
+  #admin-main-scroll .fixed > aside {
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    min-width: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  #admin-main-scroll .fixed > aside > :is(form, .flex-1) {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  #admin-main-scroll { padding-inline: 10px !important; }
+  #admin-main-scroll .admin-request-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-app-shell *, .admin-nav-drawer * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

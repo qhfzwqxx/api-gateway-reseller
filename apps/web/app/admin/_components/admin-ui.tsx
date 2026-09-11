@@ -124,6 +124,7 @@ export function ConsoleNavButton({
       className={active ? "console-nav-button active" : "console-nav-button"}
       onClick={onClick}
       type="button"
+      aria-pressed={active}
     >
       <span>
         <strong>{title}</strong>
@@ -175,7 +176,7 @@ export function ModalShell({
                 </Dialog.Description>
               ) : null}
             </div>
-            <Dialog.Close className="modal-close" type="button">
+            <Dialog.Close className="modal-close" type="button" aria-label="关闭弹窗">
               ×
             </Dialog.Close>
           </div>

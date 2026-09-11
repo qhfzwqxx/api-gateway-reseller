@@ -64,10 +64,20 @@ export function MobileTableEnhancer() {
     }
 
     enhanceTables(root);
-    const observer = new MutationObserver(() => enhanceTables(root));
-    observer.observe(root, { childList: true, subtree: true });
+    let scheduledFrame: number | undefined;
+    const observer = new MutationObserver(() => {
+      if (scheduledFrame !== undefined) return;
+      scheduledFrame = window.requestAnimationFrame(() => {
+        scheduledFrame = undefined;
+        enhanceTables(root);
+      });
+    });
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (scheduledFrame !== undefined) window.cancelAnimationFrame(scheduledFrame);
+    };
   }, []);
 
   return null;

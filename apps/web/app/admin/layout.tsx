@@ -24,14 +24,22 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     }
   }, [router]);
 
+  useEffect(() => {
+    document.documentElement.classList.add("admin-page-active");
+    return () => document.documentElement.classList.remove("admin-page-active");
+  }, []);
+
   return (
     <QueryProvider>
       <div className="admin-app-shell flex h-screen overflow-hidden bg-slate-50 text-slate-950">
+        <a href="#admin-main-scroll" className="sr-only z-[60] rounded-lg bg-white p-3 text-blue-700 focus:not-sr-only focus:fixed focus:left-4 focus:top-4">跳转到主要内容</a>
         <MobileTableEnhancer />
         <Sidebar />
         <div className="admin-app-frame flex h-full min-w-0 flex-1 flex-col overflow-hidden lg:pl-64">
           <Header />
-          <main id="admin-main-scroll" className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4">{children}</main>
+          <main id="admin-main-scroll" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-5 lg:p-6">
+            <div className="admin-page-content">{children}</div>
+          </main>
         </div>
       </div>
     </QueryProvider>

@@ -167,7 +167,7 @@ export default function AdminRequestsPage() {
             <h2 className="mt-1 text-2xl font-semibold text-slate-950">调用记录</h2>
             <p className="mt-2 text-sm text-slate-500">联合筛选、游标分页与敏感报文审计。</p>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6">
+          <div className="admin-request-summary-grid grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-6">
             <Summary label={hasActiveFilters ? "已加载" : "总数"} value={hasActiveFilters ? rows.length : (firstPage?.summary.totalCount ?? 0)} />
             <Summary label="成功" value={firstPage?.summary.successCount ?? 0} />
             <Summary label="失败" value={firstPage?.summary.failedCount ?? 0} />
@@ -180,7 +180,7 @@ export default function AdminRequestsPage() {
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(240px,1.5fr)_minmax(160px,1fr)_120px_minmax(130px,1fr)_145px_145px_auto] xl:items-end">
+          <div className="admin-request-filter-grid grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 xl:items-end">
             <label className="grid gap-1.5">
               <span className="text-sm font-medium text-slate-700">搜索</span>
               <div className="relative">
@@ -214,7 +214,7 @@ export default function AdminRequestsPage() {
             <DateInput label="开始时间" value={filters.dateFrom} onChange={(dateFrom) => setFilters({ dateFrom })} compact />
             <DateInput label="结束时间" value={filters.dateTo} onChange={(dateTo) => setFilters({ dateTo })} compact />
 
-            <div className="flex gap-2 xl:justify-end">
+            <div className="flex flex-wrap gap-2 md:col-span-2 xl:col-span-3 xl:justify-end">
               <button
                 type="button"
                 onClick={() => setAdvancedOpen((open) => !open)}

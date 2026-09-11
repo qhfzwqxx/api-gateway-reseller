@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { useId, useState } from "react";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -26,6 +27,7 @@ export function ConfirmDialog({
   onConfirm,
 }: ConfirmDialogProps) {
   const [inputValue, setInputValue] = useState("");
+  const inputId = useId();
 
   if (!open) {
     return null;
@@ -51,44 +53,65 @@ export function ConfirmDialog({
   }
 
   return (
-    <div className="admin-confirm-backdrop fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4">
-      <div className="admin-confirm-dialog w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 shadow-xl">
-        <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-500">{description}</p>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => !nextOpen && handleClose()}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="admin-confirm-backdrop" />
+        <Dialog.Content
+          className="admin-confirm-dialog max-h-[calc(100dvh-2rem)] overflow-y-auto"
+          onInteractOutside={(event) => event.preventDefault()}
+        >
+          <Dialog.Title className="text-lg font-semibold text-slate-950">
+            {title}
+          </Dialog.Title>
+          <Dialog.Description className="mt-2 text-sm leading-6 text-slate-500">
+            {description}
+          </Dialog.Description>
 
-        {requireInputText ? (
-          <div className="mt-5 space-y-2">
-            <label className="text-sm font-medium text-slate-700">
-              请输入 <span className="font-semibold text-slate-950">{requireInputText}</span> 以继续
-            </label>
-            <input
-              value={inputValue}
-              onChange={(event) => setInputValue(event.target.value)}
-              className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm outline-none transition-colors focus:border-red-500 focus:ring-2 focus:ring-red-100"
-              autoFocus
-            />
+          {requireInputText ? (
+            <div className="mt-5 space-y-2">
+              <label
+                htmlFor={inputId}
+                className="text-sm font-medium text-slate-700"
+              >
+                请输入{" "}
+                <span className="font-semibold text-slate-950">
+                  {requireInputText}
+                </span>{" "}
+                以继续
+              </label>
+              <input
+                id={inputId}
+                value={inputValue}
+                onChange={(event) => setInputValue(event.target.value)}
+                className="h-10 w-full rounded-md border border-slate-200 px-3 text-sm outline-none transition-colors focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                autoFocus
+              />
+            </div>
+          ) : null}
+
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:flex sm:justify-end">
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={loading}
+              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {cancelText}
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={!canConfirm || loading}
+              className="inline-flex min-h-11 items-center justify-center rounded-lg bg-red-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading ? "处理中" : confirmText}
+            </button>
           </div>
-        ) : null}
-
-        <div className="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            onClick={handleClose}
-            disabled={loading}
-            className="inline-flex h-10 items-center rounded-md border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {cancelText}
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirm}
-            disabled={!canConfirm || loading}
-            className="inline-flex h-10 items-center rounded-md bg-red-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? "处理中" : confirmText}
-          </button>
-        </div>
-      </div>
-    </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

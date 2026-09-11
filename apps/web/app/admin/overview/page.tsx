@@ -112,19 +112,19 @@ function KpiSection({ data, isLoading }: { data?: OverviewData; isLoading: boole
   ];
 
   return (
-    <section className="grid shrink-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <section className="admin-overview-metrics grid shrink-0 gap-3" aria-label="核心经营指标">
       {items.map((item) => (
         <Card key={item.label}>
           {isLoading ? (
             <SkeletonCard />
           ) : (
-            <div className="flex items-start justify-between gap-4">
+            <div className="relative flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-slate-500">{item.label}</p>
-                <p className="mt-1 truncate text-xl font-semibold tabular-nums text-slate-950">{item.value}</p>
+                <p className="mt-1 break-all text-xl font-semibold tabular-nums text-slate-950">{item.value}</p>
                 <p className="mt-1 text-xs text-slate-400">{item.caption}</p>
               </div>
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700">
+              <div className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-700 sm:flex">
                 <item.icon className="h-5 w-5" aria-hidden="true" />
               </div>
             </div>

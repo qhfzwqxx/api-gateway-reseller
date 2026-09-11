@@ -28,12 +28,12 @@ export function SettingCard<TInput extends FieldValues, TOutput extends FieldVal
   onSubmit,
 }: SettingCardProps<TInput, TOutput>) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-200 px-5 py-4">
+    <section className="min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-4 py-4 sm:px-5">
         <h3 className="text-base font-semibold text-slate-950">{title}</h3>
         <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p>
       </div>
-      <form id={formId} className="p-5" onSubmit={form.handleSubmit(onSubmit)}>
+      <form id={formId} className="p-4 sm:p-5" onSubmit={form.handleSubmit(onSubmit)}>
         <div className="grid gap-4">{children}</div>
         {hideActions ? null : (
           <div className="setting-card-actions mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-5">
@@ -41,7 +41,7 @@ export function SettingCard<TInput extends FieldValues, TOutput extends FieldVal
             <button
               type="submit"
               disabled={loading}
-              className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
             >
               <Save className="h-4 w-4" aria-hidden="true" />
               {loading ? "保存中" : "保存更改"}
