@@ -210,7 +210,7 @@ export default function AdminModelPoolsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="admin-model-pools-page space-y-4">
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -275,7 +275,7 @@ export default function AdminModelPoolsPage() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <form className="grid gap-3 xl:grid-cols-[minmax(220px,1fr)_220px_150px_190px_auto_auto_auto]" onSubmit={form.handleSubmit(submitPool)}>
+        <form className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" onSubmit={form.handleSubmit(submitPool)}>
           <label className="grid gap-2"><span className="text-sm font-medium text-slate-700">模型</span><input list="priced-models" className={inputClass} {...form.register("model")} /><datalist id="priced-models">{Array.from(pricedModels).map((model) => <option value={model} key={model} />)}</datalist>{form.formState.errors.model ? <span className="text-sm text-red-600">{form.formState.errors.model.message}</span> : null}</label>
           <label className="grid gap-2"><span className="text-sm font-medium text-slate-700">访问等级</span><select className={inputClass} {...form.register("tierId")}><option value="">选择等级</option>{tiers.map((tier) => <option value={tier.id} key={tier.id}>{tier.name}</option>)}</select></label>
           <label className="grid gap-2"><span className="text-sm font-medium text-slate-700">状态</span><select className={inputClass} {...form.register("status")}><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select></label>
@@ -566,7 +566,7 @@ function ChannelCardSection({
         <h4 className="text-sm font-semibold text-slate-950">{title}</h4>
         <span className="rounded-md bg-white px-2 py-1 text-xs font-semibold tabular-nums text-slate-600">{channels.length}</span>
       </div>
-      <div className="grid grid-cols-3 content-start gap-1.5 overflow-y-auto p-2">
+      <div className="admin-pool-channel-grid grid content-start gap-3 p-3">
         {channels.map((channel, index) => (
           <ChannelCard
             key={channel.id}
@@ -614,19 +614,19 @@ function ChannelCard({
   const errorText = formatChannelError(channel.lastError);
   const priceStatus = channel.hasPrice && channel.priceEnabled ? "已开" : channel.hasPrice ? "停用" : "缺失";
   return (
-    <article className="rounded-md border border-slate-200 bg-white p-2 shadow-sm">
+    <article className="admin-pool-channel-card min-w-0 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <div className="grid gap-1.5">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             {rank ? <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">#{rank}</span> : null}
-            <h5 className="truncate text-xs font-semibold text-slate-950">{channel.upstreamProvider}</h5>
+            <h5 className="min-w-0 break-words text-sm font-semibold text-slate-950">{channel.upstreamProvider}</h5>
             <span className={statusDotClass(channel.effectiveStatus)} aria-hidden="true" />
           </div>
           <ProviderGroupBadge
             groupName={channel.providerGroupName}
             className="mt-1 max-w-full"
           />
-          <div className="mt-1 grid grid-cols-2 gap-1">
+          <div className="admin-pool-status-grid mt-2 grid grid-cols-2 gap-2">
             <CompactStatus label="通道" value={channel.effectiveStatusLabel ?? compactStatusLabel(channel.effectiveStatus ?? "-")} />
             <CompactStatus label="调度" value={channel.statusLabel ?? channelStatusLabel(channel.status)} />
             <CompactStatus label="定价" value={priceStatus} />
@@ -638,7 +638,7 @@ function ChannelCard({
         </select>
       </div>
 
-      <div className="mt-1.5 grid grid-cols-3 gap-1">
+      <div className="admin-pool-facts-grid mt-3 grid grid-cols-3 gap-2">
         <Fact label="免检" value={successGraceCountdownText(channel, healthCheck, nowMs)} />
         <Fact label="下次检测" value={checking ? "检测中" : nextCheckCountdown(channel, healthCheck, nowMs, pool.autoHealthCheckEnabled)} />
         <Fact label="惩罚" value={penaltyCountdown(channel, healthCheck, nowMs)} />
@@ -653,7 +653,7 @@ function ChannelCard({
       {errorText ? <div className="mt-1.5 line-clamp-2 rounded-md border border-red-100 bg-red-50 px-2 py-1 text-[11px] text-red-700"><span className="font-semibold">错误：</span>{errorText}</div> : null}
       {channel.unavailableReasons?.length ? <div className="mt-1.5 line-clamp-2 rounded-md border border-amber-100 bg-amber-50 px-2 py-1 text-[11px] text-amber-800"><span className="font-semibold">不可用：</span>{channel.unavailableReasons.join("；")}</div> : null}
 
-      <div className="mt-1.5 flex flex-wrap justify-end gap-1">
+      <div className="admin-pool-channel-actions mt-3 flex flex-wrap gap-2">
         {canManualCheckChannel(channel) ? <button type="button" onClick={() => onCheck(channel.id)} className={smallButton}><RefreshCw className="h-4 w-4" />检测</button> : null}
         {forceAvailableButtonEnabled && channel.status !== "FORCED_ACTIVE" ? <button type="button" onClick={() => onSetStatus(channel.id, "FORCED_ACTIVE")} className={forceSmallButton}><ShieldCheck className="h-4 w-4" />强制可用</button> : null}
         <button type="button" onClick={() => onDelete(channel.id)} className={dangerSmallButton}><Trash2 className="h-4 w-4" />删除</button>
@@ -663,11 +663,11 @@ function ChannelCard({
 }
 
 function CompactStatus({ label, value }: { label: string; value: string }) {
-  return <span className="grid min-w-0 gap-0 rounded border border-slate-200 bg-slate-50 px-1 py-0.5 text-[9px] leading-tight text-slate-500"><span className="truncate">{label}</span><strong className="truncate text-[10px] text-slate-800">{compactStatusLabel(value)}</strong></span>;
+  return <span className="grid min-w-0 gap-1 rounded border border-slate-200 bg-slate-50 p-2 text-xs leading-5 text-slate-500"><span>{label}</span><strong className="break-words text-slate-800">{compactStatusLabel(value)}</strong></span>;
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
-  return <div className="min-w-0 rounded border border-slate-200 bg-slate-50 px-1 py-0.5"><div className="truncate text-[9px] text-slate-500">{label}</div><div className="truncate text-[10px] font-semibold tabular-nums text-slate-950">{value}</div></div>;
+  return <div className="min-w-0 rounded border border-slate-200 bg-slate-50 p-2"><div className="text-xs leading-5 text-slate-500">{label}</div><div className="break-words text-sm font-semibold tabular-nums text-slate-950">{value}</div></div>;
 }
 
 export type HealthCheckRuntime = {

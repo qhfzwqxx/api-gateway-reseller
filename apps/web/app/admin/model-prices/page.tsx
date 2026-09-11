@@ -163,7 +163,7 @@ export default function AdminModelPricesPage() {
               <article key={group.model} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="truncate text-base font-semibold text-slate-950">{group.model}</h3>
+                    <h3 className="break-words text-base font-semibold text-slate-950">{group.model}</h3>
                     <p className="mt-1 text-xs text-slate-500">
                       {group.prices.length} 条渠道价格 · {group.prices.filter((price) => price.enabled).length} 条启用
                     </p>
@@ -247,12 +247,12 @@ function ModelPriceGroupModal({
   if (!group) return null;
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 p-5">
+    <div className="admin-price-group-modal fixed inset-0 z-40 flex items-center justify-center bg-slate-950/40 p-3 sm:p-5">
       <section className="flex max-h-[86vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+        <div className="flex shrink-0 flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-6">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
-              <h2 className="truncate text-lg font-semibold text-slate-950">{group.model}</h2>
+              <h2 className="break-all text-lg font-semibold text-slate-950">{group.model}</h2>
               <Badge active={Boolean(group.setting?.enabled)}>{group.setting?.enabled ? "统一模式" : "普通模式"}</Badge>
               {group.hasDifferentOriginalCustomerPricing ? <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">渠道原价有差异</span> : null}
             </div>
@@ -262,10 +262,11 @@ function ModelPriceGroupModal({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <button type="button" onClick={onUnifiedMode} className={secondaryButton}>管理统一模式</button>
-            <button type="button" onClick={onClose} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+            <button type="button" onClick={onClose} aria-label="关闭渠道价格" className="inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"><X className="h-4 w-4" /></button>
           </div>
         </div>
-        <div className="overflow-auto">
+        <p className="shrink-0 border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600 sm:hidden">左右滑动查看完整价格及操作，上下滑动切换渠道。</p>
+        <div className="overflow-auto" tabIndex={0} role="region" aria-label="渠道价格明细，可横向滚动">
           <table className="w-full min-w-[1080px] text-left">
             <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
               <tr>
