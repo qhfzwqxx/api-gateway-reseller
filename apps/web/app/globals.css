@@ -12698,8 +12698,8 @@ td .button-row.compact {
     max-width: 100%;
   }
 
-  #admin-main-scroll .space-y-5 > :not([hidden]) ~ :not([hidden]),
-  #admin-main-scroll .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+  #admin-main-scroll .space-y-5 > :not([hidden]) ~ :not([hidden]):not(.fixed),
+  #admin-main-scroll .space-y-6 > :not([hidden]) ~ :not([hidden]):not(.fixed) {
     margin-top: 14px;
   }
 
