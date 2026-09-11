@@ -41,6 +41,14 @@ const relativePattern = /`((?:\.\.\/)+(?:references|skills|scripts|assets|schema
 const localPathPattern = /`((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:md|py|ps1|json|ya?ml|txt|ts|js|mjs|cjs))`/gu;
 const competitionSkillPattern = /\$(competition-[a-z0-9-]+)/gu;
 
+// Deployments should remain usable when the optional remote mirror is slow or unavailable.
+// A verified local mirror is sufficient for the runtime and avoids rebuilding duplicate files.
+const localLicense = await readFile(join(outputRoot, "LICENSE"), "utf8").catch(() => "");
+if (localLicense.trim() && process.env.FORCE_SECURITY_RESEARCH_SYNC !== "1") {
+  console.log("Using the existing local Security Research Skill mirror.");
+  process.exit(0);
+}
+
 await rm(cachedRoot, { recursive: true, force: true });
 try {
   await rename(outputRoot, cachedRoot);
