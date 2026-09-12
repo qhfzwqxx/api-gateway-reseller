@@ -15,7 +15,6 @@ import {
   type GetRequestsParams,
 } from "../../../lib/api/requests";
 import { getAdminUsers } from "../../../lib/api/users";
-import { AdminScrollLock } from "../components/admin-scroll-lock";
 import { RequestDetailDrawer } from "./components/request-detail-drawer";
 
 const defaultFilters = {
@@ -157,8 +156,7 @@ export default function AdminRequestsPage() {
   const users = usersQuery.data ?? [];
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <AdminScrollLock />
+    <div className="admin-request-log-page flex h-full min-h-0 flex-col">
       <div className="shrink-0 space-y-4 pb-4">
         <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -286,7 +284,7 @@ export default function AdminRequestsPage() {
       ) : null}
       </div>
 
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <section className="admin-request-log-results flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="shrink-0 flex items-center justify-between border-b border-slate-200 px-5 py-3">
           <h3 className="text-base font-semibold text-slate-950">请求列表</h3>
           <span className="text-sm text-slate-500">已加载 {rows.length} 条</span>
@@ -465,7 +463,7 @@ function TokenBreakdown({ request }: { request: ApiRequestRecord }) {
 
   return (
     <div className="w-full rounded-md border border-slate-200 bg-slate-50 p-1.5">
-      <div className="grid grid-cols-3 gap-2">
+      <div className="admin-request-token-grid grid grid-cols-3 gap-2">
         {items.map((item) => (
           <div key={item.label} className="rounded-md bg-white px-1.5 py-1 ring-1 ring-slate-200">
             <div className="text-[11px] font-medium text-slate-500">{item.label}</div>
@@ -502,7 +500,7 @@ function CostBreakdown({ request }: { request: ApiRequestRecord }) {
 
   return (
     <div className="w-full rounded-md border border-slate-200 bg-slate-50 p-1.5">
-      <div className="grid grid-cols-2 gap-1.5">
+      <div className="admin-request-cost-grid grid grid-cols-2 gap-1.5">
         {items.map((item) => (
           <div key={item.label} className="rounded-md bg-white px-1.5 py-1 ring-1 ring-slate-200">
             <div className="text-[11px] font-medium text-slate-500">{item.label}</div>

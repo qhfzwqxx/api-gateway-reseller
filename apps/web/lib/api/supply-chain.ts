@@ -2,6 +2,7 @@ import http from "../http";
 
 export type UpstreamProviderStatus = "ACTIVE" | "DISABLED";
 export type CompactItemType = "compaction" | "compaction_summary";
+export type UpstreamProviderLevel = "FREE" | "TEAM" | "PLUS" | "PRO";
 
 export interface UpstreamProviderKey {
   id: string;
@@ -28,6 +29,7 @@ export interface UpstreamProvider {
   id: string;
   name: string;
   groupName: string | null;
+  levelTags: UpstreamProviderLevel[];
   baseUrl: string;
   apiKey: string;
   priority: number;
@@ -51,6 +53,7 @@ export interface UpstreamProviderGroup {
 export interface UpstreamProviderInput {
   name: string;
   groupName: string | null;
+  levelTags: UpstreamProviderLevel[];
   baseUrl: string;
   apiKey?: string;
   priority: number;

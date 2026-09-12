@@ -613,7 +613,24 @@ function ChannelCard({
 }) {
   const errorText = formatChannelError(channel.lastError);
   const priceStatus = channel.hasPrice && channel.priceEnabled ? "已开" : channel.hasPrice ? "停用" : "缺失";
+  const factFields = <>
+    <Fact label="免检" value={successGraceCountdownText(channel, healthCheck, nowMs)} />
+    <Fact label="下次检测" value={checking ? "检测中" : nextCheckCountdown(channel, healthCheck, nowMs, pool.autoHealthCheckEnabled)} />
+    <Fact label="惩罚" value={penaltyCountdown(channel, healthCheck, nowMs)} />
+    <Fact label="ACTIVE Key" value={String(channel.activeKeyCount ?? 0)} />
+    <Fact label="优先级" value={String(channel.priority)} />
+    <Fact label="连续失败" value={String(channel.consecutiveFailures)} />
+    <Fact label="恢复" value={`${channel.recoverySuccesses}/2`} />
+    <Fact label="首字耗时" value={secondsText(channel.lastFirstTokenLatencyMs)} />
+    <Fact label="总耗时" value={secondsText(channel.lastLatencyMs)} />
+  </>;
+  const actionButtons = <>
+    {canManualCheckChannel(channel) ? <button type="button" onClick={() => onCheck(channel.id)} className={smallButton}><RefreshCw className="h-4 w-4" />检测</button> : null}
+    {forceAvailableButtonEnabled && channel.status !== "FORCED_ACTIVE" ? <button type="button" onClick={() => onSetStatus(channel.id, "FORCED_ACTIVE")} className={forceSmallButton}><ShieldCheck className="h-4 w-4" />强制可用</button> : null}
+    <button type="button" onClick={() => onDelete(channel.id)} className={dangerSmallButton}><Trash2 className="h-4 w-4" />删除</button>
+  </>;
   return (
+    <>
     <article className="admin-pool-channel-card min-w-0 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <div className="grid gap-1.5">
         <div className="min-w-0">
@@ -639,26 +656,53 @@ function ChannelCard({
       </div>
 
       <div className="admin-pool-facts-grid mt-3 grid grid-cols-3 gap-2">
-        <Fact label="免检" value={successGraceCountdownText(channel, healthCheck, nowMs)} />
-        <Fact label="下次检测" value={checking ? "检测中" : nextCheckCountdown(channel, healthCheck, nowMs, pool.autoHealthCheckEnabled)} />
-        <Fact label="惩罚" value={penaltyCountdown(channel, healthCheck, nowMs)} />
-        <Fact label="ACTIVE Key" value={String(channel.activeKeyCount ?? 0)} />
-        <Fact label="优先级" value={String(channel.priority)} />
-        <Fact label="连续失败" value={String(channel.consecutiveFailures)} />
-        <Fact label="恢复" value={`${channel.recoverySuccesses}/2`} />
-        <Fact label="首字耗时" value={secondsText(channel.lastFirstTokenLatencyMs)} />
-        <Fact label="总耗时" value={secondsText(channel.lastLatencyMs)} />
+        {factFields}
       </div>
 
       {errorText ? <div className="mt-1.5 line-clamp-2 rounded-md border border-red-100 bg-red-50 px-2 py-1 text-[11px] text-red-700"><span className="font-semibold">错误：</span>{errorText}</div> : null}
       {channel.unavailableReasons?.length ? <div className="mt-1.5 line-clamp-2 rounded-md border border-amber-100 bg-amber-50 px-2 py-1 text-[11px] text-amber-800"><span className="font-semibold">不可用：</span>{channel.unavailableReasons.join("；")}</div> : null}
 
       <div className="admin-pool-channel-actions mt-3 flex flex-wrap gap-2">
-        {canManualCheckChannel(channel) ? <button type="button" onClick={() => onCheck(channel.id)} className={smallButton}><RefreshCw className="h-4 w-4" />检测</button> : null}
-        {forceAvailableButtonEnabled && channel.status !== "FORCED_ACTIVE" ? <button type="button" onClick={() => onSetStatus(channel.id, "FORCED_ACTIVE")} className={forceSmallButton}><ShieldCheck className="h-4 w-4" />强制可用</button> : null}
-        <button type="button" onClick={() => onDelete(channel.id)} className={dangerSmallButton}><Trash2 className="h-4 w-4" />删除</button>
+        {actionButtons}
       </div>
     </article>
+    <article className="admin-pool-channel-mobile-card rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="admin-pool-mobile-heading">
+        <h5 title={channel.upstreamProvider}>{channel.upstreamProvider}</h5>
+        <ProviderGroupBadge groupName={channel.providerGroupName} className="max-w-full" />
+      </div>
+      <div className="admin-pool-mobile-state">
+        <span className={statusDotClass(channel.effectiveStatus)} aria-hidden="true" />
+        <span>{channel.effectiveStatusLabel ?? compactStatusLabel(channel.effectiveStatus ?? "-")}</span>
+        {rank ? <span className="ml-auto text-blue-700">#{rank}</span> : null}
+      </div>
+      <dl className="admin-pool-mobile-metrics">
+        <div><dt>优先级</dt><dd>{channel.priority}</dd></div>
+        <div><dt>首字耗时</dt><dd>{secondsText(channel.lastFirstTokenLatencyMs)}</dd></div>
+        <div><dt>可用 Key</dt><dd>{channel.activeKeyCount ?? 0}</dd></div>
+      </dl>
+      <details className="admin-pool-mobile-details">
+        <summary>详情与操作</summary>
+        <div className="admin-pool-mobile-detail-body">
+          <strong>{channel.upstreamProvider}</strong>
+          <div className="grid gap-2">
+            <CompactStatus label="调度" value={channel.statusLabel ?? channelStatusLabel(channel.status)} />
+            <CompactStatus label="定价" value={priceStatus} />
+            <CompactStatus label="上游" value={channel.providerStatus ?? "-"} />
+          </div>
+          <label className="grid gap-1 text-xs text-slate-600">修改状态
+            <select aria-label={`${channel.upstreamProvider} 渠道状态`} value={channel.status} onChange={(event) => onSetStatus(channel.id, event.target.value as PoolChannelStatus)} className="rounded-md border border-slate-200 bg-white px-2">
+              {channelStatuses.map((status) => <option key={status} value={status}>{channelStatusLabel(status)}</option>)}
+            </select>
+          </label>
+          <div className="grid gap-2">{factFields}</div>
+          {errorText ? <p className="rounded-md bg-red-50 p-2 text-xs text-red-700">错误：{errorText}</p> : null}
+          {channel.unavailableReasons?.length ? <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-800">不可用：{channel.unavailableReasons.join("；")}</p> : null}
+          <div className="admin-pool-mobile-detail-actions">{actionButtons}</div>
+        </div>
+      </details>
+    </article>
+    </>
   );
 }
 

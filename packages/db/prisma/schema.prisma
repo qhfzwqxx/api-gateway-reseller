@@ -662,6 +662,7 @@ model UpstreamProvider {
   id              String                 @id @default(cuid())
   name            String                 @unique
   groupName       String?
+  levelTags       String[]               @default([])
   baseUrl         String
   apiKey          String
   status          UpstreamProviderStatus @default(ACTIVE)

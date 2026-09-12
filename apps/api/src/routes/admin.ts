@@ -5963,6 +5963,7 @@ export async function adminRoutes(app: FastifyInstance) {
       .object({
         name: z.string().min(1).max(80),
         groupName: z.string().trim().max(80).nullable().optional(),
+        levelTags: z.array(z.enum(["FREE", "TEAM", "PLUS", "PRO"])).max(4).default([]),
         baseUrl: z.string().url(),
         apiKey: z.string().min(1),
         priority: z.number().int().min(1).max(10000).default(100),
@@ -5986,6 +5987,7 @@ export async function adminRoutes(app: FastifyInstance) {
       where: { name: body.name },
       update: {
         ...(body.groupName !== undefined ? { groupName } : {}),
+        levelTags: body.levelTags,
         baseUrl: body.baseUrl.replace(/\/+$/, ""),
         apiKey: body.apiKey,
         priority: body.priority,
@@ -6012,6 +6014,7 @@ export async function adminRoutes(app: FastifyInstance) {
       .object({
         name: z.string().min(1).max(80).optional(),
         groupName: z.string().trim().max(80).nullable().optional(),
+        levelTags: z.array(z.enum(["FREE", "TEAM", "PLUS", "PRO"])).max(4).optional(),
         baseUrl: z.string().url().optional(),
         apiKey: z.string().optional(),
         priority: z.number().int().min(1).max(10000).optional(),

@@ -35,6 +35,7 @@ import {
   type UpstreamProviderInput,
   type UpstreamProviderKey,
   type UpstreamProviderKeyInput,
+  type UpstreamProviderLevel,
 } from "../../../lib/api/supply-chain";
 
 const providerSchema = z.object({
@@ -45,6 +46,7 @@ const providerSchema = z.object({
     .max(80, "分组名称最多 80 个字符")
     .optional()
     .or(z.literal("")),
+  levelTags: z.array(z.enum(["FREE", "TEAM", "PLUS", "PRO"])).default([]),
   baseUrl: z.string().trim().url("请输入有效 URL"),
   apiKey: z.string().optional().or(z.literal("")),
   priority: z.coerce.number().int().min(1).max(10000),
@@ -82,6 +84,16 @@ type KeyEditorState = {
 type BatchKeyState = {
   provider: UpstreamProvider;
 } | null;
+
+const providerLevelOptions: Array<{
+  value: UpstreamProviderLevel;
+  label: string;
+}> = [
+  { value: "FREE", label: "Free" },
+  { value: "TEAM", label: "Team" },
+  { value: "PLUS", label: "Plus" },
+  { value: "PRO", label: "Pro" },
+];
 
 export default function AdminUpstreamsPage() {
   const queryClient = useQueryClient();
@@ -148,6 +160,7 @@ export default function AdminUpstreamsPage() {
       const payload: UpstreamProviderInput = {
         name: values.name.trim(),
         groupName: values.groupName?.trim() || null,
+        levelTags: values.levelTags,
         baseUrl: values.baseUrl,
         apiKey: values.apiKey ?? "",
         priority: values.priority,
@@ -396,11 +409,12 @@ export default function AdminUpstreamsPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-[1080px] w-full text-left">
+            <table className="min-w-[1160px] w-full text-left">
               <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
                 <tr>
                   <th className="px-5 py-3">名称 / Base URL</th>
                   <th className="px-5 py-3">所属分组</th>
+                  <th className="px-5 py-3">等级</th>
                   <th className="px-5 py-3">密钥</th>
                   <th className="px-5 py-3">优先级</th>
                   <th className="px-5 py-3">超时</th>
@@ -422,6 +436,9 @@ export default function AdminUpstreamsPage() {
                     </td>
                     <td className="px-5 py-4">
                       <ProviderGroupBadge groupName={provider.groupName} />
+                    </td>
+                    <td className="px-5 py-4">
+                      <ProviderLevelTags levelTags={provider.levelTags} />
                     </td>
                     <td className="px-5 py-4">
                       <div className="font-mono text-xs text-slate-600">
@@ -485,7 +502,7 @@ export default function AdminUpstreamsPage() {
                   <tr>
                     <td
                       className="px-5 py-8 text-center text-sm text-slate-500"
-                      colSpan={8}
+                      colSpan={9}
                     >
                       暂无可见上游，已隐藏的上游可在隐藏区恢复。
                     </td>
@@ -517,11 +534,12 @@ export default function AdminUpstreamsPage() {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-6">
               <div className="overflow-x-auto rounded-lg border border-slate-200">
-                <table className="min-w-[1080px] w-full text-left">
+                <table className="min-w-[1160px] w-full text-left">
                   <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
                     <tr>
                       <th className="px-5 py-3">名称 / Base URL</th>
                       <th className="px-5 py-3">所属分组</th>
+                      <th className="px-5 py-3">等级</th>
                       <th className="px-5 py-3">密钥</th>
                       <th className="px-5 py-3">优先级</th>
                       <th className="px-5 py-3">超时</th>
@@ -543,6 +561,9 @@ export default function AdminUpstreamsPage() {
                         </td>
                         <td className="px-5 py-4">
                           <ProviderGroupBadge groupName={provider.groupName} />
+                        </td>
+                        <td className="px-5 py-4">
+                          <ProviderLevelTags levelTags={provider.levelTags} />
                         </td>
                         <td className="px-5 py-4">
                           <div className="font-mono text-xs text-slate-600">
@@ -584,7 +605,7 @@ export default function AdminUpstreamsPage() {
                       <tr>
                         <td
                           className="px-5 py-8 text-center text-sm text-slate-500"
-                          colSpan={8}
+                          colSpan={9}
                         >
                           隐藏区暂无上游
                         </td>
@@ -1361,6 +1382,33 @@ function ProviderModal({
                   : "分组需要先通过页面右上角“新建分组”创建；留空表示未分组。"}
               </p>
             </Field>
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-medium text-slate-700">等级标签</legend>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="上游等级标签">
+                {providerLevelOptions.map((option) => (
+                  <label
+                    key={option.value}
+                    className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <input
+                      type="checkbox"
+                      value={option.value}
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      {...form.register("levelTags")}
+                    />
+                    {option.label}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs leading-5 text-slate-500">
+                可多选；用于标记该上游支持的 Free、Team、Plus、Pro 等级，不影响现有分组与路由。
+              </p>
+              {form.formState.errors.levelTags ? (
+                <span className="text-sm text-red-600">
+                  {form.formState.errors.levelTags.message}
+                </span>
+              ) : null}
+            </fieldset>
             <Field
               label="Base URL"
               error={form.formState.errors.baseUrl?.message}
@@ -1459,6 +1507,7 @@ function defaultValues(provider: UpstreamProvider | null): ProviderInput {
   return {
     name: provider?.name ?? "",
     groupName: provider?.groupName ?? "",
+    levelTags: provider?.levelTags ?? [],
     baseUrl: provider?.baseUrl ?? "",
     apiKey: "",
     priority: provider?.priority ?? 100,
@@ -1520,6 +1569,29 @@ function Badge({
     >
       {children}
     </span>
+  );
+}
+
+function ProviderLevelTags({
+  levelTags,
+}: {
+  levelTags: UpstreamProviderLevel[];
+}) {
+  if (levelTags.length === 0) {
+    return <span className="text-xs text-slate-400">未标记</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {levelTags.map((level) => (
+        <span
+          key={level}
+          className="inline-flex rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-semibold text-violet-700"
+        >
+          {providerLevelOptions.find((option) => option.value === level)?.label ?? level}
+        </span>
+      ))}
+    </div>
   );
 }
 

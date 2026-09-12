@@ -13518,6 +13518,227 @@ td .button-row.compact {
   }
 }
 
+@media (max-width: 767px) {
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-status-grid,
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-facts-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-status-grid > * {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 8px;
+    padding: 8px;
+  }
+
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-facts-grid > * {
+    padding: 8px;
+  }
+
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-facts-grid > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 4px 8px;
+  }
+
+  #admin-main-scroll .admin-pool-channel-card h5 {
+    overflow-wrap: anywhere;
+    line-height: 1.5;
+  }
+
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-channel-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-channel-actions > button {
+    width: 100%;
+    min-height: 44px;
+    padding: 8px;
+  }
+
+  #admin-main-scroll .admin-pool-channel-card .admin-pool-channel-actions > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+
+#admin-main-scroll .admin-request-log-page {
+  height: auto;
+  min-height: 100%;
+}
+
+#admin-main-scroll .admin-request-log-results {
+  flex: 1 0 auto;
+}
+
+@media (min-width: 768px) {
+  #admin-main-scroll .admin-request-log-page .admin-request-desktop-table {
+    flex: none;
+    height: clamp(360px, 55vh, 720px);
+  }
+
+  #admin-main-scroll .admin-request-desktop-table table {
+    min-width: 960px;
+  }
+
+  #admin-main-scroll .admin-request-desktop-table :is(.admin-request-token-grid, .admin-request-cost-grid) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  #admin-main-scroll .admin-request-desktop-table :is(.admin-request-token-grid, .admin-request-cost-grid) > div {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  #admin-main-scroll .admin-request-desktop-table :is(.admin-request-token-grid, .admin-request-cost-grid) > div > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  #admin-main-scroll .admin-request-desktop-table :is(.admin-request-token-grid, .admin-request-cost-grid) > div > div:last-child {
+    margin-top: 0;
+    text-align: right;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+@media (max-width: 767px) {
+  #admin-main-scroll .admin-request-log-page .admin-request-mobile-list {
+    overflow: visible;
+  }
+}
+
+.admin-pool-channel-mobile-card {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  #admin-main-scroll .admin-pool-channel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 8px;
+  }
+
+  #admin-main-scroll .admin-pool-channel-grid > .admin-pool-channel-card {
+    display: none;
+  }
+
+  #admin-main-scroll .admin-pool-channel-grid > :not(article) {
+    grid-column: 1 / -1;
+  }
+
+  #admin-main-scroll .admin-pool-channel-mobile-card {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 10px;
+    gap: 10px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-heading h5 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    min-height: 36px;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-state {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-state > span:first-child {
+    flex-shrink: 0;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-metrics {
+    display: grid;
+    gap: 6px;
+    padding-block: 8px;
+    border-block: 1px solid #e2e8f0;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-metrics > div {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 6px;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-metrics dt {
+    color: #64748b;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-metrics dd {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-details {
+    margin-top: auto;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-details > summary {
+    min-height: 44px;
+    padding: 12px 4px;
+    border-radius: 6px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    cursor: pointer;
+    font-weight: 600;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-details > summary:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-detail-body {
+    display: grid;
+    gap: 10px;
+    padding-top: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-detail-body > * {
+    min-width: 0;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-detail-actions {
+    display: grid;
+    gap: 8px;
+  }
+
+  #admin-main-scroll .admin-pool-mobile-detail-actions > button {
+    min-height: 44px;
+    width: 100%;
+    justify-content: center;
+    padding: 8px 4px;
+  }
+}
+
 /* Model-pool channel cards: keep the desktop grid visually consistent. */
 @media (min-width: 768px) {
   #admin-main-scroll .admin-pool-channel-grid {
