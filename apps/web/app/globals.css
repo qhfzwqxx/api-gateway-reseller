@@ -13522,7 +13522,6 @@ td .button-row.compact {
 @media (min-width: 768px) {
   #admin-main-scroll .admin-pool-channel-grid {
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    grid-auto-rows: 380px;
     align-items: stretch;
   }
 
@@ -13532,12 +13531,10 @@ td .button-row.compact {
     height: 100%;
     min-height: 0;
     flex-direction: column;
-    overflow: hidden;
   }
 
   #admin-main-scroll .admin-pool-channel-card > .admin-pool-facts-grid {
-    min-height: 0;
-    overflow: hidden;
+    min-width: 0;
   }
 
   #admin-main-scroll .admin-pool-channel-card > .admin-pool-channel-actions {
@@ -13554,16 +13551,6 @@ td .button-row.compact {
   #admin-main-scroll .admin-pool-channel-card .admin-pool-status-grid > *,
   #admin-main-scroll .admin-pool-channel-card .admin-pool-facts-grid > * {
     min-width: 0;
-    overflow: hidden;
-  }
-
-  #admin-main-scroll .admin-pool-channel-card .admin-pool-status-grid strong,
-  #admin-main-scroll .admin-pool-channel-card .admin-pool-facts-grid strong {
-    display: block;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
 }
