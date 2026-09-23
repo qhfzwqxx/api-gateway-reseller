@@ -59,9 +59,7 @@ async function main() {
       keys: {
         where: {
           status: "ACTIVE",
-          ...(configuredKeyIds
-            ? { id: { in: [...configuredKeyIds] } }
-            : {}),
+          ...(configuredKeyIds ? { id: { in: [...configuredKeyIds] } } : {}),
         },
         orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       },
@@ -87,16 +85,18 @@ async function main() {
   }
 
   const configuredTargets = readConfiguredTargets();
-  const jobInputs = providers.flatMap((provider) =>
-    (modelsByProvider.get(provider.name) ?? []).map((model) => ({
-      provider,
-      model,
-    })),
-  ).filter(
-    (input) =>
-      configuredTargets === null ||
-      configuredTargets.has(targetKey(input.provider.name, input.model)),
-  );
+  const jobInputs = providers
+    .flatMap((provider) =>
+      (modelsByProvider.get(provider.name) ?? []).map((model) => ({
+        provider,
+        model,
+      })),
+    )
+    .filter(
+      (input) =>
+        configuredTargets === null ||
+        configuredTargets.has(targetKey(input.provider.name, input.model)),
+    );
   const results: AuditResult[] = new Array(jobInputs.length);
   let cursor = 0;
 
@@ -158,7 +158,10 @@ function readConfiguredTargets() {
   if (!value) {
     return null;
   }
-  const parsed = JSON.parse(value) as Array<{ provider: string; model: string }>;
+  const parsed = JSON.parse(value) as Array<{
+    provider: string;
+    model: string;
+  }>;
   return new Set(parsed.map((item) => targetKey(item.provider, item.model)));
 }
 
@@ -180,7 +183,9 @@ function targetKey(provider: string, model: string) {
 }
 
 async function auditProviderModel(
-  provider: Awaited<ReturnType<typeof prisma.upstreamProvider.findMany>>[number] & {
+  provider: Awaited<
+    ReturnType<typeof prisma.upstreamProvider.findMany>
+  >[number] & {
     keys: Array<{
       id: string;
       name: string;
@@ -259,7 +264,8 @@ async function auditProviderModelKey(
     "/v1/responses/compact",
     {
       model,
-      instructions: "Compact this conversation while preserving the audit marker.",
+      instructions:
+        "Compact this conversation while preserving the audit marker.",
       input: buildCompactInput(),
     },
   );
@@ -381,10 +387,7 @@ async function replayCompactOutput(input: {
   return postJson(input.providerBaseUrl, input.apiKey, "/v1/responses", {
     model: input.model,
     instructions: "Reply only with OK.",
-    input: [
-      ...replayOutput,
-      { role: "user", content: "Reply only with OK." },
-    ],
+    input: [...replayOutput, { role: "user", content: "Reply only with OK." }],
     reasoning: { effort: "low" },
     store: false,
     stream: true,
@@ -426,7 +429,9 @@ async function postJson(
       status: null,
       contentType: "",
       body: null,
-      error: sanitizeText(error instanceof Error ? error.message : String(error)),
+      error: sanitizeText(
+        error instanceof Error ? error.message : String(error),
+      ),
       latencyMs: Math.round(performance.now() - startedAt),
     };
   } finally {
@@ -511,24 +516,14 @@ function rewriteCompactItems(value: unknown[], itemType: CompactItemType) {
     ) {
       return item;
     }
-    if (
-      typeof item.encrypted_content !== "string" ||
-      !item.encrypted_content
-    ) {
+    if (typeof item.encrypted_content !== "string" || !item.encrypted_content) {
       return item;
     }
     if (itemType === "compaction") {
-      const { id: _id, object: _object, ...rest } = item;
+      const { object: _object, ...rest } = item;
       return { ...rest, type: "compaction" };
     }
-    return {
-      ...item,
-      id:
-        typeof item.id === "string" && /^cmp(?:_|$)/u.test(item.id)
-          ? item.id
-          : `cmp_audit_${auditMarker}`,
-      type: "compaction_summary",
-    };
+    return { ...item, type: "compaction_summary" };
   });
 }
 

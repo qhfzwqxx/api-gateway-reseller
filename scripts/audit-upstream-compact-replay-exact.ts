@@ -22,7 +22,11 @@ type Result = {
   baseUrl: string;
   model: string;
   configuredCompactItemType: CompactItemType;
-  classification: "PASS" | "PASS_ALTERNATE_TYPE" | "REPLAY_FAILED" | "NO_ACTIVE_KEY";
+  classification:
+    | "PASS"
+    | "PASS_ALTERNATE_TYPE"
+    | "REPLAY_FAILED"
+    | "NO_ACTIVE_KEY";
   workingKeyName: string | null;
   workingCompactItemType: CompactItemType | null;
   attemptedKeyCount: number;
@@ -127,7 +131,11 @@ async function loadSample() {
       requestBody: true,
     },
   });
-  if (!row || !isRecord(row.requestBody) || !Array.isArray(row.requestBody.input)) {
+  if (
+    !row ||
+    !isRecord(row.requestBody) ||
+    !Array.isArray(row.requestBody.input)
+  ) {
     throw new Error("exact replay sample request body is unavailable");
   }
   const input = row.requestBody.input as unknown[];
@@ -164,7 +172,9 @@ async function loadSample() {
 }
 
 async function auditProvider(
-  provider: Awaited<ReturnType<typeof prisma.upstreamProvider.findMany>>[number] & {
+  provider: Awaited<
+    ReturnType<typeof prisma.upstreamProvider.findMany>
+  >[number] & {
     keys: Array<{ name: string; key: string; encryptedKey: string | null }>;
   },
   sample: Awaited<ReturnType<typeof loadSample>>,
@@ -196,7 +206,8 @@ async function auditProvider(
       });
       result.attempts.push(attempt);
       if (attempt.ok) {
-        result.classification = itemType === configured ? "PASS" : "PASS_ALTERNATE_TYPE";
+        result.classification =
+          itemType === configured ? "PASS" : "PASS_ALTERNATE_TYPE";
         result.workingKeyName = key.name;
         result.workingCompactItemType = itemType;
         return result;
@@ -266,7 +277,9 @@ async function postExactReplay(input: {
       ok: false,
       status: null,
       latencyMs: Math.round(performance.now() - startedAt),
-      error: sanitizeText(error instanceof Error ? error.message : String(error)),
+      error: sanitizeText(
+        error instanceof Error ? error.message : String(error),
+      ),
     };
   } finally {
     clearTimeout(timeout);
@@ -320,17 +333,10 @@ function normalizeCompactItem(value: unknown, type: CompactItemType) {
     return value;
   }
   if (type === "compaction") {
-    const { id: _id, object: _object, ...rest } = value;
+    const { object: _object, ...rest } = value;
     return { ...rest, type: "compaction" };
   }
-  return {
-    ...value,
-    id:
-      typeof value.id === "string" && /^cmp(?:_|$)/u.test(value.id)
-        ? value.id
-        : `cmp_exact_${Date.now()}`,
-    type: "compaction_summary",
-  };
+  return { ...value, type: "compaction_summary" };
 }
 
 function extractError(text: string) {

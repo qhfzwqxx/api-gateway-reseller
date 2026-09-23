@@ -122,7 +122,10 @@ async function main() {
   };
   const outputDir = resolve("tmp");
   await mkdir(outputDir, { recursive: true });
-  const outputPath = resolve(outputDir, "upstream-compact-replay-audit-final.json");
+  const outputPath = resolve(
+    outputDir,
+    "upstream-compact-replay-audit-final.json",
+  );
   await writeFile(outputPath, JSON.stringify(report, null, 2), "utf8");
   console.log(`REPORT_PATH=${outputPath}`);
   console.log(`SUMMARY=${JSON.stringify(report.summary)}`);
@@ -171,6 +174,7 @@ async function loadReplaySample() {
     sourceProvider: request.upstreamProvider,
     sourceKeyId: request.upstreamProviderKeyId,
     compactItem: {
+      ...(typeof compactItem.id === "string" ? { id: compactItem.id } : {}),
       type: String(compactItem.type),
       encrypted_content: compactItem.encrypted_content,
     },
@@ -182,7 +186,9 @@ async function loadReplaySample() {
 }
 
 async function auditProvider(
-  provider: Awaited<ReturnType<typeof prisma.upstreamProvider.findMany>>[number] & {
+  provider: Awaited<
+    ReturnType<typeof prisma.upstreamProvider.findMany>
+  >[number] & {
     keys: Array<{
       name: string;
       key: string;
@@ -200,7 +206,8 @@ async function auditProvider(
     baseUrl: provider.baseUrl,
     model: sample.model,
     configuredCompactItemType,
-    classification: provider.keys.length === 0 ? "NO_ACTIVE_KEY" : "REPLAY_FAILED",
+    classification:
+      provider.keys.length === 0 ? "NO_ACTIVE_KEY" : "REPLAY_FAILED",
     workingKeyName: null,
     workingCompactItemType: null,
     attemptedKeyCount: 0,
@@ -259,33 +266,36 @@ async function replay(input: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(buildUpstreamUrl(input.baseUrl, "/v1/responses"), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
+    const response = await fetch(
+      buildUpstreamUrl(input.baseUrl, "/v1/responses"),
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          model: input.sample.model,
+          instructions: "Reply only with OK.",
+          input: [
+            ...input.sample.prefixMessages,
+            normalizeCompactItem(input.sample.compactItem, input.itemType),
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Reply only with OK." }],
+            },
+          ],
+          include: [],
+          reasoning: input.sample.reasoning,
+          parallel_tool_calls: true,
+          store: false,
+          stream: true,
+        }),
+        signal: controller.signal,
       },
-      body: JSON.stringify({
-        model: input.sample.model,
-        instructions: "Reply only with OK.",
-        input: [
-          ...input.sample.prefixMessages,
-          normalizeCompactItem(input.sample.compactItem, input.itemType),
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Reply only with OK." }],
-          },
-        ],
-        include: [],
-        reasoning: input.sample.reasoning,
-        parallel_tool_calls: true,
-        store: false,
-        stream: true,
-      }),
-      signal: controller.signal,
-    });
+    );
     const text = await response.text();
     return {
       keyName: input.keyName,
@@ -302,7 +312,9 @@ async function replay(input: {
       ok: false,
       status: null,
       latencyMs: Math.round(performance.now() - startedAt),
-      error: sanitizeText(error instanceof Error ? error.message : String(error)),
+      error: sanitizeText(
+        error instanceof Error ? error.message : String(error),
+      ),
     };
   } finally {
     clearTimeout(timeout);
@@ -312,22 +324,28 @@ async function replay(input: {
 function sanitizeMessage(item: Record<string, unknown>, index: number) {
   return {
     ...item,
-    content: [{ type: "input_text", text: `Compact replay audit context ${index + 1}.` }],
+    content: [
+      {
+        type: "input_text",
+        text: `Compact replay audit context ${index + 1}.`,
+      },
+    ],
   };
 }
 
 function normalizeCompactItem(
-  item: { type: string; encrypted_content: string },
+  item: { id?: string; type: string; encrypted_content: string },
   itemType: CompactItemType,
 ) {
   if (itemType === "compaction") {
     return {
+      ...(item.id ? { id: item.id } : {}),
       type: "compaction",
       encrypted_content: item.encrypted_content,
     };
   }
   return {
-    id: `cmp_replay_audit_${Date.now()}`,
+    ...(item.id ? { id: item.id } : {}),
     type: "compaction_summary",
     encrypted_content: item.encrypted_content,
   };

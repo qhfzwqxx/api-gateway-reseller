@@ -16,8 +16,7 @@ export function prepareCompactEndpointRequestBody(value: unknown) {
   const compactBody = { ...value };
   if (Array.isArray(compactBody.input)) {
     compactBody.input = compactBody.input.filter(
-      (item) =>
-        !isPlainRecord(item) || item.type !== "compaction_trigger",
+      (item) => !isPlainRecord(item) || item.type !== "compaction_trigger",
     );
   }
   delete compactBody.stream;
@@ -60,6 +59,29 @@ export function normalizeCodexCompactionOutput<T>(value: T) {
     value: normalized.value as T,
     replacements: normalized.replacements,
   };
+}
+
+export function normalizeCompactItemForTarget(
+  item: unknown,
+  targetItemType: "compaction" | "compaction_summary",
+) {
+  if (
+    !isPlainRecord(item) ||
+    typeof item.encrypted_content !== "string" ||
+    !item.encrypted_content
+  ) {
+    return item;
+  }
+
+  const { object: _object, ...rest } = item;
+  if (
+    item.type === targetItemType &&
+    !Object.prototype.hasOwnProperty.call(item, "object")
+  ) {
+    return item;
+  }
+
+  return { ...rest, type: targetItemType };
 }
 
 export function normalizeCodexDirectCompactionResponse(value: unknown) {
@@ -117,7 +139,8 @@ export function normalizeCodexCompactionSseText(text: string) {
       const normalizedLines = lines.filter(
         (_, index) => !extraDataIndexes.has(index),
       );
-      normalizedLines[firstDataIndex] = `data: ${JSON.stringify(normalized.value)}`;
+      normalizedLines[firstDataIndex] =
+        `data: ${JSON.stringify(normalized.value)}`;
       return `${normalizedLines.join(newline)}${separator}`;
     },
   );
@@ -138,24 +161,25 @@ export function inspectRemoteCompactionOutput(value: unknown) {
         return [payload.item];
       })
     : [];
-  const outputItems = streamedOutputItems.length > 0
-    ? streamedOutputItems
-    : Array.isArray(value)
-      ? value.flatMap(readResponseOutputItems)
-      : readResponseOutputItems(value);
+  const outputItems =
+    streamedOutputItems.length > 0
+      ? streamedOutputItems
+      : Array.isArray(value)
+        ? value.flatMap(readResponseOutputItems)
+        : readResponseOutputItems(value);
   return inspectCompactionItems(outputItems);
 }
 
 export function inspectDirectCompactionOutput(value: unknown) {
-  const outputItems = isPlainRecord(value) && Array.isArray(value.output)
-    ? value.output
-    : [];
+  const outputItems =
+    isPlainRecord(value) && Array.isArray(value.output) ? value.output : [];
   return inspectCompactionItems(outputItems);
 }
 
-function normalizeCompactionValue(
-  value: unknown,
-): { value: unknown; replacements: number } {
+function normalizeCompactionValue(value: unknown): {
+  value: unknown;
+  replacements: number;
+} {
   if (Array.isArray(value)) {
     let replacements = 0;
     const items = value.map((item) => {
@@ -178,7 +202,7 @@ function normalizeCompactionValue(
     typeof value.encrypted_content === "string" &&
     value.encrypted_content.length > 0
   ) {
-    const { id: _id, object: _object, ...rest } = value;
+    const { object: _object, ...rest } = value;
     const normalized = {
       ...rest,
       type: "compaction",
