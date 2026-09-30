@@ -974,8 +974,6 @@ export function buildCodexHealthProbeBody(
 
   return {
     model,
-    instructions:
-      "You are a Codex protocol health check. Reply with exactly OK. Do not call tools.",
     input: [
       {
         role: "user",
@@ -988,46 +986,10 @@ export function buildCodexHealthProbeBody(
         ],
       },
     ],
-    tools: [
-      {
-        type: "function",
-        name: "get_goal",
-        description: "Read the current health-check goal.",
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
-        strict: false,
-      },
-      {
-        type: "namespace",
-        name: "codex_app",
-        description: "Codex application tools.",
-        tools: [
-          {
-            type: "function",
-            name: "read_thread_terminal",
-            description: "Read the current terminal output.",
-            parameters: {
-              type: "object",
-              properties: {},
-              additionalProperties: false,
-            },
-            strict: false,
-          },
-        ],
-      },
-      {
-        type: "web_search",
-        external_web_access: true,
-      },
-    ],
     tool_choice: "auto",
     parallel_tool_calls: false,
     include: [],
-    reasoning: null,
+    reasoning: { effort: "low" },
     store: false,
     stream: true,
     client_metadata: {
